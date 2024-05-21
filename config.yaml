@@ -1,0 +1,31 @@
+
+listen: ":8080"
+language: zh-CN
+
+tmdb:
+  api_key: "5640d0f3eea1e20a18d3a1f150b3a1ef"
+
+libraries:
+  - name: "Movies"
+    type: "movies"
+    path: "/Volumes/data/Videos/Movies"
+
+  - name: "TV Shows"
+    type: "tvshows"
+    path: "/Volumes/data/Videos/TV Shows"
+
+  - name: "Music"
+    type: "music"
+    path: "/Volumes/data/Music"
+
+  # - name: "Software"
+  #   type: "software"
+  #   path: "/Volumes/data/software"
+  
+  # - name: "Books"
+  #   type: "books"
+  #   path: "/Volumes/data/Books"
+
+  # - name: "Japanese AV"
+  #   type: "jav"
+  #   path: "/Volumes/data/Videos/JapaneseAV"

@@ -1,0 +1,35 @@
+{{define "layout"}}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{.AppName}}</title>
+  <style>
+    @import "https://lsong.org/css/stylesheet.css";
+
+    .files {
+      margin: 0;
+      padding: 0;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1><a href="/">Files</a></h1>
+    <nav>
+      {{range $i, $library := .Config.Libraries}}
+      <a href="/library?source={{$i}}">{{$library.Name}}</a>
+      {{end}}
+    </nav>
+    <main>
+      {{template "page" .}}
+    </main>
+  </div>
+</body>
+
+</html>
+
+{{end}}
