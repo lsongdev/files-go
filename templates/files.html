@@ -1,0 +1,19 @@
+{{define "page"}}
+
+{{ $source := .source}}
+<ul class="files">
+  {{range .files}}
+  <li>
+    <a href="?source={{$source}}&path={{.Path}}" class="file">
+      <img class="file-icon" src="{{.Icon}}" alt="📃" />
+      <div class="file-content">
+        <span class="file-name">{{.Name}}</span>
+        <span class="file-line1">{{.Line1}}</span>
+        <span class="file-line2">{{.Line2}}</span>
+        <span class="file-line3">{{.Line3}}</span>
+      </div>
+    </a>
+  </li>
+  {{end}}
+</ul>
+{{end}}

@@ -1,15 +1,3 @@
 {{define "page"}}
 
-{{ $source := .source}}
-<ul class="files" >
-    {{range .files}}
-    <li>
-        {{if .IsDir}}
-        <a href="?source={{$source}}&path={{.Path}}">📁 {{.Name}}</a>
-        {{else}}
-        <a href="?source={{$source}}&path={{.Path}}">📃 {{.Name}}</a>
-        {{end}}
-    </li>
-    {{end}}
-</ul>
 {{end}}

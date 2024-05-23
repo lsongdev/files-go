@@ -2,6 +2,7 @@ package files
 
 import (
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"log"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/song940/fileinfo-go/fileinfo"
+	tmdb "github.com/song940/tmdb-go/persistent"
 	"gopkg.in/yaml.v2"
 )
 
@@ -34,15 +37,20 @@ type File struct {
 	Mode         uint32 `json:"mode"`
 	IsDir        bool   `json:"isDir"`
 	Path         string `json:"path"`
+	Icon         string `json:"icon"`
 	Hidden       bool   `json:"hidden"`
 	Extension    string `json:"extension"`
 	LastModified int64  `json:"lastModified"`
-	Thumbnail    string `json:"thumbnail"`
+	FullPath     string `json:"fullPath"`
+	Line1        string `json:"line1"`
+	Line2        string `json:"line2"`
+	Line3        string `json:"line3"`
 }
 
 type Server struct {
-	Config    *Config
-	Libraries []*Library
+	Config     *Config
+	Libraries  []*Library
+	tmdbClient *tmdb.Client
 }
 
 func LoadConfig(baseDir string) (config *Config, err error) {
@@ -63,8 +71,15 @@ type Library struct {
 }
 
 func NewServer(config *Config) *Server {
+	cfg := &tmdb.Config{}
+	cfg.APIKey = "5640d0f3eea1e20a18d3a1f150b3a1ef"
+	tmdbClient, err := tmdb.NewClient(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
 	return &Server{
-		Config: config,
+		tmdbClient: tmdbClient,
+		Config:     config,
 	}
 }
 
@@ -87,6 +102,26 @@ func (s *Server) Render(w http.ResponseWriter, templateName string, data H) {
 	}
 }
 
+func (s *Server) GetMetaInfo(f *File) {
+	info := fileinfo.Parse(filepath.Base(f.FullPath))
+	switch f.Extension {
+	case ".mp4", ".mkv", ".avi":
+		res, err := s.tmdbClient.SearchMovie(info.Title, nil)
+		if err != nil {
+			return
+		}
+		if len(res.Results) > 0 {
+			movie := res.Results[0]
+			f.Name = movie.Title
+			f.Line1 = movie.OriginalTitle
+			f.Line2 = movie.ReleaseDate
+			f.Icon = s.tmdbClient.GetImage(movie.PosterPath, "")
+		}
+	case ".mp3":
+		f.Icon = "https://cdn-icons-png.flaticon.com/512/4039/4039628.png"
+	}
+}
+
 func (s *Server) ListFiles(root, path string) (files []File, err error) {
 	if path == "" {
 		path = "."
@@ -100,17 +135,22 @@ func (s *Server) ListFiles(root, path string) (files []File, err error) {
 		f := File{
 			Name:         entry.Name(),
 			IsDir:        entry.IsDir(),
-			Path:         filepath.Join(path, entry.Name()),
 			Hidden:       strings.HasPrefix(entry.Name(), "."),
 			LastModified: info.ModTime().Unix(),
 			Size:         info.Size(),
 			Mode:         uint32(info.Mode().Perm()),
+			Path:         filepath.Join(path, entry.Name()),
+			FullPath:     filepath.Join(root, path, entry.Name()),
 		}
 		if f.IsDir {
 			f.Type = "dir"
+			f.Icon = "https://cdn-icons-png.freepik.com/256/12532/12532956.png"
 		} else {
 			f.Type = "file"
 			f.Extension = filepath.Ext(f.Name)
+			f.Line1 = fmt.Sprintf("%d bytes", f.Size)
+			f.Icon = "https://cdn-icons-png.flaticon.com/256/607/607674.png"
+			s.GetMetaInfo(&f)
 		}
 		files = append(files, f)
 	}
@@ -138,6 +178,10 @@ func (s *Server) HandleListFiles(r *http.Request) (files []File, err error) {
 	return
 }
 
+func (s *Server) HomeView(w http.ResponseWriter, r *http.Request) {
+	s.Render(w, "index", H{})
+}
+
 func (s *Server) ListView(w http.ResponseWriter, r *http.Request) {
 	source := r.URL.Query().Get("source")
 	files, err := s.HandleListFiles(r)
@@ -145,7 +189,7 @@ func (s *Server) ListView(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.Render(w, "index", H{
+	s.Render(w, "files", H{
 		"source": source,
 		"files":  files,
 	})

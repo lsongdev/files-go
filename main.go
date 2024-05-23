@@ -13,7 +13,7 @@ func main() {
 		log.Fatal(err)
 	}
 	server := files.NewServer(config)
-	http.HandleFunc("/library", server.ListView)
-	http.HandleFunc("/files", server.ListAPI)
+	http.HandleFunc("/", server.HomeView)
+	http.HandleFunc("/files", server.ListView)
 	http.ListenAndServe(":8080", nil)
 }

@@ -1,3 +1,7 @@
+github.com/song940/fileinfo-go v0.0.0-20231225143900-45d5120787ba h1:SgMx34YHbp31eMcAGTfUMW4dYNRtZdfTX39N5+QDI7s=
+github.com/song940/fileinfo-go v0.0.0-20231225143900-45d5120787ba/go.mod h1:EHN0+MlwHoNKcfuJRHCs/ZV6zMKVzSV/PzY88RRBkEA=
+github.com/song940/tmdb-go v0.0.0-20240306070408-2b1e84e68019 h1:2AaFMDMzie57M6k8P8b522FSuv3S2M2hDezZy0hsVvw=
+github.com/song940/tmdb-go v0.0.0-20240306070408-2b1e84e68019/go.mod h1:jgFPF6t0bDleSu6Js711qbhTdYFcWe+LvO2Yj0R1t/Y=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/yaml.v2 v2.4.0 h1:D8xgwECY7CYvx+Y2n4sBz93Jn9JRvxdiyyo8CTfuKaY=
 gopkg.in/yaml.v2 v2.4.0/go.mod h1:RDklbk79AGWmwhnvt/jBztapEOGDOx6ZbXqjP6csGnQ=
