@@ -22,9 +22,9 @@ libraries:
   #   type: "software"
   #   path: "/Volumes/data/software"
   
-  # - name: "Books"
-  #   type: "books"
-  #   path: "/Volumes/data/Books"
+  - name: "Books"
+    type: "books"
+    path: "/Volumes/data/Documents/books/books"
 
   # - name: "Japanese AV"
   #   type: "jav"

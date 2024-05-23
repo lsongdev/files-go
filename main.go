@@ -12,7 +12,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	server := files.NewServer(config)
+	server, err := files.NewServer(config)
+	if err != nil {
+		log.Fatal(err)
+	}
 	http.HandleFunc("/", server.HomeView)
 	http.HandleFunc("/files", server.ListView)
 	http.ListenAndServe(":8080", nil)

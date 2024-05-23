@@ -22,6 +22,11 @@ type LibraryConfig struct {
 	Path string `yaml:"path"`
 }
 
+type Library struct {
+	Id int
+	LibraryConfig
+}
+
 type Config struct {
 	BaseDir   string          `yaml:"-"`
 	Listen    string          `yaml:"listen"`
@@ -65,22 +70,18 @@ func LoadConfig(baseDir string) (config *Config, err error) {
 	return
 }
 
-type Library struct {
-	Id int
-	LibraryConfig
-}
-
-func NewServer(config *Config) *Server {
+func NewServer(config *Config) (server *Server, err error) {
 	cfg := &tmdb.Config{}
 	cfg.APIKey = "5640d0f3eea1e20a18d3a1f150b3a1ef"
 	tmdbClient, err := tmdb.NewClient(cfg)
 	if err != nil {
-		log.Fatal(err)
+		return
 	}
-	return &Server{
+	server = &Server{
 		tmdbClient: tmdbClient,
 		Config:     config,
 	}
+	return
 }
 
 // Render renders an HTML template with the provided data.
@@ -103,22 +104,25 @@ func (s *Server) Render(w http.ResponseWriter, templateName string, data H) {
 }
 
 func (s *Server) GetMetaInfo(f *File) {
-	info := fileinfo.Parse(filepath.Base(f.FullPath))
+	info := fileinfo.Parse(f.Name)
 	switch f.Extension {
-	case ".mp4", ".mkv", ".avi":
+	case ".mp4", ".mkv", ".avi", ".mpg":
 		res, err := s.tmdbClient.SearchMovie(info.Title, nil)
 		if err != nil {
 			return
 		}
-		if len(res.Results) > 0 {
-			movie := res.Results[0]
-			f.Name = movie.Title
-			f.Line1 = movie.OriginalTitle
-			f.Line2 = movie.ReleaseDate
-			f.Icon = s.tmdbClient.GetImage(movie.PosterPath, "")
+		if !(len(res.Results) > 0) {
+			return
 		}
+		movie := res.Results[0]
+		f.Name = movie.Title
+		f.Line1 = movie.ReleaseDate
+		f.Line2 = fmt.Sprintf("%1.1f/10", movie.VoteAverage)
+		f.Icon = s.tmdbClient.GetImage(movie.PosterPath, "")
 	case ".mp3":
 		f.Icon = "https://cdn-icons-png.flaticon.com/512/4039/4039628.png"
+	case ".flac":
+		f.Icon = "https://cdn-icons-png.flaticon.com/128/14391/14391198.png"
 	}
 }
 
