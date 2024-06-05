@@ -107,21 +107,39 @@ func (s *Server) GetMetaInfo(f *File) {
 	info := fileinfo.Parse(f.Name)
 	switch f.Extension {
 	case ".mp4", ".mkv", ".avi", ".mpg":
-		res, err := s.tmdbClient.SearchMovie(info.Title, nil)
-		if err != nil {
-			return
+		isTvShow := info.Season != "" && info.Episode != ""
+		if isTvShow {
+			res, err := s.tmdbClient.SearchTV(info.Title, nil)
+			if err != nil {
+				return
+			}
+			if !(len(res.Results) > 0) {
+				return
+			}
+			tvShow := res.Results[0]
+			f.Type = "tvshow"
+			f.Name = tvShow.Name
+			f.Icon = s.tmdbClient.GetImage(tvShow.PosterPath, "")
+		} else {
+			res, err := s.tmdbClient.SearchMovie(info.Title, nil)
+			if err != nil {
+				return
+			}
+			if !(len(res.Results) > 0) {
+				return
+			}
+			movie := res.Results[0]
+			f.Type = "movie"
+			f.Name = movie.Title
+			f.Line1 = movie.ReleaseDate
+			f.Line2 = fmt.Sprintf("%1.1f/10", movie.VoteAverage)
+			f.Icon = s.tmdbClient.GetImage(movie.PosterPath, "")
 		}
-		if !(len(res.Results) > 0) {
-			return
-		}
-		movie := res.Results[0]
-		f.Name = movie.Title
-		f.Line1 = movie.ReleaseDate
-		f.Line2 = fmt.Sprintf("%1.1f/10", movie.VoteAverage)
-		f.Icon = s.tmdbClient.GetImage(movie.PosterPath, "")
 	case ".mp3":
+		f.Type = "music"
 		f.Icon = "https://cdn-icons-png.flaticon.com/512/4039/4039628.png"
 	case ".flac":
+		f.Type = "music"
 		f.Icon = "https://cdn-icons-png.flaticon.com/128/14391/14391198.png"
 	}
 }
@@ -147,7 +165,7 @@ func (s *Server) ListFiles(root, path string) (files []File, err error) {
 			FullPath:     filepath.Join(root, path, entry.Name()),
 		}
 		if f.IsDir {
-			f.Type = "dir"
+			f.Type = "list"
 			f.Icon = "https://cdn-icons-png.freepik.com/256/12532/12532956.png"
 		} else {
 			f.Type = "file"
@@ -193,7 +211,7 @@ func (s *Server) ListView(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.Render(w, "files", H{
+	s.Render(w, "list", H{
 		"source": source,
 		"files":  files,
 	})
