@@ -17,7 +17,7 @@
     <nav>
       <a href="/">Home</a>
       {{range $i, $library := .Config.Libraries}}
-      <a href="/files?source={{$i}}">{{$library.Name}}</a>
+      <a href="/files?type=list&source={{$i}}">{{$library.Name}}</a>
       {{end}}
     </nav>
     <main>
