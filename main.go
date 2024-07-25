@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/song940/fileinfo-go/fileinfo"
 	tmdb "github.com/song940/tmdb-go/persistent"
@@ -179,6 +180,7 @@ type ImageHandler struct{}
 
 func (h *ImageHandler) Handle(f *File) {
 	f.Type = "image"
+	f.Icon = fmt.Sprintf("/download?path=%s", f.FullPath)
 }
 
 func (s *Server) GetMetaInfo(f *File) {
@@ -216,7 +218,7 @@ func (s *Server) GetFile(root, path string) (f File, err error) {
 		FullPath:     fullpath,
 		Icon:         "https://cdn-icons-png.flaticon.com/256/607/607674.png",
 	}
-	f.Extension = filepath.Ext(f.Name)
+	f.Extension = strings.ToLower(filepath.Ext(f.Name))
 	f.Line1 = fmt.Sprintf("%d bytes", f.Size)
 	if f.IsDir {
 		f.Type = "list"
@@ -339,8 +341,8 @@ func (s *Server) IndexView(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) DownloadFile(w http.ResponseWriter, r *http.Request) {
-	_, _, base, path := s.GetBaseParams(r)
-	file, err := os.Open(filepath.Join(base, path))
+	path := r.URL.Query().Get("path")
+	file, err := os.Open(path)
 	if err != nil {
 		http.Error(w, "File not found.", http.StatusNotFound)
 		return

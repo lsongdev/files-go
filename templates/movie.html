@@ -6,5 +6,5 @@
 <img src="{{.file.Icon}}" alt="{{.file.Name}}" width="180">
 <h3>{{.file.Name}}</h3>
 <p>{{.file.Extra.overview}}</p>
-<a href="/download?source={{.source}}&path={{.path}}">Download</a>
+<a href="/download?path={{.file.FullPath}}">Download</a>
 {{end}}

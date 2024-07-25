@@ -18,13 +18,17 @@ libraries:
     type: "music"
     path: "/Volumes/data/Music"
 
+  - name: "Photos"
+    type: "books"
+    path: "/Volumes/data/Pictures"
+
   # - name: "Software"
   #   type: "software"
   #   path: "/Volumes/data/software"
   
   - name: "Books"
     type: "books"
-    path: "/Volumes/data/Documents/books/books"
+    path: "/Volumes/data/Documents"
 
   # - name: "Japanese AV"
   #   type: "jav"
