@@ -1,18 +1,17 @@
 package main
 
 import (
-	"log"
-	"net/http"
-
 	"fmt"
 	"html/template"
+	"io"
+	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/song940/fileinfo-go/fileinfo"
-
 	tmdb "github.com/song940/tmdb-go/persistent"
 	"gopkg.in/yaml.v2"
 )
@@ -54,9 +53,8 @@ type File struct {
 }
 
 type Server struct {
-	Config     *Config
-	Libraries  []*Library
-	tmdbClient *tmdb.Client
+	Config    *Config
+	Libraries []*Library
 }
 
 func LoadConfig(baseDir string) (config *Config, err error) {
@@ -72,15 +70,8 @@ func LoadConfig(baseDir string) (config *Config, err error) {
 }
 
 func NewServer(config *Config) (server *Server, err error) {
-	cfg := &tmdb.Config{}
-	cfg.APIKey = "5640d0f3eea1e20a18d3a1f150b3a1ef"
-	tmdbClient, err := tmdb.NewClient(cfg)
-	if err != nil {
-		return
-	}
 	server = &Server{
-		tmdbClient: tmdbClient,
-		Config:     config,
+		Config: config,
 	}
 	return
 }
@@ -104,47 +95,84 @@ func (s *Server) Render(w http.ResponseWriter, templateName string, data H) {
 	}
 }
 
-func (s *Server) GetMetaInfo(f *File) {
+// FileTypeClassifier classifies files based on their extensions.
+type FileTypeClassifier struct {
+	types map[string]string
+}
+
+func NewFileTypeClassifier() *FileTypeClassifier {
+	return &FileTypeClassifier{
+		types: map[string]string{
+			".mp4":  "video",
+			".mkv":  "video",
+			".avi":  "video",
+			".mpg":  "video",
+			".mp3":  "music",
+			".flac": "music",
+			".jpg":  "image",
+			".png":  "image",
+		},
+	}
+}
+
+func (c *FileTypeClassifier) Classify(extension string) string {
+	if fileType, ok := c.types[extension]; ok {
+		return fileType
+	}
+	return "file"
+}
+
+type MetaInfoHandler interface {
+	Handle(f *File)
+}
+
+type MovieHandler struct {
+	client *tmdb.Client
+}
+
+func (h *MovieHandler) Handle(f *File) {
 	info := fileinfo.Parse(f.Name)
-	switch f.Extension {
-	case ".mp4", ".mkv", ".avi", ".mpg":
-		isTvShow := info.Season != "" && info.Episode != ""
-		if isTvShow {
-			res, err := s.tmdbClient.SearchTV(info.Title, nil)
-			if err != nil {
-				return
-			}
-			if !(len(res.Results) > 0) {
-				return
-			}
-			tvShow := res.Results[0]
-			f.Type = "tvshow"
-			f.Name = tvShow.Name
-			f.Icon = s.tmdbClient.GetImage(tvShow.PosterPath, "")
-		} else {
-			res, err := s.tmdbClient.SearchMovie(info.Title, nil)
-			if err != nil {
-				return
-			}
-			if !(len(res.Results) > 0) {
-				return
-			}
-			movie := res.Results[0]
-			f.Type = "movie"
-			f.Name = movie.Title
-			f.Line1 = movie.ReleaseDate
-			f.Line2 = fmt.Sprintf("%1.1f/10", movie.VoteAverage)
-			f.Icon = s.tmdbClient.GetImage(movie.PosterPath, "")
-		}
-	case ".mp3":
-		f.Type = "music"
-		f.Icon = "https://cdn-icons-png.flaticon.com/512/4039/4039628.png"
-	case ".flac":
-		f.Type = "music"
-		f.Icon = "https://cdn-icons-png.flaticon.com/128/14391/14391198.png"
-	case ".jpg":
-		f.Type = "image"
-		f.Icon = "https://cdn-icons-png.flaticon.com/512/149/149071.png"
+	res, err := h.client.SearchMovie(info.Title, nil)
+	if err != nil || len(res.Results) == 0 {
+		return
+	}
+	movie := res.Results[0]
+	f.Type = "movie"
+	f.Name = movie.Title
+	f.Line1 = movie.ReleaseDate
+	f.Line2 = fmt.Sprintf("%1.1f/10", movie.VoteAverage)
+	f.Icon = h.client.GetImage(movie.PosterPath, "")
+}
+
+type MusicHandler struct{}
+
+func (h *MusicHandler) Handle(f *File) {
+	f.Type = "music"
+	f.Icon = "https://cdn-icons-png.flaticon.com/512/4039/4039628.png"
+}
+
+type ImageHandler struct{}
+
+func (h *ImageHandler) Handle(f *File) {
+	f.Type = "image"
+	f.Icon = "https://cdn-icons-png.flaticon.com/512/149/149071.png"
+}
+
+func (s *Server) GetMetaInfo(f *File) {
+	cfg := &tmdb.Config{}
+	cfg.APIKey = "5640d0f3eea1e20a18d3a1f150b3a1ef"
+	tmdbClient, err := tmdb.NewClient(cfg)
+	if err != nil {
+		return
+	}
+	handlers := map[string]MetaInfoHandler{
+		"video": &MovieHandler{client: tmdbClient},
+		"music": &MusicHandler{},
+		"image": &ImageHandler{},
+	}
+	fileType := NewFileTypeClassifier().Classify(f.Extension)
+	if handler, ok := handlers[fileType]; ok {
+		handler.Handle(f)
 	}
 }
 
@@ -181,7 +209,7 @@ func (s *Server) ListFiles(root, path string) (files []File, err error) {
 }
 
 func (s *Server) HomeView(w http.ResponseWriter, r *http.Request) {
-	s.Render(w, "index", H{})
+	s.Render(w, "home", H{})
 }
 
 func (s *Server) GetFullPath(r *http.Request) string {
@@ -243,8 +271,33 @@ func (s *Server) IndexView(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) DownloadFile(w http.ResponseWriter, r *http.Request) {
+	filePath := s.GetFullPath(r)
+	file, err := os.Open(filePath)
+	if err != nil {
+		http.Error(w, "File not found.", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+
+	fileInfo, err := file.Stat()
+	if err != nil {
+		http.Error(w, "Unable to get file info.", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(filePath))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", strconv.FormatInt(fileInfo.Size(), 10))
+	_, err = io.Copy(w, file)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 func main() {
-	config, err := LoadConfig(".")
+	baseDir, _ := os.Getwd()
+	config, err := LoadConfig(baseDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -252,7 +305,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	http.HandleFunc("/", server.HomeView)
 	http.HandleFunc("/files", server.IndexView)
-	http.ListenAndServe(":8080", nil)
+	http.HandleFunc("/download", server.DownloadFile)
+	log.Fatal(http.ListenAndServe(config.Listen, nil))
 }

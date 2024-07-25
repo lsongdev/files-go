@@ -1,3 +1,5 @@
+github.com/karrick/godirwalk v1.17.0 h1:b4kY7nqDdioR/6qnbHQyDvmA17u5G1cZ6J+CZXwSWoI=
+github.com/karrick/godirwalk v1.17.0/go.mod h1:j4mkqPuvaLI8mp1DroR3P6ad7cyYd4c1qeJ3RV7ULlk=
 github.com/song940/fileinfo-go v0.0.0-20231225143900-45d5120787ba h1:SgMx34YHbp31eMcAGTfUMW4dYNRtZdfTX39N5+QDI7s=
 github.com/song940/fileinfo-go v0.0.0-20231225143900-45d5120787ba/go.mod h1:EHN0+MlwHoNKcfuJRHCs/ZV6zMKVzSV/PzY88RRBkEA=
 github.com/song940/tmdb-go v0.0.0-20240306070408-2b1e84e68019 h1:2AaFMDMzie57M6k8P8b522FSuv3S2M2hDezZy0hsVvw=
