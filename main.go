@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/song940/fileinfo-go/fileinfo"
 	tmdb "github.com/song940/tmdb-go/persistent"
@@ -36,20 +35,20 @@ type Config struct {
 type H map[string]interface{}
 
 type File struct {
-	Name         string `json:"name"`
-	Type         string `json:"type"`
-	Size         int64  `json:"size"`
-	Mode         uint32 `json:"mode"`
-	IsDir        bool   `json:"isDir"`
-	Path         string `json:"path"`
-	Icon         string `json:"icon"`
-	Hidden       bool   `json:"hidden"`
-	Extension    string `json:"extension"`
-	LastModified int64  `json:"lastModified"`
-	FullPath     string `json:"fullPath"`
-	Line1        string `json:"line1"`
-	Line2        string `json:"line2"`
-	Line3        string `json:"line3"`
+	Name         string                 `json:"name"`
+	Type         string                 `json:"type"`
+	Size         int64                  `json:"size"`
+	Mode         uint32                 `json:"mode"`
+	IsDir        bool                   `json:"isDir"`
+	Path         string                 `json:"path"`
+	Icon         string                 `json:"icon"`
+	Extension    string                 `json:"extension"`
+	LastModified int64                  `json:"lastModified"`
+	FullPath     string                 `json:"fullPath"`
+	Line1        string                 `json:"line1"`
+	Line2        string                 `json:"line2"`
+	Line3        string                 `json:"line3"`
+	Extra        map[string]interface{} `json:"extra"`
 }
 
 type Server struct {
@@ -126,21 +125,47 @@ type MetaInfoHandler interface {
 	Handle(f *File)
 }
 
-type MovieHandler struct {
+type VideoHandler struct {
 	client *tmdb.Client
 }
 
-func (h *MovieHandler) Handle(f *File) {
+func (m *VideoHandler) Handle(f *File) {
 	info := fileinfo.Parse(f.Name)
-	res, err := h.client.SearchMovie(info.Title, nil)
-	if err != nil || len(res.Results) == 0 {
-		return
+	isTvShow := info.Season != "" && info.Episode != ""
+	if isTvShow {
+		res, err := m.client.SearchTV(info.Title, nil)
+		if err != nil {
+			return
+		}
+		if !(len(res.Results) > 0) {
+			return
+		}
+		tvShow := res.Results[0]
+		f.Type = "tvshow"
+		f.Name = tvShow.Name
+		f.Icon = m.client.GetImage(tvShow.PosterPath, "")
+		f.Extra = map[string]interface{}{
+			"season": info.Season,
+		}
+	} else {
+		res, err := m.client.SearchMovie(info.Title, nil)
+		if err != nil {
+			return
+		}
+		if !(len(res.Results) > 0) {
+			return
+		}
+		movie := res.Results[0]
+		f.Type = "movie"
+		f.Name = movie.Title
+		f.Line1 = movie.ReleaseDate
+		f.Line2 = fmt.Sprintf("%1.1f/10", movie.VoteAverage)
+		f.Icon = m.client.GetImage(movie.PosterPath, "")
+		f.Extra = map[string]interface{}{
+			"id":       movie.ID,
+			"overview": movie.Overview,
+		}
 	}
-	movie := res.Results[0]
-	f.Name = movie.Title
-	f.Line1 = movie.ReleaseDate
-	f.Line2 = fmt.Sprintf("%1.1f/10", movie.VoteAverage)
-	f.Icon = h.client.GetImage(movie.PosterPath, "")
 }
 
 type MusicHandler struct{}
@@ -164,7 +189,7 @@ func (s *Server) GetMetaInfo(f *File) {
 		return
 	}
 	handlers := map[string]MetaInfoHandler{
-		"video": &MovieHandler{client: tmdbClient},
+		"video": &VideoHandler{client: tmdbClient},
 		"music": &MusicHandler{},
 		"image": &ImageHandler{},
 	}
@@ -174,22 +199,27 @@ func (s *Server) GetMetaInfo(f *File) {
 	}
 }
 
-func (s *Server) ProcessFile(path string) (f File, err error) {
-	info, err := os.Stat(path)
+func (s *Server) GetFile(root, path string) (f File, err error) {
+	fullpath := filepath.Join(root, path)
+	info, err := os.Stat(fullpath)
+	if err != nil {
+		log.Println(err)
+		return
+	}
 	f = File{
-		Name:         filepath.Base(path),
+		Name:         info.Name(),
 		IsDir:        info.IsDir(),
-		Hidden:       strings.HasPrefix(filepath.Base(path), "."),
 		LastModified: info.ModTime().Unix(),
 		Size:         info.Size(),
 		Mode:         uint32(info.Mode().Perm()),
 		Path:         path,
-		FullPath:     path,
+		FullPath:     fullpath,
 		Icon:         "https://cdn-icons-png.flaticon.com/256/607/607674.png",
 	}
 	f.Extension = filepath.Ext(f.Name)
 	f.Line1 = fmt.Sprintf("%d bytes", f.Size)
 	if f.IsDir {
+		f.Type = "list"
 		f.Icon = "https://cdn-icons-png.freepik.com/256/12532/12532956.png"
 		return
 	}
@@ -204,7 +234,7 @@ func (s *Server) ListFiles(root, path string) (files []File, err error) {
 	}
 	for _, entry := range list {
 		info, _ := entry.Info()
-		f, err := s.ProcessFile(filepath.Join(root, path, info.Name()))
+		f, err := s.GetFile(root, filepath.Join(path, info.Name()))
 		if err != nil {
 			return nil, err
 		}
@@ -213,18 +243,13 @@ func (s *Server) ListFiles(root, path string) (files []File, err error) {
 	return
 }
 
-func (s *Server) GetPath(r *http.Request) (base, path string) {
+func (s *Server) GetBaseParams(r *http.Request) (typ, source, base, path string) {
+	typ = r.URL.Query().Get("type")
 	path = r.URL.Query().Get("path")
-	source := r.URL.Query().Get("source")
+	source = r.URL.Query().Get("source")
 	sourceIndex, _ := strconv.ParseUint(source, 10, 32)
 	library := s.Config.Libraries[sourceIndex]
-	return library.Path, path
-}
-
-func (s *Server) GetFile(r *http.Request) (file File, err error) {
-	base, path := s.GetPath(r)
-	file, err = s.ProcessFile(filepath.Join(base, path))
-	return file, err
+	return typ, source, library.Path, path
 }
 
 func (s *Server) HomeView(w http.ResponseWriter, r *http.Request) {
@@ -233,7 +258,7 @@ func (s *Server) HomeView(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) ListView(w http.ResponseWriter, r *http.Request) {
 	source := r.URL.Query().Get("source")
-	base, path := s.GetPath(r)
+	_, _, base, path := s.GetBaseParams(r)
 	files, err := s.ListFiles(base, path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -246,7 +271,8 @@ func (s *Server) ListView(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) MusicView(w http.ResponseWriter, r *http.Request) {
-	file, err := s.GetFile(r)
+	typ, _, base, path := s.GetBaseParams(r)
+	file, err := s.GetFile(base, path)
 	if err != nil {
 		s.Render(w, "error", H{
 			"error": err.Error(),
@@ -255,11 +281,14 @@ func (s *Server) MusicView(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Render(w, "music", H{
 		"file": file,
+		"type": typ,
+		"path": path,
 	})
 }
 
 func (s *Server) MovieView(w http.ResponseWriter, r *http.Request) {
-	file, err := s.GetFile(r)
+	typ, source, base, path := s.GetBaseParams(r)
+	file, err := s.GetFile(base, path)
 	if err != nil {
 		s.Render(w, "error", H{
 			"error": err.Error(),
@@ -267,12 +296,16 @@ func (s *Server) MovieView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Render(w, "movie", H{
-		"file": file,
+		"file":   file,
+		"type":   typ,
+		"source": source,
+		"path":   path,
 	})
 }
 
 func (s *Server) FileView(w http.ResponseWriter, r *http.Request) {
-	file, err := s.GetFile(r)
+	typ, source, base, path := s.GetBaseParams(r)
+	file, err := s.GetFile(base, path)
 	if err != nil {
 		s.Render(w, "error", H{
 			"error": err.Error(),
@@ -280,14 +313,17 @@ func (s *Server) FileView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Render(w, "file", H{
-		"file": file,
+		"file":   file,
+		"source": source,
+		"type":   typ,
+		"path":   path,
 	})
 }
 
 func (s *Server) IndexView(w http.ResponseWriter, r *http.Request) {
 	typ := r.URL.Query().Get("type")
 	switch typ {
-	case "video":
+	case "movie", "tvshow":
 		s.MovieView(w, r)
 		return
 	case "music":
@@ -303,7 +339,7 @@ func (s *Server) IndexView(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) DownloadFile(w http.ResponseWriter, r *http.Request) {
-	base, path := s.GetPath(r)
+	_, _, base, path := s.GetBaseParams(r)
 	file, err := os.Open(filepath.Join(base, path))
 	if err != nil {
 		http.Error(w, "File not found.", http.StatusNotFound)
