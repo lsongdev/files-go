@@ -1,0 +1,78 @@
+
+{{define "page"}}
+
+<style>
+  .files {
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .files a {
+    text-decoration: none;
+  }
+
+  .file {
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    gap: 10px;
+    padding: 10px;
+    background-color: #f5f5f5;
+    border-radius: 5px;
+    transition: background-color 500ms;
+  }
+
+  .file:hover {
+    background-color: #efefef;
+  }
+
+  .file-icon {
+    display: block;
+    width: 65px;
+  }
+
+  .file-name {
+    text-overflow: ellipsis;
+    word-break: break-all;
+  }
+
+  .file-content {
+    display: flex;
+    flex-direction: column;
+  }
+
+  @media screen and (min-width: 768px) {
+    .files {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .files .file {
+      flex-direction: column;
+    }
+
+    .files .file-name {
+      text-align: center;
+    }
+
+    .files .file-icon {
+      width: auto;
+      height: 100px;
+    }
+  }
+</style>
+
+<ul class="files">
+  {{range .files}}
+  <a href="?path={{ if eq .Path "/" }}{{.Path}}{{.Name}}{{else}}{{.Path}}/{{.Name}}{{end}}" class="file">
+    <img class="file-icon" src="/icon?path={{.Path}}/{{.Name}}" alt="📃" />
+    <div class="file-content">
+      <span class="file-name">{{.Name}}</span>
+    </div>
+  </a>
+  {{end}}
+</ul>
+{{end}}
