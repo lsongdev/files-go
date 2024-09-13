@@ -15,8 +15,8 @@ import (
 type FileInfo struct {
 	Name  string `json:"name"`
 	Path  string `json:"path"`
-	IsDir bool   `json:"isDir"`
 	Size  int64  `json:"size"`
+	IsDir bool   `json:"isDir"`
 }
 
 type FileServer struct {
@@ -39,8 +39,8 @@ func (server *FileServer) initDB() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT,
 			path TEXT,
-			is_dir BOOLEAN,
-			size INTEGER
+			size INTEGER,
+			is_dir BOOLEAN
 		)
 	`)
 	return err
@@ -59,21 +59,20 @@ func (fs *FileServer) ScanDirectory(root string) error {
 	})
 }
 
-func (fs *FileServer) ListFiles(path string, offset, size int) ([]FileInfo, error) {
+func (fs *FileServer) ListFiles(path string, offset, size int) (files []FileInfo, err error) {
 	rows, err := fs.db.Query("SELECT name, path, is_dir, size FROM files WHERE path = ? LIMIT ? OFFSET ?", path, size, offset)
 	if err != nil {
-		return nil, err
+		return
 	}
 	defer rows.Close()
-	var files []FileInfo
 	for rows.Next() {
 		var file FileInfo
-		if err := rows.Scan(&file.Name, &file.Path, &file.IsDir, &file.Size); err != nil {
-			return nil, err
+		if err = rows.Scan(&file.Name, &file.Path, &file.IsDir, &file.Size); err != nil {
+			return
 		}
 		files = append(files, file)
 	}
-	return files, nil
+	return
 }
 
 func (fs *FileServer) IndexHandler(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +89,6 @@ func (fs *FileServer) IndexHandler(w http.ResponseWriter, r *http.Request) {
 		path = "."
 	}
 	offset := (page - 1) * pageSize
-
 	files, err := fs.ListFiles(path, offset, pageSize)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
