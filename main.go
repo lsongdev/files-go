@@ -103,15 +103,19 @@ func (server *FileServer) ScanDirectory() error {
 			Size:  f.Size(),
 			IsDir: f.IsDir(),
 		}
+		server.Insert(&info)
 		server.cache = append(server.cache, info)
-		// _, err = server.db.Exec("INSERT INTO files (name, path, is_dir, size) VALUES (?, ?, ?, ?)", name, dir, f.IsDir(), f.Size())
-		// if err != nil {
-		// 	log.Println("sql error:", err)
-		// }
 		processor := server.GetProcessor(filename)
 		processor.Process(filename)
 		return nil
 	})
+}
+
+func (server *FileServer) Insert(info *FileInfo) {
+	_, err := server.db.Exec("INSERT INTO files (name, path, is_dir, size) VALUES (?, ?, ?, ?)", info.Name, info.Path, info.IsDir, info.Size)
+	if err != nil {
+		log.Println("sql error:", err)
+	}
 }
 
 // FileProcessor 接口定义了文件处理器应该实现的方法
@@ -226,29 +230,29 @@ func (server *FileServer) GetProcessor(filename string) FileProcessor {
 }
 
 func (server *FileServer) ListFiles(path string, offset, size int) (files []FileInfo, err error) {
-	for _, file := range server.cache {
-		if file.Path == path {
-			filename := filepath.Join(server.root, file.Path, file.Name)
-			processor := server.GetProcessor(filename)
-			processor.GetInfo(filename, &file)
-			files = append(files, file)
-		}
-	}
-	// rows, err := server.db.Query("SELECT name, size, path, is_dir FROM files WHERE path = ? LIMIT ? OFFSET ?", path, size, offset)
-	// if err != nil {
-	// 	return
-	// }
-	// defer rows.Close()
-	// for rows.Next() {
-	// 	var file FileInfo
-	// 	if err = rows.Scan(&file.Name, &file.Size, &file.Path, &file.IsDir); err != nil {
-	// 		return
+	// for _, file := range server.cache {
+	// 	if file.Path == path {
+	// 		filename := filepath.Join(server.root, file.Path, file.Name)
+	// 		processor := server.GetProcessor(filename)
+	// 		processor.GetInfo(filename, &file)
+	// 		files = append(files, file)
 	// 	}
-	// 	filename := filepath.Join(server.root, file.Path, file.Name)
-	// 	processor := server.GetProcessor(filename)
-	// 	processor.GetInfo(filename, &file)
-	// 	files = append(files, file)
 	// }
+	rows, err := server.db.Query("SELECT name, size, path, is_dir FROM files WHERE path = ? LIMIT ? OFFSET ?", path, size, offset)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var file FileInfo
+		if err = rows.Scan(&file.Name, &file.Size, &file.Path, &file.IsDir); err != nil {
+			return
+		}
+		filename := filepath.Join(server.root, file.Path, file.Name)
+		processor := server.GetProcessor(filename)
+		processor.GetInfo(filename, &file)
+		files = append(files, file)
+	}
 	return
 }
 
@@ -293,7 +297,7 @@ func (server *FileServer) FileHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	root := "/Volumes/home/Videos"
+	root := "/Volumes/nsfw"
 	server, err := NewFileServer(root)
 	if err != nil {
 		log.Fatal(err)
