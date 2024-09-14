@@ -1,4 +1,3 @@
-
 {{define "page"}}
 
 <style>
@@ -32,16 +31,25 @@
   .file-icon {
     display: block;
     width: 65px;
+    min-width: 65px;
   }
 
-  .file-name {
+  .file-title {
+    color: #111;
+    font-weight: bold;
     text-overflow: ellipsis;
     word-break: break-all;
   }
 
   .file-content {
     display: flex;
+    text-decoration: none;
     flex-direction: column;
+  }
+
+  .file-line1,
+  .file-line2 {
+    color: #333;
   }
 
   @media screen and (min-width: 768px) {
@@ -51,26 +59,33 @@
     }
 
     .files .file {
-      flex-direction: column;
-    }
-
-    .files .file-name {
       text-align: center;
+      flex-direction: column;
     }
 
     .files .file-icon {
       width: auto;
       height: 100px;
     }
+
+    .files .file-size {
+      display: none;
+    }
+
   }
 </style>
 
 <ul class="files">
   {{range .files}}
   <a href="?path={{ if eq .Path "/" }}{{.Path}}{{.Name}}{{else}}{{.Path}}/{{.Name}}{{end}}" class="file">
-    <img class="file-icon" src="/icon?path={{.Path}}/{{.Name}}" alt="📃" />
+    <img class="file-icon" src="{{.Icon}}" alt="📃" />
     <div class="file-content">
+      <span class="file-title">{{.Title}}</span>
+      <span class="file-line1">{{.Line1}}</span>
+      <span class="file-line2">{{.Line2}}</span>
+      <span class="file-line3">{{.Line3}}</span>
       <span class="file-name">{{.Name}}</span>
+      <span class="file-size">{{.Size}}</span>
     </div>
   </a>
   {{end}}
