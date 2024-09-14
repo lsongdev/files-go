@@ -148,7 +148,7 @@ func (p *ImageProcessor) Process(filename string) error {
 }
 
 func (p *ImageProcessor) GetInfo(filename string, info *FileInfo) {
-	info.Icon = filename
+	info.Icon = fmt.Sprintf("/file?path=%s", filename)
 }
 
 // APKProcessor 实现了 FileProcessor 接口，用于处理 APK 文件
@@ -293,7 +293,7 @@ func (server *FileServer) FileHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	root := "/Volumes/software/Mobile"
+	root := "/Volumes/home/Videos"
 	server, err := NewFileServer(root)
 	if err != nil {
 		log.Fatal(err)
