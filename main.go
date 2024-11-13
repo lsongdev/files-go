@@ -1,12 +1,8 @@
 package main
 
 import (
-	"crypto/md5"
 	"database/sql"
 	"encoding/json"
-	"fmt"
-	"image/png"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -15,35 +11,51 @@ import (
 	"strings"
 	"text/template"
 
-	_ "github.com/glebarez/go-sqlite"
-
-	"github.com/lsongdev/apk-go/apk"
+	// _ "github.com/glebarez/go-sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type H = map[string]interface{}
 
+// FileInfo 结构体新增了用于信息展示的字段
+type File struct {
+	Name  string `json:"name"`
+	Size  int64  `json:"size"`
+	IsDir bool   `json:"isDir"`
+	Dir   string `json:"dir"`
+	Path  string `json:"path"`
+	Icon  string `json:"icon"`
+	Title string `json:"title"`
+	Line1 string `json:"line1"`
+	Line2 string `json:"line2"`
+	Line3 string `json:"line3"`
+}
+
 type FileServer struct {
-	db         *sql.DB
-	root       string
-	cache      []FileInfo
+	db *sql.DB
+
 	processors []FileProcessor
 }
 
-func NewFileServer(root string) (server *FileServer, err error) {
-	db, err := sql.Open("sqlite", ":memory:")
+func NewFileServer() (server *FileServer, err error) {
+	db, err := sql.Open("sqlite3", "file:test.db?cache=shared&mode=memory")
 	if err != nil {
 		return nil, err
 	}
 	server = &FileServer{
-		db:   db,
-		root: root,
-	}
-	server.processors = []FileProcessor{
-		&ImageProcessor{},
-		&APKProcessor{
-			cache: map[string]FileInfo{},
+		db: db,
+
+		processors: []FileProcessor{
+			&ImageProcessor{},
+			// &VideoProcessor{},
+			// &AudioProcessor{},
+			// &TextProcessor{},
+			// &PDFProcessor{},
+			// &ArchiveProcessor{},
+			&APKProcessor{},
+			&ImageProcessor{},
+			&DefaultProcessor{},
 		},
-		&DefaultProcessor{},
 	}
 	server.initDB()
 	return
@@ -51,14 +63,33 @@ func NewFileServer(root string) (server *FileServer, err error) {
 
 func (server *FileServer) initDB() error {
 	_, err := server.db.Exec(`
+		PRAGMA journal_mode=WAL;
 		CREATE TABLE files (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT,
 			path TEXT,
 			size INTEGER,
-			is_dir BOOLEAN
-		)
+			dir TEXT,
+			is_dir BOOLEAN,
+			icon TEXT,
+			title TEXT,
+			line1 TEXT,
+			line2 TEXT,
+			line3 TEXT,
+			UNIQUE(name, path)
+		);
 	`)
+	return err
+}
+
+func (server *FileServer) Insert(info *File) error {
+	_, err := server.db.Exec(`
+		INSERT INTO files 
+			(name, dir, path, is_dir, size, icon, title, line1, line2, line3) 
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		info.Name, info.Dir, info.Path, info.IsDir, info.Size,
+		info.Icon, info.Title, info.Line1, info.Line2, info.Line3)
 	return err
 }
 
@@ -80,183 +111,58 @@ func (s *FileServer) Render(w http.ResponseWriter, name string, data H) {
 	}
 }
 
-// 在 ScanDirectory 方法中使用处理器
-func (server *FileServer) ScanDirectory() error {
-	return filepath.Walk(server.root, func(filename string, f os.FileInfo, err error) error {
+func (s *FileServer) Process(file *File) {
+	p := s.GetProcessor(file)
+	p.Process(file)
+	s.Insert(file)
+}
+
+func (server *FileServer) ScanDirectory(root string) error {
+	return filepath.Walk(root, func(filename string, f os.FileInfo, err error) error {
 		if err != nil {
 			log.Println("walk error", err)
 			return err
 		}
-		dir, name := filepath.Split(filename)
-		dir, _ = filepath.Rel(server.root, dir)
-		if dir == ".." {
-			return nil
+		dir := strings.Replace(filename, root, "", 1)
+		dir = filepath.Dir(dir)
+		if dir == "." || dir == "" {
+			dir = "/"
 		}
-		if dir == "." {
-			dir = ""
-		}
-		dir = "/" + dir
-		log.Println(filename)
-		info := FileInfo{
-			Name:  name,
-			Path:  dir,
+		// log.Println(dir, filename)
+		server.Process(&File{
+			Name:  f.Name(),
 			Size:  f.Size(),
 			IsDir: f.IsDir(),
-		}
-		server.Insert(&info)
-		server.cache = append(server.cache, info)
-		processor := server.GetProcessor(filename)
-		processor.Process(filename)
+			Path:  filename,
+			Dir:   dir,
+		})
 		return nil
 	})
 }
 
-func (server *FileServer) Insert(info *FileInfo) {
-	_, err := server.db.Exec("INSERT INTO files (name, path, is_dir, size) VALUES (?, ?, ?, ?)", info.Name, info.Path, info.IsDir, info.Size)
-	if err != nil {
-		log.Println("sql error:", err)
-	}
-}
-
-// FileProcessor 接口定义了文件处理器应该实现的方法
-type FileProcessor interface {
-	IsSupport(filename string) bool
-	Process(filename string) error
-	GetInfo(filename string, info *FileInfo)
-}
-
-// FileInfo 结构体新增了用于信息展示的字段
-type FileInfo struct {
-	Name  string `json:"name"`
-	Path  string `json:"path"`
-	Size  int64  `json:"size"`
-	IsDir bool   `json:"isDir"`
-	Title string
-	Icon  string `json:"icon"`
-	Line1 string `json:"line1"`
-	Line2 string `json:"line2"`
-	Line3 string `json:"line3"`
-}
-
-// ImageProcessor 实现了 FileProcessor 接口，用于处理图片文件
-type ImageProcessor struct{}
-
-func (p *ImageProcessor) IsSupport(filename string) bool {
-	ext := strings.ToLower(filepath.Ext(filename))
-	return ext == ".jpg" || ext == ".jpeg" || ext == ".png"
-}
-
-func (p *ImageProcessor) Process(filename string) error {
-	// 对于图片，我们可以直接使用原文件作为图标，所以这里不需要额外处理
-	return nil
-}
-
-func (p *ImageProcessor) GetInfo(filename string, info *FileInfo) {
-	info.Icon = fmt.Sprintf("/file?path=%s", filename)
-}
-
-// APKProcessor 实现了 FileProcessor 接口，用于处理 APK 文件
-type APKProcessor struct {
-	cache map[string]FileInfo
-}
-
-func (p *APKProcessor) IsSupport(filename string) bool {
-	ext := strings.ToLower(filepath.Ext(filename))
-	return ext == ".apk"
-}
-
-func (p *APKProcessor) Process(filename string) error {
-	info := FileInfo{}
-	pkg, err := apk.Open(filename)
-	if err != nil {
-		return err
-	}
-	defer pkg.Close()
-
-	icon, err := pkg.Icon(nil)
-	if err != nil {
-		return err
-	}
-	hasher := md5.New()
-	io.WriteString(hasher, filename)
-	tmpfile := fmt.Sprintf("/tmp/%x.png", hasher.Sum(nil))
-
-	f, err := os.Create(tmpfile)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	info.Icon = fmt.Sprintf("/file?path=%s", tmpfile)
-	info.Title, _ = pkg.Label(nil)
-	info.Line1 = pkg.PackageName()
-	p.cache[filename] = info
-	return png.Encode(f, icon)
-}
-
-func (p *APKProcessor) GetInfo(filename string, info *FileInfo) {
-	in := p.cache[filename]
-	info.Icon = in.Icon
-	info.Title = in.Title
-	info.Line1 = in.Line1
-}
-
-// DefaultProcessor 实现了 FileProcessor 接口，用于处理其他类型的文件
-type DefaultProcessor struct{}
-
-func (p *DefaultProcessor) IsSupport(filename string) bool {
-	return true // 默认处理器支持所有文件
-}
-
-func (p *DefaultProcessor) Process(filename string) error {
-	// 对于默认处理器，不需要特殊处理
-	return nil
-}
-
-func (p *DefaultProcessor) GetInfo(filename string, info *FileInfo) {
-	if info.IsDir {
-		info.Icon = "https://cdn-icons-png.freepik.com/256/12532/12532956.png"
-	} else {
-		info.Icon = "https://cdn-icons-png.flaticon.com/256/607/607674.png" // 默认图标
-	}
-}
-
-func (server *FileServer) GetProcessor(filename string) FileProcessor {
-	for _, processor := range server.processors {
-		if processor.IsSupport(filename) {
-			return processor
-		}
-	}
-	return nil
-}
-
-func (server *FileServer) ListFiles(path string, offset, size int) (files []FileInfo, err error) {
-	// for _, file := range server.cache {
-	// 	if file.Path == path {
-	// 		filename := filepath.Join(server.root, file.Path, file.Name)
-	// 		processor := server.GetProcessor(filename)
-	// 		processor.GetInfo(filename, &file)
-	// 		files = append(files, file)
-	// 	}
-	// }
-	rows, err := server.db.Query("SELECT name, size, path, is_dir FROM files WHERE path = ? LIMIT ? OFFSET ?", path, size, offset)
+func (server *FileServer) ListFiles(path string, offset, size int) (files []File, err error) {
+	rows, err := server.db.Query(`
+		SELECT name, size, path, dir, is_dir, icon, title, line1, line2, line3
+		FROM files 
+		WHERE dir = ? 
+		LIMIT ? 
+		OFFSET ?
+	`, path, size, offset)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var file FileInfo
-		if err = rows.Scan(&file.Name, &file.Size, &file.Path, &file.IsDir); err != nil {
+		var file File
+		if err = rows.Scan(&file.Name, &file.Size, &file.Path, &file.Dir, &file.IsDir, &file.Icon, &file.Title, &file.Line1, &file.Line2, &file.Line3); err != nil {
 			return
 		}
-		filename := filepath.Join(server.root, file.Path, file.Name)
-		processor := server.GetProcessor(filename)
-		processor.GetInfo(filename, &file)
 		files = append(files, file)
 	}
 	return
 }
 
-func (server *FileServer) ListFilesHandler(w http.ResponseWriter, r *http.Request) (files []FileInfo) {
+func (server *FileServer) ListFilesHandler(w http.ResponseWriter, r *http.Request) (files []File) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
@@ -297,13 +203,14 @@ func (server *FileServer) FileHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	root := "/Volumes/nsfw"
-	server, err := NewFileServer(root)
+	server, err := NewFileServer()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	go server.ScanDirectory()
+	// root := "/Volumes/data/Videos"
+	root := "/Volumes/software/Mobile/APKs"
+	go server.ScanDirectory(root)
 
 	http.HandleFunc("/", server.IndexView)
 	http.HandleFunc("/file", server.FileHandler)

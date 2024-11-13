@@ -77,7 +77,7 @@
 
 <ul class="files">
   {{range .files}}
-  <a href="?path={{ if eq .Path "/" }}{{.Path}}{{.Name}}{{else}}{{.Path}}/{{.Name}}{{end}}" class="file">
+  <a href="?path={{ if eq .Dir "/" }}{{.Dir}}{{.Name}}{{else}}{{.Dir}}/{{.Name}}{{end}}" class="file">
     <img class="file-icon" src="{{.Icon}}" alt="📃" loading="lazy" />
     <div class="file-content">
       <span class="file-title">{{.Title}}</span>
