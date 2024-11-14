@@ -102,7 +102,7 @@
       <span class="file-line1">{{.Line1}}</span>
       <span class="file-line2">{{.Line2}}</span>
       <span class="file-line3">{{.Line3}}</span>
-      <span class="file-name">{{.Name}}</span>
+      {{ if not .Title }}<span class="file-name">{{.Name}}</span>{{ end }}
       <span class="file-size">{{.Size}}</span>
     </div>
   </a>

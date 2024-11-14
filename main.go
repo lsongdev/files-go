@@ -95,7 +95,6 @@ func (server *FileServer) initDB() error {
 }
 
 func (server *FileServer) Insert(info *File) error {
-	log.Println(info.Path)
 	_, err := server.db.Exec(`
 		INSERT INTO files
 			(name, path, is_dir, size, icon, title, line1, line2, line3) 
@@ -176,7 +175,6 @@ func (server *FileServer) ListFiles(path string, offset, size int) (files []File
 		if err = rows.Scan(&file.Name, &file.Size, &file.Path, &file.IsDir, &file.Icon, &file.Title, &file.Line1, &file.Line2, &file.Line3); err != nil {
 			return
 		}
-		log.Println(file)
 		files = append(files, file)
 	}
 	return

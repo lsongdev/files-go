@@ -8,16 +8,13 @@ import (
 	"strings"
 
 	"github.com/lsongdev/apk-go/apk"
+	v2 "github.com/lsongdev/id3-go/v2"
 )
 
 func (s *FileServer) initProcessors() {
 	s.processors = []FileProcessor{
+		&MusicProcessor{},
 		&ImageProcessor{},
-		// &VideoProcessor{},
-		// &AudioProcessor{},
-		// &TextProcessor{},
-		// &PDFProcessor{},
-		// &ArchiveProcessor{},
 		&APKProcessor{},
 		&ImageProcessor{},
 		&DefaultProcessor{},
@@ -36,6 +33,31 @@ func (s *FileServer) GetProcessor(file *File) (processor FileProcessor) {
 type FileProcessor interface {
 	IsSupport(file *File) bool
 	Process(file *File) error
+}
+
+type MusicProcessor struct{}
+
+func (p *MusicProcessor) IsSupport(info *File) bool {
+	ext := strings.ToLower(filepath.Ext(info.filename()))
+	return !info.IsDir && ext == ".mp3"
+}
+
+func (p *MusicProcessor) Process(info *File) error {
+	f, err := os.Open(info.filename())
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	tag, err := v2.Read(f)
+	if err != nil {
+		return err
+	}
+	info.Title = tag.Title()
+	info.Line1 = tag.Artist()
+	// info.Line2 = tag.Album()
+	// info.Line3 = tag.Genre()
+	info.Icon = "https://cdn-icons-png.flaticon.com/512/4039/4039628.png"
+	return nil
 }
 
 type ImageProcessor struct{}

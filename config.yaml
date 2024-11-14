@@ -6,25 +6,25 @@ tmdb:
   api_key: "5640d0f3eea1e20a18d3a1f150b3a1ef"
 
 libraries:
-  - name: "Movies"
-    type: "movies"
-    path: "/Volumes/data/Videos/Movies"
+  # - name: "Movies"
+  #   type: "movies"
+  #   path: "/Volumes/data/Videos/Movies"
 
-  - name: "TV Shows"
-    type: "tvshows"
-    path: "/Volumes/data/Videos/TV Shows"
+  # - name: "TV Shows"
+  #   type: "tvshows"
+  #   path: "/Volumes/data/Videos/TV Shows"
 
-  - name: "Music"
-    type: "music"
-    path: "/Volumes/data/Music"
+  # - name: "Music"
+  #   type: "music"
+  #   path: "/Volumes/data/Music"
 
   # - name: "Photos"
   #   type: "books"
   #   path: "/Volumes/data/Pictures"
 
-  - name: "Software"
-    type: "software"
-    path: "/Volumes/software"
+  # - name: "Software"
+  #   type: "software"
+  #   path: "/Volumes/software"
   
   - name: "Books"
     type: "books"
