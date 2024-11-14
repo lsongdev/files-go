@@ -8,11 +8,13 @@ import (
 	"strings"
 
 	"github.com/lsongdev/apk-go/apk"
+	"github.com/lsongdev/epub-go/epub"
 	v2 "github.com/lsongdev/id3-go/v2"
 )
 
 func (s *FileServer) initProcessors() {
 	s.processors = []FileProcessor{
+		&EpubProcessor{},
 		&MusicProcessor{},
 		&ImageProcessor{},
 		&APKProcessor{},
@@ -33,6 +35,31 @@ func (s *FileServer) GetProcessor(file *File) (processor FileProcessor) {
 type FileProcessor interface {
 	IsSupport(file *File) bool
 	Process(file *File) error
+}
+
+type EpubProcessor struct{}
+
+func (p *EpubProcessor) IsSupport(info *File) bool {
+	ext := strings.ToLower(filepath.Ext(info.filename()))
+	return !info.IsDir && ext == ".epub"
+}
+
+func (p *EpubProcessor) Process(info *File) error {
+	info.Icon = "https://cdn-icons-png.flaticon.com/512/8361/8361190.png"
+	book, err := epub.Open(info.filename())
+	if err != nil {
+		return err
+	}
+	defer book.Close()
+	info.Title = book.Title()
+	info.Line1 = book.Author()
+	cover, err := book.ReadCover()
+	if err == nil {
+		tmpfile := fmt.Sprintf("/tmp/%x.png", info.Name)
+		info.Icon = fmt.Sprintf("/file?path=%s", tmpfile)
+		os.WriteFile(tmpfile, cover, 0644)
+	}
+	return nil
 }
 
 type MusicProcessor struct{}

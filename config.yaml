@@ -28,7 +28,7 @@ libraries:
   
   - name: "Books"
     type: "books"
-    path: "/Volumes/data/Documents"
+    path: "/Volumes/data/Documents/books/books"
 
   # - name: "Japanese AV"
   #   type: "jav"

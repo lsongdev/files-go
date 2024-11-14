@@ -10,6 +10,7 @@ require (
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/lsongdev/epub-go v0.0.0-20241114114048-f636261790f2 // indirect
 	github.com/lsongdev/id3-go v0.0.0-20241114104036-8b5ebf618595 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sqlite3 v1.14.24 // indirect
