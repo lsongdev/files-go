@@ -10,6 +10,20 @@ import (
 	"github.com/lsongdev/apk-go/apk"
 )
 
+func (s *FileServer) initProcessors() {
+	s.processors = []FileProcessor{
+		&ImageProcessor{},
+		// &VideoProcessor{},
+		// &AudioProcessor{},
+		// &TextProcessor{},
+		// &PDFProcessor{},
+		// &ArchiveProcessor{},
+		&APKProcessor{},
+		&ImageProcessor{},
+		&DefaultProcessor{},
+	}
+}
+
 func (s *FileServer) GetProcessor(file *File) (processor FileProcessor) {
 	for _, p := range s.processors {
 		if p.IsSupport(file) {
@@ -27,12 +41,12 @@ type FileProcessor interface {
 type ImageProcessor struct{}
 
 func (p *ImageProcessor) IsSupport(info *File) bool {
-	ext := strings.ToLower(filepath.Ext(info.Path))
+	ext := strings.ToLower(filepath.Ext(info.filename()))
 	return !info.IsDir && (ext == ".jpg" || ext == ".jpeg" || ext == ".png")
 }
 
 func (p *ImageProcessor) Process(info *File) error {
-	info.Icon = fmt.Sprintf("/file?path=%s", info.Path)
+	info.Icon = fmt.Sprintf("/file?path=%s", info.filename())
 	return nil
 }
 
@@ -40,12 +54,12 @@ type APKProcessor struct {
 }
 
 func (p *APKProcessor) IsSupport(info *File) bool {
-	ext := strings.ToLower(filepath.Ext(info.Path))
+	ext := strings.ToLower(filepath.Ext(info.filename()))
 	return !info.IsDir && ext == ".apk"
 }
 
 func (p *APKProcessor) Process(info *File) error {
-	pkg, err := apk.Open(info.Path)
+	pkg, err := apk.Open(info.filename())
 	if err != nil {
 		return err
 	}

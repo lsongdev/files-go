@@ -22,9 +22,9 @@ libraries:
     type: "books"
     path: "/Volumes/data/Pictures"
 
-  # - name: "Software"
-  #   type: "software"
-  #   path: "/Volumes/data/software"
+  - name: "Software"
+    type: "software"
+    path: "/Volumes/data/software"
   
   - name: "Books"
     type: "books"

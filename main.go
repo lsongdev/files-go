@@ -11,18 +11,27 @@ import (
 	"strings"
 	"text/template"
 
-	// _ "github.com/glebarez/go-sqlite"
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/glebarez/go-sqlite"
+	// _ "github.com/mattn/go-sqlite3"
+	"gopkg.in/yaml.v3"
 )
 
 type H = map[string]interface{}
 
-// FileInfo 结构体新增了用于信息展示的字段
+type Library struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+	Path string `json:"path"`
+}
+
+type Config struct {
+	Libraries []Library `json:"libraries"`
+}
+
 type File struct {
 	Name  string `json:"name"`
 	Size  int64  `json:"size"`
 	IsDir bool   `json:"isDir"`
-	Dir   string `json:"dir"`
 	Path  string `json:"path"`
 	Icon  string `json:"icon"`
 	Title string `json:"title"`
@@ -31,33 +40,36 @@ type File struct {
 	Line3 string `json:"line3"`
 }
 
+func (f *File) filename() string {
+	return filepath.Join(f.Path, f.Name)
+}
+
 type FileServer struct {
-	db *sql.DB
+	config *Config
+	db     *sql.DB
 
 	processors []FileProcessor
 }
 
 func NewFileServer() (server *FileServer, err error) {
-	db, err := sql.Open("sqlite3", "file:test.db?cache=shared&mode=memory")
+	var config *Config
+	f, err := os.Open("config.yaml")
+	if err != nil {
+		return nil, err
+	}
+	if err := yaml.NewDecoder(f).Decode(&config); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", "file:test.db?cache=shared&mode=memory") //
 	if err != nil {
 		return nil, err
 	}
 	server = &FileServer{
-		db: db,
-
-		processors: []FileProcessor{
-			&ImageProcessor{},
-			// &VideoProcessor{},
-			// &AudioProcessor{},
-			// &TextProcessor{},
-			// &PDFProcessor{},
-			// &ArchiveProcessor{},
-			&APKProcessor{},
-			&ImageProcessor{},
-			&DefaultProcessor{},
-		},
+		config: config,
+		db:     db,
 	}
 	server.initDB()
+	server.initProcessors()
 	return
 }
 
@@ -83,12 +95,13 @@ func (server *FileServer) initDB() error {
 }
 
 func (server *FileServer) Insert(info *File) error {
+	log.Println(info.Path)
 	_, err := server.db.Exec(`
-		INSERT INTO files 
-			(name, dir, path, is_dir, size, icon, title, line1, line2, line3) 
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO files
+			(name, path, is_dir, size, icon, title, line1, line2, line3) 
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		info.Name, info.Dir, info.Path, info.IsDir, info.Size,
+		info.Name, info.Path, info.IsDir, info.Size,
 		info.Icon, info.Title, info.Line1, info.Line2, info.Line3)
 	return err
 }
@@ -98,6 +111,7 @@ func (s *FileServer) Render(w http.ResponseWriter, name string, data H) {
 	if data == nil {
 		data = H{}
 	}
+	data["Config"] = s.config
 	tmpl, err := template.ParseFiles("templates/layout.html", "templates/"+name+".html")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -113,38 +127,43 @@ func (s *FileServer) Render(w http.ResponseWriter, name string, data H) {
 
 func (s *FileServer) Process(file *File) {
 	p := s.GetProcessor(file)
-	p.Process(file)
-	s.Insert(file)
+	if err := p.Process(file); err != nil {
+		log.Println(err)
+	}
+	if err := s.Insert(file); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func (server *FileServer) ScanDirectory(root string) error {
 	return filepath.Walk(root, func(filename string, f os.FileInfo, err error) error {
 		if err != nil {
-			log.Println("walk error", err)
+			log.Fatal("walk error", err)
 			return err
 		}
-		dir := strings.Replace(filename, root, "", 1)
-		dir = filepath.Dir(dir)
-		if dir == "." || dir == "" {
-			dir = "/"
-		}
-		// log.Println(dir, filename)
 		server.Process(&File{
 			Name:  f.Name(),
 			Size:  f.Size(),
 			IsDir: f.IsDir(),
-			Path:  filename,
-			Dir:   dir,
+			Path:  filepath.Dir(filename),
 		})
 		return nil
 	})
 }
 
+func (server *FileServer) ScanLibraries() {
+	for _, library := range server.config.Libraries {
+		if err := server.ScanDirectory(library.Path); err != nil {
+			log.Println(err)
+		}
+	}
+}
+
 func (server *FileServer) ListFiles(path string, offset, size int) (files []File, err error) {
 	rows, err := server.db.Query(`
-		SELECT name, size, path, dir, is_dir, icon, title, line1, line2, line3
+		SELECT name, size, path, is_dir, icon, title, line1, line2, line3
 		FROM files 
-		WHERE dir = ? 
+		WHERE path = ? 
 		LIMIT ? 
 		OFFSET ?
 	`, path, size, offset)
@@ -154,15 +173,16 @@ func (server *FileServer) ListFiles(path string, offset, size int) (files []File
 	defer rows.Close()
 	for rows.Next() {
 		var file File
-		if err = rows.Scan(&file.Name, &file.Size, &file.Path, &file.Dir, &file.IsDir, &file.Icon, &file.Title, &file.Line1, &file.Line2, &file.Line3); err != nil {
+		if err = rows.Scan(&file.Name, &file.Size, &file.Path, &file.IsDir, &file.Icon, &file.Title, &file.Line1, &file.Line2, &file.Line3); err != nil {
 			return
 		}
+		log.Println(file)
 		files = append(files, file)
 	}
 	return
 }
 
-func (server *FileServer) ListFilesHandler(w http.ResponseWriter, r *http.Request) (files []File) {
+func (server *FileServer) ListFilesHandler(w http.ResponseWriter, r *http.Request) (index int, files []File) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
@@ -172,27 +192,37 @@ func (server *FileServer) ListFilesHandler(w http.ResponseWriter, r *http.Reques
 		pageSize = 100
 	}
 	path := r.URL.Query().Get("path")
-	if path == "" {
-		path = "/"
-	}
+	source := r.URL.Query().Get("source")
+	index, _ = strconv.Atoi(source)
+	prefix := server.config.Libraries[index].Path
+	fullpath := filepath.Join(prefix, path)
 	offset := (page - 1) * pageSize
-	files, err := server.ListFiles(path, offset, pageSize)
+	files, err := server.ListFiles(fullpath, offset, pageSize)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	for i, file := range files {
+		file.Path = strings.Replace(file.Path, prefix, "", 1)
+		files[i] = file
 	}
 	return
 }
 
 func (server *FileServer) IndexView(w http.ResponseWriter, r *http.Request) {
-	files := server.ListFilesHandler(w, r)
-	server.Render(w, "index", H{
-		"files": files,
+	server.Render(w, "index", H{})
+}
+
+func (server *FileServer) ListView(w http.ResponseWriter, r *http.Request) {
+	source, files := server.ListFilesHandler(w, r)
+	server.Render(w, "list", H{
+		"source": source,
+		"files":  files,
 	})
 }
 
 func (server *FileServer) ApiHandler(w http.ResponseWriter, r *http.Request) {
-	files := server.ListFilesHandler(w, r)
+	_, files := server.ListFilesHandler(w, r)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(files)
 }
@@ -208,11 +238,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// root := "/Volumes/data/Videos"
-	root := "/Volumes/software/Mobile/APKs"
-	go server.ScanDirectory(root)
+	go server.ScanLibraries()
 
 	http.HandleFunc("/", server.IndexView)
+	http.HandleFunc("/files", server.ListView)
 	http.HandleFunc("/file", server.FileHandler)
 	http.HandleFunc("/api", server.ApiHandler)
 	log.Println("Server is running on http://localhost:8080")
