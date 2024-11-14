@@ -85,7 +85,7 @@
   <button onclick="history.back(); return false;">Back</button>
   <select name="source" >
     {{range $i, $library := .Config.Libraries}}
-     <option value="{{$i}}">{{$library.Name}}</option>
+     <option value="{{$i}}" {{if eq $i $source }}selected{{end}} >{{$library.Name}}</option>
     {{end}}
   </select>
   <input type="hidden" name="source" value="{{$source}}">
