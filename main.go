@@ -217,6 +217,7 @@ func (server *FileServer) ListView(w http.ResponseWriter, r *http.Request) {
 	source, files := server.ListFilesHandler(w, r)
 	server.Render(w, "list", H{
 		"source": source,
+		"path":   r.URL.Query().Get("path"),
 		"files":  files,
 	})
 }

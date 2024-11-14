@@ -52,6 +52,10 @@
     color: #333;
   }
 
+  form {
+    margin-top: 20px;
+  }
+
   @media screen and (min-width: 768px) {
     .files {
       display: grid;
@@ -76,6 +80,18 @@
 </style>
 
 {{$source := .source}}
+
+<form action="/files" class="card" >
+  <button onclick="history.back(); return false;">Back</button>
+  <select name="source" >
+    {{range $i, $library := .Config.Libraries}}
+     <option value="{{$i}}">{{$library.Name}}</option>
+    {{end}}
+  </select>
+  <input type="hidden" name="source" value="{{$source}}">
+  <input type="text" name="path" value="{{.path}}" >
+  <button>Go</button>
+</form>
 
 <ul class="files">
   {{range .files}}

@@ -18,13 +18,13 @@ libraries:
     type: "music"
     path: "/Volumes/data/Music"
 
-  - name: "Photos"
-    type: "books"
-    path: "/Volumes/data/Pictures"
+  # - name: "Photos"
+  #   type: "books"
+  #   path: "/Volumes/data/Pictures"
 
   - name: "Software"
     type: "software"
-    path: "/Volumes/data/software"
+    path: "/Volumes/software"
   
   - name: "Books"
     type: "books"
