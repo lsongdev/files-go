@@ -7,29 +7,22 @@ tmdb:
 
 libraries:
   - name: "Movies"
-    type: "movies"
     path: "/Volumes/data/Videos/Movies"
 
   - name: "TV Shows"
-    type: "tvshows"
     path: "/Volumes/data/Videos/TV Shows"
 
   - name: "Music"
-    type: "music"
     path: "/Volumes/data/Music"
 
   # - name: "Photos"
-  #   type: "books"
   #   path: "/Volumes/data/Pictures"
 
   # - name: "Software"
-  #   type: "software"
   #   path: "/Volumes/software"
   
   - name: "Books"
-    type: "books"
     path: "/Volumes/data/Documents/books/books"
 
   # - name: "Japanese AV"
-  #   type: "jav"
   #   path: "/Volumes/data/Videos/JapaneseAV"

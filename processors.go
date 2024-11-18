@@ -143,7 +143,7 @@ func (p *DefaultProcessor) Process(info *File) (err error) {
 	if info.IsDir {
 		info.Icon = "https://cdn-icons-png.freepik.com/256/12532/12532956.png"
 		icon := filepath.Join(info.filename(), "folder.jpg")
-		if _, err = os.Stat(icon); err == nil {
+		if _, err := os.Stat(icon); err == nil {
 			info.Icon = fmt.Sprintf("/file?path=%s", icon)
 		}
 	} else {

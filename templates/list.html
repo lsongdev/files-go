@@ -80,22 +80,38 @@
 </style>
 
 {{$source := .source}}
+{{$size := .size}}
 
-<form action="/files" class="card" >
-  <button onclick="history.back(); return false;">Back</button>
-  <select name="source" >
-    {{range $i, $library := .Config.Libraries}}
-     <option value="{{$i}}" {{if eq $i $source }}selected{{end}} >{{$library.Name}}</option>
-    {{end}}
-  </select>
-  <input type="hidden" name="source" value="{{$source}}">
-  <input type="text" name="path" value="{{.path}}" >
-  <button>Go</button>
+<form action="/files" class="card flex flex-jc-between">
+  <div>
+    <button onclick="history.back(); return false;">Back</button>
+    <select name="source">
+      {{range $i, $library := .Config.Libraries}}
+      <option value="{{$i}}" {{if eq $i $source }}selected{{end}}>{{$library.Name}}</option>
+      {{end}}
+    </select>
+    <input type="text" name="path" value="{{.path}}">
+    <button>Go</button>
+  </div>
+
+  <div>
+    <button>Prev</button>
+    <input type="number" name="page" value="{{.page}}">
+    <select name="size">
+      <option {{if eq $size 10 }}selected{{end}} value="10">10</option>
+      <option {{if eq $size 50 }}selected{{end}} value="50">50</option>
+      <option {{if eq $size 100 }}selected{{end}} value="100">100</option>
+      <option {{if eq $size 200 }}selected{{end}} value="200">200</option>
+      <option {{if eq $size 500 }}selected{{end}} value="500">500</option>
+    </select>
+    <button>Next</button>
+  </div>
 </form>
 
 <ul class="files">
   {{range .files}}
-  <a href="?source={{$source}}&path={{ if eq .Path "/" }}{{.Path}}{{.Name}}{{else}}{{.Path}}/{{.Name}}{{end}}" class="file">
+  <a href="?source={{$source}}&path={{ if eq .Path " /" }}{{.Path}}{{.Name}}{{else}}{{.Path}}/{{.Name}}{{end}}"
+    class="file">
     <img class="file-icon" src="{{.Icon}}" alt="📃" loading="lazy" />
     <div class="file-content">
       <span class="file-title">{{.Title}}</span>
@@ -108,10 +124,4 @@
   </a>
   {{end}}
 </ul>
-<form>
-  <button>Prev</button>
-  <input type="number" name="page" value="{{.page}}" >
-  <input type="number" name="size" value="{{.size}}" >
-  <button>Next</button>
-</form>
 {{end}}

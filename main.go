@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -11,7 +10,9 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/emersion/go-webdav"
 	_ "github.com/glebarez/go-sqlite"
+
 	// _ "github.com/mattn/go-sqlite3"
 	"gopkg.in/yaml.v3"
 )
@@ -20,12 +21,20 @@ type H = map[string]interface{}
 
 type Library struct {
 	Name string `json:"name"`
-	Type string `json:"type"`
 	Path string `json:"path"`
 }
 
 type Config struct {
 	Libraries []Library `json:"libraries"`
+}
+
+func (c *Config) FindLibraryIndex(name string) int {
+	for index, library := range c.Libraries {
+		if library.Name == name {
+			return index
+		}
+	}
+	return -1
 }
 
 type File struct {
@@ -180,7 +189,7 @@ func (server *FileServer) ListFiles(path string, offset, size int) (files []File
 	return
 }
 
-func (server *FileServer) ListFilesHandler(w http.ResponseWriter, r *http.Request) (index int, files []File) {
+func (server *FileServer) ListHandler(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	if page < 1 {
 		page = 1
@@ -191,7 +200,7 @@ func (server *FileServer) ListFilesHandler(w http.ResponseWriter, r *http.Reques
 	}
 	path := r.URL.Query().Get("path")
 	source := r.URL.Query().Get("source")
-	index, _ = strconv.Atoi(source)
+	index, _ := strconv.Atoi(source)
 	prefix := server.config.Libraries[index].Path
 	fullpath := filepath.Join(prefix, path)
 	offset := (page - 1) * pageSize
@@ -204,26 +213,17 @@ func (server *FileServer) ListFilesHandler(w http.ResponseWriter, r *http.Reques
 		file.Path = strings.Replace(file.Path, prefix, "", 1)
 		files[i] = file
 	}
-	return
+	server.Render(w, "list", H{
+		"source": index,
+		"path":   path,
+		"files":  files,
+		"page":   page,
+		"size":   pageSize,
+	})
 }
 
 func (server *FileServer) IndexView(w http.ResponseWriter, r *http.Request) {
 	server.Render(w, "index", H{})
-}
-
-func (server *FileServer) ListView(w http.ResponseWriter, r *http.Request) {
-	source, files := server.ListFilesHandler(w, r)
-	server.Render(w, "list", H{
-		"source": source,
-		"path":   r.URL.Query().Get("path"),
-		"files":  files,
-	})
-}
-
-func (server *FileServer) ApiHandler(w http.ResponseWriter, r *http.Request) {
-	_, files := server.ListFilesHandler(w, r)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(files)
 }
 
 func (server *FileServer) FileHandler(w http.ResponseWriter, r *http.Request) {
@@ -239,10 +239,14 @@ func main() {
 
 	go server.ScanLibraries()
 
+	handler := webdav.Handler{
+		FileSystem: server,
+	}
+
 	http.HandleFunc("/", server.IndexView)
-	http.HandleFunc("/files", server.ListView)
+	http.HandleFunc("/files", server.ListHandler)
 	http.HandleFunc("/file", server.FileHandler)
-	http.HandleFunc("/api", server.ApiHandler)
+	http.Handle("/webdav/", &handler)
 	log.Println("Server is running on http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
