@@ -127,7 +127,7 @@ func (s *FileServer) Render(w http.ResponseWriter, name string, data H) {
 func (s *FileServer) Process(file *File) {
 	p := s.GetProcessor(file)
 	if err := p.Process(file); err != nil {
-		log.Println(err)
+		log.Println(file.filename(), err)
 	}
 	if err := s.Insert(file); err != nil {
 		log.Fatal(err)

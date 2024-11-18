@@ -37,6 +37,9 @@ type FileProcessor interface {
 	Process(file *File) error
 }
 
+type MovieProcessor struct {
+}
+
 type EpubProcessor struct{}
 
 func (p *EpubProcessor) IsSupport(info *File) bool {
@@ -70,6 +73,7 @@ func (p *MusicProcessor) IsSupport(info *File) bool {
 }
 
 func (p *MusicProcessor) Process(info *File) error {
+	info.Icon = "https://cdn-icons-png.flaticon.com/512/4039/4039628.png"
 	f, err := os.Open(info.filename())
 	if err != nil {
 		return err
@@ -83,7 +87,6 @@ func (p *MusicProcessor) Process(info *File) error {
 	info.Line1 = tag.Artist()
 	// info.Line2 = tag.Album()
 	// info.Line3 = tag.Genre()
-	info.Icon = "https://cdn-icons-png.flaticon.com/512/4039/4039628.png"
 	return nil
 }
 
@@ -139,6 +142,10 @@ func (p *DefaultProcessor) IsSupport(info *File) bool {
 func (p *DefaultProcessor) Process(info *File) (err error) {
 	if info.IsDir {
 		info.Icon = "https://cdn-icons-png.freepik.com/256/12532/12532956.png"
+		icon := filepath.Join(info.filename(), "folder.jpg")
+		if _, err = os.Stat(icon); err == nil {
+			info.Icon = fmt.Sprintf("/file?path=%s", icon)
+		}
 	} else {
 		info.Icon = "https://cdn-icons-png.flaticon.com/256/607/607674.png" // 默认图标
 	}
