@@ -15,9 +15,9 @@
   <div class="container">
     <h1><a href="/">Files</a></h1>
     <nav>
-      <a href="/">Home</a>
+      <!-- <a href="/">Home</a> -->
       {{range $i, $library := .Config.Libraries}}
-      <a href="/files?source={{$i}}">{{$library.Name}}</a>
+      <a href="/files?library={{$library.Name}}">{{$library.Name}}</a>
       {{end}}
     </nav>
     <main>

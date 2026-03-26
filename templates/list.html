@@ -79,15 +79,15 @@
   }
 </style>
 
-{{$source := .source}}
+{{$library := .library}}
 {{$size := .size}}
 
-<form action="/files" class="card flex flex-jc-between">
+<form action="" class="card flex flex-jc-between">
   <div>
     <button onclick="history.back(); return false;">Back</button>
-    <select name="source">
+    <select name="library" onchange="this.form.action='/files?library=' + this.value">
       {{range $i, $library := .Config.Libraries}}
-      <option value="{{$i}}" {{if eq $i $source }}selected{{end}}>{{$library.Name}}</option>
+      <option value="{{$library.Name}}" {{if eq $library.Name $.library}}selected{{end}}>{{$library.Name}}</option>
       {{end}}
     </select>
     <input type="text" name="path" value="{{.path}}">
@@ -110,18 +110,23 @@
 
 <ul class="files">
   {{range .files}}
-  <a href="?source={{$source}}&path={{ if eq .Path " /" }}{{.Path}}{{.Name}}{{else}}{{.Path}}/{{.Name}}{{end}}"
+  <a href="/files?library={{$library}}&path={{ if eq .Path " /" }}{{.Path}}{{.Name}}{{else}}{{.Path}}/{{.Name}}{{end}}"
     class="file">
     <img class="file-icon" src="{{.Icon}}" alt="📃" loading="lazy" />
     <div class="file-content">
       <span class="file-title">{{.Title}}</span>
       <span class="file-line1">{{.Line1}}</span>
       <span class="file-line2">{{.Line2}}</span>
-      <span class="file-line3">{{.Line3}}</span>
+      <!-- <span class="file-line3">{{.Line3}}</span> -->
       {{ if not .Title }}<span class="file-name">{{.Name}}</span>{{ end }}
       <span class="file-size">{{.Size}}</span>
     </div>
   </a>
+  {{else}}
+  <div>
+    <h2>No files found</h2>
+    <p>This directory is empty</p>
+  </div>
   {{end}}
 </ul>
 {{end}}

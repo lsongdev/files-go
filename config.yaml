@@ -7,22 +7,29 @@ tmdb:
 
 libraries:
   - name: "Movies"
+    slug: "movies"
     path: "/Volumes/data/Videos/Movies"
 
   - name: "TV Shows"
+    slug: "tvshows"
     path: "/Volumes/data/Videos/TV Shows"
 
   - name: "Music"
+    slug: "music"
     path: "/Volumes/data/Music"
 
-  # - name: "Photos"
-  #   path: "/Volumes/data/Pictures"
+  - name: "Photos"
+    slug: "photos"
+    path: "/Volumes/data/Pictures"
 
   # - name: "Software"
+  #   slug: "software"
   #   path: "/Volumes/software"
-  
+
   - name: "Books"
+    slug: "books"
     path: "/Volumes/data/Documents/books/books"
 
   # - name: "Japanese AV"
+  #   slug: "jav"
   #   path: "/Volumes/data/Videos/JapaneseAV"

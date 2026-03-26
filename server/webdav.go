@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"github.com/emersion/go-webdav"
 )
 
-func (fs FileServer) localPath(path string) (int, string, error) {
+func (fs *FileServer) localPath(path string) (int, string, error) {
 	parts := strings.Split(path, "/")
 	// log.Println(source)
 	index := fs.config.FindLibraryIndex(parts[2])
@@ -24,7 +24,7 @@ func (fs FileServer) localPath(path string) (int, string, error) {
 	return index, path, nil
 }
 
-func (fs FileServer) externalPath(source int, path string) (string, error) {
+func (fs *FileServer) externalPath(source int, path string) (string, error) {
 	library := fs.config.Libraries[source]
 	path = strings.Replace(path, fmt.Sprintf("/-/%s", library.Name), "", 1)
 	// log.Println("externalPath", path)
@@ -35,7 +35,7 @@ func (fs FileServer) externalPath(source int, path string) (string, error) {
 	return "/" + filepath.ToSlash(rel), nil
 }
 
-func (fs FileServer) Open(ctx context.Context, name string) (io.ReadCloser, error) {
+func (fs *FileServer) Open(ctx context.Context, name string) (io.ReadCloser, error) {
 	_, p, err := fs.localPath(name)
 	if err != nil {
 		return nil, err
@@ -60,7 +60,7 @@ func fileInfoFromOS(p string, fi os.FileInfo) *webdav.FileInfo {
 	}
 }
 
-func (fs FileServer) Stat(ctx context.Context, name string) (*webdav.FileInfo, error) {
+func (fs *FileServer) Stat(ctx context.Context, name string) (*webdav.FileInfo, error) {
 	_, p, err := fs.localPath(name)
 	if err != nil {
 		return nil, err
@@ -72,7 +72,7 @@ func (fs FileServer) Stat(ctx context.Context, name string) (*webdav.FileInfo, e
 	return fileInfoFromOS(name, fi), nil
 }
 
-func (fs FileServer) ReadDir(ctx context.Context, name string, recursive bool) ([]webdav.FileInfo, error) {
+func (fs *FileServer) ReadDir(ctx context.Context, name string, recursive bool) ([]webdav.FileInfo, error) {
 	index, path, err := fs.localPath(name)
 	if err != nil {
 		return nil, err
@@ -99,7 +99,7 @@ func (fs FileServer) ReadDir(ctx context.Context, name string, recursive bool) (
 	return l, err
 }
 
-func (fs FileServer) Create(ctx context.Context, name string) (io.WriteCloser, error) {
+func (fs *FileServer) Create(ctx context.Context, name string) (io.WriteCloser, error) {
 	_, p, err := fs.localPath(name)
 	if err != nil {
 		return nil, err
@@ -107,7 +107,7 @@ func (fs FileServer) Create(ctx context.Context, name string) (io.WriteCloser, e
 	return os.Create(p)
 }
 
-func (fs FileServer) RemoveAll(ctx context.Context, name string) error {
+func (fs *FileServer) RemoveAll(ctx context.Context, name string) error {
 	_, p, err := fs.localPath(name)
 	if err != nil {
 		return err
@@ -122,7 +122,7 @@ func (fs FileServer) RemoveAll(ctx context.Context, name string) error {
 	return os.RemoveAll(p)
 }
 
-func (fs FileServer) Mkdir(ctx context.Context, name string) error {
+func (fs *FileServer) Mkdir(ctx context.Context, name string) error {
 	_, p, err := fs.localPath(name)
 	if err != nil {
 		return err
@@ -151,7 +151,7 @@ func copyRegularFile(src, dst string, perm os.FileMode) error {
 	return dstFile.Close()
 }
 
-func (fs FileServer) Copy(ctx context.Context, src, dst string, options *webdav.CopyOptions) (created bool, err error) {
+func (fs *FileServer) Copy(ctx context.Context, src, dst string, options *webdav.CopyOptions) (created bool, err error) {
 	_, srcPath, err := fs.localPath(src)
 	if err != nil {
 		return false, err
@@ -211,7 +211,7 @@ func (fs FileServer) Copy(ctx context.Context, src, dst string, options *webdav.
 	return created, nil
 }
 
-func (fs FileServer) Move(ctx context.Context, src, dst string, options *webdav.MoveOptions) (created bool, err error) {
+func (fs *FileServer) Move(ctx context.Context, src, dst string, options *webdav.MoveOptions) (created bool, err error) {
 	_, srcPath, err := fs.localPath(src)
 	if err != nil {
 		return false, err
