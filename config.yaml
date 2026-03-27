@@ -1,6 +1,8 @@
 
-listen: ":8080"
+listen: ":8088"
 language: zh-CN
+
+database: ""
 
 tmdb:
   api_key: "5640d0f3eea1e20a18d3a1f150b3a1ef"
@@ -17,6 +19,8 @@ libraries:
   - name: "Music"
     slug: "music"
     path: "/Volumes/data/Music"
+    # username: "user"      # Uncomment and set username
+    # password: "secret123"  # Uncomment and set password to enable Basic Auth
 
   - name: "Photos"
     slug: "photos"

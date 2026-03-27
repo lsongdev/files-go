@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/lsongdev/epub-go/epub"
+	"github.com/lsongdev/files-go/assets"
 	"github.com/lsongdev/files-go/types"
 )
 
@@ -18,7 +19,7 @@ func (p *EpubProcessor) IsSupport(info *types.File) bool {
 }
 
 func (p *EpubProcessor) Process(info *types.File) error {
-	info.Icon = "/assets/ebook.png"
+	info.Icon = assets.ASSETS_EBOOK
 	book, err := epub.Open(info.FileName())
 	if err != nil {
 		return err

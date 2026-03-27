@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/lsongdev/fileinfo-go/fileinfo"
+	"github.com/lsongdev/files-go/assets"
 	"github.com/lsongdev/files-go/types"
 )
 
@@ -27,7 +28,7 @@ func contains(slice []string, item string) bool {
 }
 
 func (p *VideoProcessor) Process(f *types.File) error {
-	f.Icon = "/assets/video.png"
+	f.Icon = assets.ASSETS_VIDEO
 	info := fileinfo.Parse(f.Name)
 	// 调用 TMDB API 搜索
 	tmdbInfo, _ := searchTMDB(info.Title)

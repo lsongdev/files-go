@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/lsongdev/files-go/assets"
 	"github.com/lsongdev/files-go/types"
 )
 
@@ -16,13 +17,13 @@ func (p *DefaultProcessor) IsSupport(info *types.File) bool {
 
 func (p *DefaultProcessor) Process(info *types.File) (err error) {
 	if info.IsDir {
-		info.Icon = "/assets/folder.png"
+		info.Icon = assets.ASSETS_FOLDER
 		icon := filepath.Join(info.FileName(), "folder.jpg")
 		if _, err := os.Stat(icon); err == nil {
 			info.Icon = fmt.Sprintf("/file?path=%s", icon)
 		}
 	} else {
-		info.Icon = "/assets/file.png" // 默认图标
+		info.Icon = assets.ASSETS_FILE
 	}
 	return
 }

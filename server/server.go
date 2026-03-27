@@ -17,7 +17,6 @@ import (
 	"github.com/lsongdev/files-go/config"
 	"github.com/lsongdev/files-go/processors"
 	"github.com/lsongdev/files-go/types"
-	"gopkg.in/yaml.v3"
 )
 
 type H = map[string]interface{}
@@ -33,16 +32,13 @@ type FileServer struct {
 	scanMu       sync.RWMutex         // 保护 lastScanTime
 }
 
-func NewFileServer() (server *FileServer, err error) {
-	var config *config.Config
-	f, err := os.Open("config.yaml")
-	if err != nil {
+func NewFileServer(config *config.Config) (server *FileServer, err error) {
+	// 确保数据库目录存在
+	if err := os.MkdirAll(config.Database, 0755); err != nil {
 		return nil, err
 	}
-	if err := yaml.NewDecoder(f).Decode(&config); err != nil {
-		return nil, err
-	}
-	db, err := sql.Open("sqlite", "file:metadata.db?_journal_mode=WAL&_cache_size=-64000")
+	dbPath := filepath.Join(config.Database, "metadata.db")
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_journal_mode=WAL&_cache_size=-64000", dbPath))
 	if err != nil {
 		return nil, err
 	}
@@ -497,7 +493,19 @@ func (server *FileServer) ListHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prefix := server.config.Libraries[index].Path
+	library := server.config.Libraries[index]
+
+	// 检查密码保护 (Basic Auth)
+	if library.Password != "" {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != library.Username || password != library.Password {
+			w.Header().Set("WWW-Authenticate", `Basic realm="`+library.Name+`"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	prefix := library.Path
 
 	// 安全检查：清理路径并防止路径遍历
 	cleanPath := filepath.Clean(path)
@@ -536,7 +544,7 @@ func (server *FileServer) ListHandler(w http.ResponseWriter, r *http.Request) {
 		files[i] = file
 	}
 	server.Render(w, "list", H{
-		"library": server.config.Libraries[index].Name,
+		"library": library.Name,
 		"path":    cleanPath,
 		"files":   files,
 		"page":    page,
@@ -557,7 +565,23 @@ func (server *FileServer) FileView(w http.ResponseWriter, r *http.Request, fullp
 	}
 
 	// 计算相对路径
-	library := server.config.Libraries[server.config.FindLibraryIndex(libraryName)]
+	index := server.config.FindLibraryIndex(libraryName)
+	if index < 0 || index >= len(server.config.Libraries) {
+		server.Error(w, fmt.Errorf("invalid library: %s", libraryName))
+		return
+	}
+	library := server.config.Libraries[index]
+
+	// 检查密码保护 (Basic Auth)
+	if library.Password != "" {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != library.Username || password != library.Password {
+			w.Header().Set("WWW-Authenticate", `Basic realm="`+library.Name+`"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	relPath := strings.TrimPrefix(file.Path, library.Path)
 	if relPath == "" {
 		relPath = "/"

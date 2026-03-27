@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/lsongdev/files-go/assets"
 	"github.com/lsongdev/files-go/types"
 	v2 "github.com/lsongdev/id3-go/v2"
 )
@@ -17,7 +18,7 @@ func (p *MusicProcessor) IsSupport(info *types.File) bool {
 }
 
 func (p *MusicProcessor) Process(info *types.File) error {
-	info.Icon = "/assets/mp3.png"
+	info.Icon = assets.ASSETS_MP3
 	f, err := os.Open(info.FileName())
 	if err != nil {
 		return err
