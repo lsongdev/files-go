@@ -161,6 +161,60 @@ func (l *Local) Open(ctx context.Context, path string) (io.ReadSeekCloser, error
 	return f, err
 }
 
+func (l *Local) Create(ctx context.Context, path string, source io.Reader) (result FileInfo, err error) {
+	if err := ctx.Err(); err != nil {
+		return FileInfo{}, err
+	}
+	full, err := l.resolve(path, false)
+	if err != nil {
+		return FileInfo{}, err
+	}
+	file, err := os.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if errors.Is(err, os.ErrExist) {
+		return FileInfo{}, ErrAlreadyExists
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return FileInfo{}, ErrNotFound
+	}
+	if err != nil {
+		return FileInfo{}, err
+	}
+	complete := false
+	defer func() {
+		closeErr := file.Close()
+		if err == nil && closeErr != nil {
+			err = closeErr
+		}
+		if !complete || err != nil {
+			_ = os.Remove(full)
+		}
+	}()
+	if _, err = io.Copy(file, contextReader{ctx: ctx, reader: source}); err != nil {
+		return FileInfo{}, err
+	}
+	if err = file.Sync(); err != nil {
+		return FileInfo{}, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return FileInfo{}, err
+	}
+	complete = true
+	return fileInfo(path, info), nil
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(buffer []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(buffer)
+}
+
 func (l *Local) Mkdir(ctx context.Context, path string) error {
 	if err := ctx.Err(); err != nil {
 		return err

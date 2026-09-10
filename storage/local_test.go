@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -82,5 +83,15 @@ func TestLocalMutationsDoNotOverwriteOrDeleteNonEmptyDirectories(t *testing.T) {
 	}
 	if err := local.Remove(ctx, "source"); err != nil {
 		t.Fatal(err)
+	}
+	created, err := local.Create(ctx, "streamed.txt", strings.NewReader("streamed content"))
+	if err != nil || created.Size != 16 {
+		t.Fatalf("Create = %#v, %v", created, err)
+	}
+	if _, err := local.Create(ctx, "streamed.txt", strings.NewReader("overwrite")); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("overwrite Create error = %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "streamed.txt")); err != nil || string(data) != "streamed content" {
+		t.Fatalf("created content = %q, %v", data, err)
 	}
 }

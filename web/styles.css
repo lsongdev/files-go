@@ -143,9 +143,13 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .content-head { display: flex; justify-content: space-between; align-items: end; gap: 1rem; padding: 2.3rem 2rem 1.5rem; }
 .content-head p { margin: 0 0 0.4rem; color: var(--blue); font: 700 0.72rem/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.14em; text-transform: uppercase; }
 .content-head h1 { margin: 0; font-size: clamp(1.6rem, 2.6vw, 2.25rem); line-height: 1.1; letter-spacing: -0.045em; }
-.head-meta { display: flex; align-items: center; gap: 0.9rem; color: var(--muted); font-size: 0.82rem; }
+.head-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.65rem; color: var(--muted); font-size: 0.82rem; }
 .scan-button { display: flex; align-items: center; gap: 0.45rem; padding: 0.55rem 0.75rem; border: 1px solid var(--line); border-radius: 0.55rem; background: var(--panel); cursor: pointer; }
 .scan-button:hover { border-color: var(--blue); }
+.upload-button { position: relative; color: var(--text); }
+.upload-button input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+.upload-button:focus-within { outline: 2px solid var(--blue); outline-offset: 2px; }
+.upload-button.disabled { opacity: 0.6; cursor: wait; }
 .error-banner { margin: 0 2rem 1rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0.75rem 0.9rem; border: 1px solid var(--error-border); border-radius: 0.65rem; color: var(--error-text); background: var(--error-bg); font-size: 0.86rem; }
 .error-banner button { border: 0; color: inherit; background: transparent; cursor: pointer; text-decoration: underline; }
 .browser { padding: 0 2rem 3rem; }
