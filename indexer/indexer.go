@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"mime"
 	"path"
 	"path/filepath"
@@ -23,12 +24,56 @@ type Indexer struct {
 	mu       sync.Mutex
 	scanning map[string]bool
 	priority map[string][]string
+	sink     EntrySink
+}
+
+type EntrySink interface {
+	EnqueueEntries(context.Context, []model.Entry) error
+}
+
+type entryReprocessor interface {
+	ReprocessEntry(context.Context, model.Entry) error
 }
 
 var ErrScanInProgress = errors.New("storage scan already in progress")
 
 func New(catalog *catalog.Catalog, storages *storage.Registry) *Indexer {
 	return &Indexer{catalog: catalog, storages: storages, scanning: make(map[string]bool), priority: make(map[string][]string)}
+}
+
+func (i *Indexer) SetEntrySink(sink EntrySink) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.sink = sink
+}
+
+func (i *Indexer) EnqueueEntries(ctx context.Context, entries []model.Entry) error {
+	i.mu.Lock()
+	sink := i.sink
+	i.mu.Unlock()
+	if sink == nil {
+		return nil
+	}
+	files := make([]model.Entry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Type == model.EntryFile {
+			files = append(files, entry)
+		}
+	}
+	return sink.EnqueueEntries(ctx, files)
+}
+
+func (i *Indexer) ReprocessEntry(ctx context.Context, entry model.Entry) error {
+	i.mu.Lock()
+	sink := i.sink
+	i.mu.Unlock()
+	if sink == nil {
+		return nil
+	}
+	if reprocessor, ok := sink.(entryReprocessor); ok {
+		return reprocessor.ReprocessEntry(ctx, entry)
+	}
+	return sink.EnqueueEntries(ctx, []model.Entry{entry})
 }
 
 // SetPriority makes configured library roots visible early during a large
@@ -116,6 +161,9 @@ func (i *Indexer) scanDirectory(ctx context.Context, backend storage.Storage, st
 			return err
 		}
 		copy(entries[start:end], updated)
+		if err := i.EnqueueEntries(ctx, updated); err != nil {
+			log.Printf("enqueue scanned entries: %v", err)
+		}
 	}
 	for index := range entries {
 		if entries[index].Type == model.EntryDirectory {

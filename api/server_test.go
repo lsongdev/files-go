@@ -6,7 +6,9 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"io"
+	"image"
+	"image/color"
+	"image/png"
 	"log"
 	"mime/multipart"
 	"net/http"
@@ -20,6 +22,7 @@ import (
 	"github.com/lsongdev/files-go/database"
 	"github.com/lsongdev/files-go/indexer"
 	"github.com/lsongdev/files-go/model"
+	"github.com/lsongdev/files-go/processor"
 	"github.com/lsongdev/files-go/storage"
 )
 
@@ -54,6 +57,19 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "Season", "episode.txt"), []byte("episode"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	photoFile, err := os.Create(filepath.Join(root, "photo.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	photoImage := image.NewRGBA(image.Rect(0, 0, 4, 3))
+	photoImage.Set(1, 1, color.RGBA{R: 255, A: 255})
+	if err := png.Encode(photoFile, photoImage); err != nil {
+		_ = photoFile.Close()
+		t.Fatal(err)
+	}
+	if err := photoFile.Close(); err != nil {
 		t.Fatal(err)
 	}
 	db, err := database.Open(ctx, t.TempDir())
@@ -104,7 +120,19 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := New(ctx, cat, registry, idx, log.New(io.Discard, "", 0)).Handler()
+	photo, err := cat.EntryByPath(ctx, "disk", "photo.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := t.TempDir()
+	if err := processor.NewImageMetadata(cat, registry).Process(ctx, *photo); err != nil {
+		t.Fatal(err)
+	}
+	if err := processor.NewThumbnail(cat, registry, cacheDir).Process(ctx, *photo); err != nil {
+		t.Fatal(err)
+	}
+	var apiLogs bytes.Buffer
+	handler := New(ctx, cat, registry, idx, log.New(&apiLogs, "", 0), cacheDir).Handler()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+rootEntry.ID+"/children?limit=1", nil)
 	res := httptest.NewRecorder()
@@ -150,6 +178,19 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 		t.Fatalf("binary preview = %d %s", res.Code, res.Body.String())
 	}
 
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+photo.ID+"/media", nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"kind":"photo"`) || !strings.Contains(res.Body.String(), `"width":4`) {
+		t.Fatalf("media metadata = %d %s", res.Code, res.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+photo.ID+"/thumbnail?size=small", nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK || res.Header().Get("Content-Type") != "image/jpeg" || res.Body.Len() == 0 || !strings.Contains(res.Header().Get("Cache-Control"), "immutable") {
+		t.Fatalf("thumbnail = %d %q %d %#v", res.Code, res.Header().Get("Content-Type"), res.Body.Len(), res.Header())
+	}
+
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/search?q=mov&library=movies&type=file&extension=.MP4", nil)
 	res = httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
@@ -172,7 +213,7 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 	res = httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 	if res.Code != http.StatusCreated {
-		t.Fatalf("create directory = %d %s", res.Code, res.Body.String())
+		t.Fatalf("create directory = %d %s logs=%s", res.Code, res.Body.String(), apiLogs.String())
 	}
 	var drafts entryResponse
 	if err := json.Unmarshal(res.Body.Bytes(), &drafts); err != nil || drafts.Name != "Drafts" {
@@ -189,7 +230,7 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 	res = httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 	if res.Code != http.StatusCreated {
-		t.Fatalf("copy directory = %d %s", res.Code, res.Body.String())
+		t.Fatalf("copy directory = %d %s logs=%s", res.Code, res.Body.String(), apiLogs.String())
 	}
 	var copiedSeason entryResponse
 	if err := json.Unmarshal(res.Body.Bytes(), &copiedSeason); err != nil {

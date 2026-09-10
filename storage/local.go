@@ -161,6 +161,13 @@ func (l *Local) Open(ctx context.Context, path string) (io.ReadSeekCloser, error
 	return f, err
 }
 
+func (l *Local) NativePath(ctx context.Context, path string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return l.resolve(path, true)
+}
+
 func (l *Local) Create(ctx context.Context, path string, source io.Reader) (result FileInfo, err error) {
 	if err := ctx.Err(); err != nil {
 		return FileInfo{}, err

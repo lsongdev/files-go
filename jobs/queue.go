@@ -51,12 +51,19 @@ type EnqueueOptions struct {
 	MaxAttempts int
 }
 
+type Request struct {
+	Type    string
+	Payload any
+	Options EnqueueOptions
+}
+
 type Queue struct {
-	db       *sql.DB
-	lease    time.Duration
-	notify   chan struct{}
-	now      func() time.Time
-	recoverM sync.Mutex
+	db          *sql.DB
+	lease       time.Duration
+	notify      chan struct{}
+	now         func() time.Time
+	recoverM    sync.Mutex
+	lastRecover time.Time
 }
 
 func New(db *sql.DB, lease time.Duration) *Queue {
@@ -91,7 +98,10 @@ func (q *Queue) Enqueue(ctx context.Context, jobType string, payload any, opts E
 	row := q.db.QueryRowContext(ctx, `INSERT INTO jobs
 		(id, type, key, payload, state, attempts, max_attempts, priority, run_after, created_at)
 		VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)
-		ON CONFLICT(type, key) DO NOTHING
+		ON CONFLICT(type, key) DO UPDATE SET payload=excluded.payload, state='pending', attempts=0,
+			max_attempts=excluded.max_attempts, priority=excluded.priority, run_after=excluded.run_after,
+			started_at=NULL, finished_at=NULL, lease_until=NULL, error=NULL
+		WHERE jobs.state='failed'
 		RETURNING id, type, COALESCE(key, ''), payload, state, attempts, max_attempts, priority,
 			run_after, lease_until, created_at, started_at, finished_at, COALESCE(error, '')`,
 		uuid.Must(uuid.NewV7()).String(), jobType, key, string(data), maxAttempts, opts.Priority, runAfter, now)
@@ -105,6 +115,54 @@ func (q *Queue) Enqueue(ctx context.Context, jobType string, payload any, opts E
 	}
 	q.wake()
 	return job, true, nil
+}
+
+func (q *Queue) EnqueueMany(ctx context.Context, requests []Request) error {
+	if len(requests) == 0 {
+		return nil
+	}
+	tx, err := q.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := q.now()
+	for _, request := range requests {
+		jobType := strings.TrimSpace(request.Type)
+		if jobType == "" {
+			return errors.New("job type is required")
+		}
+		data, err := json.Marshal(request.Payload)
+		if err != nil {
+			return fmt.Errorf("marshal job payload: %w", err)
+		}
+		maxAttempts := request.Options.MaxAttempts
+		if maxAttempts <= 0 {
+			maxAttempts = 3
+		}
+		var key, runAfter any
+		if request.Options.Key != "" {
+			key = request.Options.Key
+		}
+		if !request.Options.RunAfter.IsZero() {
+			runAfter = request.Options.RunAfter.UTC()
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO jobs
+			(id, type, key, payload, state, attempts, max_attempts, priority, run_after, created_at)
+			VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)
+			ON CONFLICT(type, key) DO UPDATE SET payload=excluded.payload, state='pending', attempts=0,
+				max_attempts=excluded.max_attempts, priority=excluded.priority, run_after=excluded.run_after,
+				started_at=NULL, finished_at=NULL, lease_until=NULL, error=NULL
+			WHERE jobs.state='failed'`, uuid.Must(uuid.NewV7()).String(), jobType, key, string(data),
+			maxAttempts, request.Options.Priority, runAfter, now); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	q.wake()
+	return nil
 }
 
 func (q *Queue) Claim(ctx context.Context) (*Job, error) {
@@ -154,6 +212,24 @@ func (q *Queue) FailPermanently(ctx context.Context, id string, cause error) err
 	return q.failPermanently(ctx, id, errorMessage(cause))
 }
 
+func (q *Queue) Requeue(ctx context.Context, jobType, key string, priority int) error {
+	result, err := q.db.ExecContext(ctx, `UPDATE jobs SET state='pending', attempts=0, run_after=NULL,
+		started_at=NULL, finished_at=NULL, lease_until=NULL, error=NULL, priority=max(priority, ?)
+		WHERE type=? AND key=? AND state IN ('pending', 'done', 'failed')`, priority, jobType, key)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return ErrNotFound
+	}
+	q.wake()
+	return nil
+}
+
 func (q *Queue) failPermanently(ctx context.Context, id, message string) error {
 	result, err := q.db.ExecContext(ctx, `UPDATE jobs SET state='failed', finished_at=?, lease_until=NULL, error=? WHERE id=? AND state='running'`, q.now(), message, id)
 	return affected(result, err)
@@ -163,6 +239,11 @@ func (q *Queue) recoverExpired(ctx context.Context) error {
 	q.recoverM.Lock()
 	defer q.recoverM.Unlock()
 	now := q.now()
+	interval := min(q.lease/2, 30*time.Second)
+	if !q.lastRecover.IsZero() && now.Sub(q.lastRecover) < interval {
+		return nil
+	}
+	q.lastRecover = now
 	if _, err := q.db.ExecContext(ctx, `UPDATE jobs SET state='failed', finished_at=?, lease_until=NULL, error='worker lease expired' WHERE state='running' AND lease_until<=? AND attempts>=max_attempts`, now, now); err != nil {
 		return err
 	}

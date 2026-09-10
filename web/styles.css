@@ -178,6 +178,11 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .card-action { position: absolute; top: 0.65rem; right: 0.65rem; }
 .card-icon { width: 3rem; height: 3rem; display: grid; place-items: center; margin-bottom: 1.1rem; border-radius: 0.7rem; color: var(--document-text); background: var(--document-bg); }
 .card-icon.directory { color: var(--folder-text); background: var(--folder-bg); }
+.card-thumbnail { width: calc(100% + 2rem); height: 6.5rem; display: grid; place-items: center; margin: -1rem -1rem 0.85rem; overflow: hidden; color: var(--document-text); background: var(--document-bg); }
+.card-thumbnail img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.card-thumbnail i { display: none; }
+.card-thumbnail.failed img { display: none; }
+.card-thumbnail.failed i { display: block; }
 .file-card strong { width: 100%; overflow: hidden; font-size: 0.86rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .file-card small { margin-top: 0.25rem; color: var(--muted-2); font-size: 0.72rem; }
 .file-card em { margin: 0.5rem 0 0; }

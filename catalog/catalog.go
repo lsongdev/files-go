@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,9 +15,19 @@ import (
 
 var ErrNotFound = errors.New("catalog entry not found")
 
-type Catalog struct{ db *sql.DB }
+type Catalog struct {
+	db     *sql.DB
+	reader *sql.DB
+}
 
-func New(db *sql.DB) *Catalog { return &Catalog{db: db} }
+func New(db *sql.DB) *Catalog { return &Catalog{db: db, reader: db} }
+
+func NewWithReader(db, reader *sql.DB) *Catalog {
+	if reader == nil {
+		reader = db
+	}
+	return &Catalog{db: db, reader: reader}
+}
 
 type ListCursor struct {
 	DirectoryRank int
@@ -71,7 +82,7 @@ func scanEntry(row scanner) (model.Entry, error) {
 }
 
 func (c *Catalog) Entry(ctx context.Context, id string) (*model.Entry, error) {
-	entry, err := scanEntry(c.db.QueryRowContext(ctx, `SELECT `+entryColumns+` FROM entries WHERE id = ?`, id))
+	entry, err := scanEntry(c.reader.QueryRowContext(ctx, `SELECT `+entryColumns+` FROM entries WHERE id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -82,7 +93,7 @@ func (c *Catalog) Entry(ctx context.Context, id string) (*model.Entry, error) {
 }
 
 func (c *Catalog) EntryByPath(ctx context.Context, storageID, path string) (*model.Entry, error) {
-	entry, err := scanEntry(c.db.QueryRowContext(ctx, `SELECT `+entryColumns+` FROM entries WHERE storage_id = ? AND path = ?`, storageID, path))
+	entry, err := scanEntry(c.reader.QueryRowContext(ctx, `SELECT `+entryColumns+` FROM entries WHERE storage_id = ? AND path = ?`, storageID, path))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -110,7 +121,7 @@ func (c *Catalog) Children(ctx context.Context, parentID string, opts ListOption
 			opts.After.DirectoryRank, opts.After.Name, opts.After.ID)
 	}
 	args = append(args, limit+1)
-	rows, err := c.db.QueryContext(ctx, `SELECT `+entryColumns+` FROM entries WHERE `+where+`
+	rows, err := c.reader.QueryContext(ctx, `SELECT `+entryColumns+` FROM entries WHERE `+where+`
 		ORDER BY CASE WHEN type = 'directory' THEN 0 ELSE 1 END, lower(name), id LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
@@ -160,7 +171,7 @@ func (c *Catalog) Search(ctx context.Context, opts SearchOptions) ([]model.Entry
 	}
 	args = append(args, limit)
 
-	rows, err := c.db.QueryContext(ctx, `SELECT `+qualifiedEntryColumns+`
+	rows, err := c.reader.QueryContext(ctx, `SELECT `+qualifiedEntryColumns+`
 		FROM entry_search JOIN entries e ON e.id = entry_search.entry_id
 		WHERE `+strings.Join(where, " AND ")+`
 		ORDER BY bm25(entry_search), CASE WHEN e.type = 'directory' THEN 0 ELSE 1 END, lower(e.name), e.id
@@ -449,7 +460,7 @@ func (c *Catalog) FailScan(ctx context.Context, storageID, state string) error {
 }
 
 func (c *Catalog) Storages(ctx context.Context) ([]model.Storage, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT id, name, type, state, last_seen_at, last_scan_at, scan_generation FROM storages ORDER BY name, id`)
+	rows, err := c.reader.QueryContext(ctx, `SELECT id, name, type, state, last_seen_at, last_scan_at, scan_generation FROM storages ORDER BY name, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -475,7 +486,7 @@ func (c *Catalog) Storages(ctx context.Context) ([]model.Storage, error) {
 func (c *Catalog) Storage(ctx context.Context, id string) (*model.Storage, error) {
 	var item model.Storage
 	var seen, scan sql.NullTime
-	err := c.db.QueryRowContext(ctx, `SELECT id, name, type, state, last_seen_at, last_scan_at, scan_generation FROM storages WHERE id=?`, id).
+	err := c.reader.QueryRowContext(ctx, `SELECT id, name, type, state, last_seen_at, last_scan_at, scan_generation FROM storages WHERE id=?`, id).
 		Scan(&item.ID, &item.Name, &item.Type, &item.State, &seen, &scan, &item.ScanGeneration)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -493,7 +504,7 @@ func (c *Catalog) Storage(ctx context.Context, id string) (*model.Storage, error
 }
 
 func (c *Catalog) Libraries(ctx context.Context) ([]model.Library, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT id, name, type FROM libraries ORDER BY name, id`)
+	rows, err := c.reader.QueryContext(ctx, `SELECT id, name, type FROM libraries ORDER BY name, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -520,7 +531,7 @@ func (c *Catalog) Libraries(ctx context.Context) ([]model.Library, error) {
 }
 
 func (c *Catalog) librarySources(ctx context.Context, libraryID string) ([]model.LibrarySource, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT ls.storage_id, ls.path, COALESCE(e.id, '')
+	rows, err := c.reader.QueryContext(ctx, `SELECT ls.storage_id, ls.path, COALESCE(e.id, '')
 		FROM library_sources ls LEFT JOIN entries e ON e.storage_id=ls.storage_id AND e.path=ls.path
 		WHERE ls.library_id=? ORDER BY ls.id`, libraryID)
 	if err != nil {
@@ -536,4 +547,113 @@ func (c *Catalog) librarySources(ctx context.Context, libraryID string) ([]model
 		items = append(items, source)
 	}
 	return items, rows.Err()
+}
+
+func (c *Catalog) UpsertMediaFile(ctx context.Context, item model.MediaFile) error {
+	if item.EntryID == "" || item.Kind == "" {
+		return errors.New("media file entry ID and kind are required")
+	}
+	if len(item.Metadata) == 0 {
+		item.Metadata = json.RawMessage(`{}`)
+	}
+	if !json.Valid(item.Metadata) {
+		return errors.New("media file metadata must be valid JSON")
+	}
+	item.UpdatedAt = time.Now().UTC()
+	_, err := c.db.ExecContext(ctx, `INSERT INTO media_files
+		(entry_id, kind, duration_ms, container, width, height, video_codec, audio_codec, bitrate, metadata, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(entry_id) DO UPDATE SET kind=excluded.kind, duration_ms=excluded.duration_ms,
+			container=excluded.container, width=excluded.width, height=excluded.height,
+			video_codec=excluded.video_codec, audio_codec=excluded.audio_codec,
+			bitrate=excluded.bitrate, metadata=excluded.metadata, updated_at=excluded.updated_at`,
+		item.EntryID, item.Kind, item.DurationMS, item.Container, item.Width, item.Height,
+		item.VideoCodec, item.AudioCodec, item.Bitrate, string(item.Metadata), item.UpdatedAt)
+	return err
+}
+
+func (c *Catalog) MediaFile(ctx context.Context, entryID string) (*model.MediaFile, error) {
+	var item model.MediaFile
+	var duration, bitrate sql.NullInt64
+	var width, height sql.NullInt64
+	var metadata string
+	err := c.reader.QueryRowContext(ctx, `SELECT entry_id, kind, duration_ms, container, width, height,
+		video_codec, audio_codec, bitrate, metadata, updated_at FROM media_files WHERE entry_id=?`, entryID).
+		Scan(&item.EntryID, &item.Kind, &duration, &item.Container, &width, &height,
+			&item.VideoCodec, &item.AudioCodec, &bitrate, &metadata, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if duration.Valid {
+		item.DurationMS = &duration.Int64
+	}
+	if bitrate.Valid {
+		item.Bitrate = &bitrate.Int64
+	}
+	if width.Valid {
+		value := int(width.Int64)
+		item.Width = &value
+	}
+	if height.Valid {
+		value := int(height.Int64)
+		item.Height = &value
+	}
+	item.Metadata = json.RawMessage(metadata)
+	return &item, nil
+}
+
+func (c *Catalog) UpsertArtifact(ctx context.Context, item model.Artifact) (*model.Artifact, error) {
+	if item.ID == "" {
+		item.ID = uuid.Must(uuid.NewV7()).String()
+	}
+	now := time.Now().UTC()
+	if item.CreatedAt.IsZero() {
+		item.CreatedAt = now
+	}
+	item.LastAccessedAt = now
+	var entryID, mediaID any
+	if item.EntryID != "" {
+		entryID = item.EntryID
+	}
+	if item.MediaID != "" {
+		mediaID = item.MediaID
+	}
+	err := c.db.QueryRowContext(ctx, `INSERT INTO artifacts
+		(id, entry_id, media_id, type, variant, key, mime, size, created_at, last_accessed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(type, key) DO UPDATE SET entry_id=excluded.entry_id, media_id=excluded.media_id,
+			variant=excluded.variant, mime=excluded.mime, size=excluded.size, last_accessed_at=excluded.last_accessed_at
+		RETURNING id, COALESCE(entry_id, ''), COALESCE(media_id, ''), type, variant, key,
+			COALESCE(mime, ''), size, created_at, last_accessed_at`,
+		item.ID, entryID, mediaID, item.Type, item.Variant, item.Key, item.MIME, item.Size,
+		item.CreatedAt, item.LastAccessedAt).Scan(&item.ID, &item.EntryID, &item.MediaID, &item.Type,
+		&item.Variant, &item.Key, &item.MIME, &item.Size, &item.CreatedAt, &item.LastAccessedAt)
+	return &item, err
+}
+
+func (c *Catalog) ArtifactForEntry(ctx context.Context, entryID, artifactType, variant string) (*model.Artifact, error) {
+	var item model.Artifact
+	err := c.reader.QueryRowContext(ctx, `SELECT id, COALESCE(entry_id, ''), COALESCE(media_id, ''), type,
+		variant, key, COALESCE(mime, ''), size, created_at, last_accessed_at
+		FROM artifacts WHERE entry_id=? AND type=? AND variant=? ORDER BY created_at DESC LIMIT 1`,
+		entryID, artifactType, variant).Scan(&item.ID, &item.EntryID, &item.MediaID, &item.Type,
+		&item.Variant, &item.Key, &item.MIME, &item.Size, &item.CreatedAt, &item.LastAccessedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return &item, err
+}
+
+func (c *Catalog) TouchArtifact(ctx context.Context, id string) error {
+	result, err := c.db.ExecContext(ctx, `UPDATE artifacts SET last_accessed_at=? WHERE id=?`, time.Now().UTC(), id)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return ErrNotFound
+	}
+	return nil
 }

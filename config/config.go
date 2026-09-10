@@ -12,16 +12,23 @@ import (
 var ConfigDir = filepath.Join(os.Getenv("HOME"), ".filesgo")
 
 type Config struct {
-	Listen    string    `yaml:"listen"`
-	Data      string    `yaml:"data"`
-	CacheDir  string    `yaml:"-"`
-	Database  string    `yaml:"database,omitempty"`
-	Storages  []Storage `yaml:"storages"`
-	Libraries []Library `yaml:"libraries"`
+	Listen     string     `yaml:"listen"`
+	Data       string     `yaml:"data"`
+	CacheDir   string     `yaml:"-"`
+	Database   string     `yaml:"database,omitempty"`
+	Storages   []Storage  `yaml:"storages"`
+	Libraries  []Library  `yaml:"libraries"`
+	Processing Processing `yaml:"processing"`
 
 	TMDB struct {
 		APIKey string `yaml:"api_key"`
 	} `yaml:"tmdb"`
+}
+
+type Processing struct {
+	Workers int    `yaml:"workers"`
+	FFProbe string `yaml:"ffprobe"`
+	PDFInfo string `yaml:"pdfinfo"`
 }
 
 type Library struct {
@@ -102,6 +109,15 @@ func LoadConfig() (cfg *Config, err error) {
 	}
 	if cfg.Database == "" {
 		cfg.Database = cfg.Data
+	}
+	if cfg.Processing.Workers <= 0 {
+		cfg.Processing.Workers = 2
+	}
+	if cfg.Processing.FFProbe == "" {
+		cfg.Processing.FFProbe = "ffprobe"
+	}
+	if cfg.Processing.PDFInfo == "" {
+		cfg.Processing.PDFInfo = "pdfinfo"
 	}
 	if err := cfg.normalize(); err != nil {
 		return nil, err
