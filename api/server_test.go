@@ -181,6 +181,32 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "Drafts")); err != nil {
 		t.Fatalf("created directory missing: %v", err)
 	}
+	movePayload, err := json.Marshal(map[string]string{"parentId": drafts.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/entries/"+binaryFile.ID, bytes.NewReader(movePayload))
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("move file = %d %s", res.Code, res.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "Drafts", "binary.dat")); err != nil {
+		t.Fatalf("moved file missing: %v", err)
+	}
+	if _, err := cat.EntryByPath(ctx, "disk", "Drafts/binary.dat"); err != nil {
+		t.Fatalf("moved catalog entry missing: %v", err)
+	}
+	movePayload, err = json.Marshal(map[string]string{"parentId": rootEntry.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/entries/"+binaryFile.ID, bytes.NewReader(movePayload))
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("move file back = %d %s", res.Code, res.Body.String())
+	}
 
 	req = httptest.NewRequest(http.MethodPatch, "/api/v1/entries/"+season.ID, strings.NewReader(`{"name":"Series"}`))
 	res = httptest.NewRecorder()
