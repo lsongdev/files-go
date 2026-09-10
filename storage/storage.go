@@ -13,6 +13,8 @@ var (
 	ErrNotFound      = errors.New("storage path not found")
 	ErrPathTraversal = errors.New("storage path escapes root")
 	ErrOffline       = errors.New("storage offline")
+	ErrAlreadyExists = errors.New("storage path already exists")
+	ErrNotEmpty      = errors.New("storage directory is not empty")
 )
 
 type FileInfo struct {

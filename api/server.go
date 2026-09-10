@@ -12,6 +12,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -48,9 +49,217 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/libraries", s.listLibraries)
 	s.mux.HandleFunc("GET /api/v1/search", s.search)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}", s.getEntry)
+	s.mux.HandleFunc("PATCH /api/v1/entries/{id}", s.updateEntry)
+	s.mux.HandleFunc("DELETE /api/v1/entries/{id}", s.deleteEntry)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/children", s.listChildren)
+	s.mux.HandleFunc("POST /api/v1/entries/{id}/directories", s.createDirectory)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/content", s.content)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/text", s.text)
+}
+
+func (s *Server) createDirectory(w http.ResponseWriter, r *http.Request) {
+	parent, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "entry_not_found", "parent entry not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if parent.Type != model.EntryDirectory {
+		writeError(w, http.StatusBadRequest, "invalid_request", "parent entry is not a directory")
+		return
+	}
+	var input struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSONBody(w, r, &input); err != nil {
+		return
+	}
+	if !validEntryName(input.Name) {
+		writeError(w, http.StatusBadRequest, "invalid_name", "name must be a valid single path component")
+		return
+	}
+	backend, ok := s.storages.Get(parent.StorageID)
+	if !ok || !parent.Available {
+		writeError(w, http.StatusServiceUnavailable, "storage_offline", "storage is offline")
+		return
+	}
+	entryPath := path.Join(parent.Path, input.Name)
+	if err := backend.Mkdir(r.Context(), entryPath); err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	info, err := backend.Stat(r.Context(), entryPath)
+	if err != nil {
+		s.reconcile(parent.StorageID)
+		s.internalError(w, fmt.Errorf("stat created directory: %w", err))
+		return
+	}
+	created, err := s.catalog.AddEntry(r.Context(), model.Entry{
+		StorageID: parent.StorageID, ParentID: &parent.ID, Name: input.Name, Path: entryPath,
+		Type: info.Type, Size: info.Size, ModifiedAt: info.ModifiedAt, Inode: info.Inode, Device: info.Device,
+	})
+	if err != nil {
+		s.reconcile(parent.StorageID)
+		s.internalError(w, fmt.Errorf("catalog created directory: %w", err))
+		return
+	}
+	writeJSON(w, http.StatusCreated, responseFor(*created))
+}
+
+func (s *Server) updateEntry(w http.ResponseWriter, r *http.Request) {
+	entry, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if entry.ParentID == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "storage root cannot be moved or renamed")
+		return
+	}
+	var input struct {
+		Name     *string `json:"name"`
+		ParentID *string `json:"parentId"`
+	}
+	if err := decodeJSONBody(w, r, &input); err != nil {
+		return
+	}
+	name := entry.Name
+	if input.Name != nil {
+		name = *input.Name
+	}
+	if !validEntryName(name) {
+		writeError(w, http.StatusBadRequest, "invalid_name", "name must be a valid single path component")
+		return
+	}
+	parentID := *entry.ParentID
+	if input.ParentID != nil {
+		parentID = *input.ParentID
+	}
+	if parentID == entry.ID || parentID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid destination directory")
+		return
+	}
+	parent, err := s.catalog.Entry(r.Context(), parentID)
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "entry_not_found", "destination directory not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if parent.Type != model.EntryDirectory || parent.StorageID != entry.StorageID {
+		writeError(w, http.StatusBadRequest, "invalid_request", "destination must be a directory in the same storage")
+		return
+	}
+	if entry.Type == model.EntryDirectory && (parent.Path == entry.Path || strings.HasPrefix(parent.Path, entry.Path+"/")) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "a directory cannot be moved into itself")
+		return
+	}
+	newPath := path.Join(parent.Path, name)
+	if newPath == entry.Path {
+		writeJSON(w, http.StatusOK, responseFor(*entry))
+		return
+	}
+	backend, ok := s.storages.Get(entry.StorageID)
+	if !ok || !entry.Available || !parent.Available {
+		writeError(w, http.StatusServiceUnavailable, "storage_offline", "storage is offline")
+		return
+	}
+	if err := backend.Rename(r.Context(), entry.Path, newPath); err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	updated, err := s.catalog.MoveEntry(r.Context(), entry.ID, parent.ID, name, newPath)
+	if err != nil {
+		s.reconcile(entry.StorageID)
+		s.internalError(w, fmt.Errorf("catalog moved entry: %w", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, responseFor(*updated))
+}
+
+func (s *Server) deleteEntry(w http.ResponseWriter, r *http.Request) {
+	entry, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if entry.ParentID == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "storage root cannot be deleted")
+		return
+	}
+	backend, ok := s.storages.Get(entry.StorageID)
+	if !ok || !entry.Available {
+		writeError(w, http.StatusServiceUnavailable, "storage_offline", "storage is offline")
+		return
+	}
+	if err := backend.Remove(r.Context(), entry.Path); err != nil {
+		s.writeStorageError(w, err)
+		return
+	}
+	if err := s.catalog.DeleteEntry(r.Context(), entry.ID); err != nil {
+		s.reconcile(entry.StorageID)
+		s.internalError(w, fmt.Errorf("catalog deleted entry: %w", err))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func validEntryName(name string) bool {
+	return name != "" && name != "." && name != ".." && len(name) <= 255 && utf8.ValidString(name) &&
+		strings.TrimSpace(name) != "" && !strings.ContainsAny(name, `/\\`) && !strings.ContainsRune(name, 0)
+}
+
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, value any) error {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON request body")
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "request body must contain one JSON object")
+		return errors.New("additional JSON value")
+	}
+	return nil
+}
+
+func (s *Server) writeStorageError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, storage.ErrAlreadyExists):
+		writeError(w, http.StatusConflict, "entry_exists", "an entry with that name already exists")
+	case errors.Is(err, storage.ErrNotEmpty):
+		writeError(w, http.StatusConflict, "directory_not_empty", "directory is not empty")
+	case errors.Is(err, storage.ErrNotFound):
+		writeError(w, http.StatusNotFound, "file_not_found", "file not found")
+	case errors.Is(err, storage.ErrOffline):
+		writeError(w, http.StatusServiceUnavailable, "storage_offline", "storage is offline")
+	case errors.Is(err, storage.ErrPathTraversal):
+		writeError(w, http.StatusBadRequest, "invalid_path", "invalid storage path")
+	default:
+		s.internalError(w, err)
+	}
+}
+
+func (s *Server) reconcile(storageID string) {
+	go func() {
+		if err := s.indexer.Scan(s.ctx, storageID); err != nil && !errors.Is(err, indexer.ErrScanInProgress) && !errors.Is(err, context.Canceled) {
+			s.logger.Printf("reconcile storage %s: %v", storageID, err)
+		}
+	}()
 }
 
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {

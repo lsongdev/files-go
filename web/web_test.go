@@ -74,3 +74,14 @@ func TestPreviewAssetsIncludeNativeAndTextPreviews(t *testing.T) {
 		}
 	}
 }
+
+func TestFileManagementAssetsIncludeCreateRenameAndDelete(t *testing.T) {
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	body := response.Body.String()
+	for _, expected := range []string{"/directories", "method: 'PATCH'", "method: 'DELETE'", "新建文件夹", "管理条目"} {
+		if response.Code != http.StatusOK || !strings.Contains(body, expected) {
+			t.Fatalf("app.js does not contain %q", expected)
+		}
+	}
+}
