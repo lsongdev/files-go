@@ -86,6 +86,30 @@ func TestQueueFailsPermanentlyAtAttemptLimit(t *testing.T) {
 	if _, err := queue.Claim(ctx); !errors.Is(err, ErrNoJob) {
 		t.Fatalf("claim after permanent failure = %v", err)
 	}
+	requeued, enqueued, err := queue.Enqueue(ctx, "broken", map[string]bool{"retry": true}, EnqueueOptions{Key: "one", MaxAttempts: 2})
+	if err != nil || !enqueued || requeued.ID != job.ID || requeued.State != StatePending || requeued.Attempts != 0 {
+		t.Fatalf("requeued failed job = %#v, %v, %v", requeued, enqueued, err)
+	}
+}
+
+func TestRequeuePromotesPendingJob(t *testing.T) {
+	ctx := context.Background()
+	queue := testQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "process", map[string]string{"id": "entry"}, EnqueueOptions{
+		Key: "entry", RunAfter: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.Requeue(ctx, "process", "entry", 100); err != nil {
+		t.Fatal(err)
+	}
+	job, err := queue.Claim(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Priority != 100 || job.RunAfter != nil {
+		t.Fatalf("promoted job = %#v", job)
+	}
 }
 
 func TestWorkerPoolRunsHandlerAndStopsGracefully(t *testing.T) {

@@ -609,7 +609,7 @@ function App() {
           <div class="file-grid">
             ${items.map((item) => html`<article key=${item.id} class="file-card">
               <button class="card-main" onClick=${() => item.type === 'directory' ? openEntry(item.id) : openFile(item)}>
-                <span class=${`card-icon ${item.type}`}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${30}/></span>
+                ${item.links.thumbnail ? html`<span class="card-thumbnail"><img src=${item.links.thumbnail} alt="" loading="lazy" onError=${(event) => event.currentTarget.parentElement.classList.add('failed')}/><i><${Icon} name="file" size=${30}/></i></span>` : html`<span class=${`card-icon ${item.type}`}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${30}/></span>`}
                 <strong title=${item.name}>${item.name}</strong><small>${item.type === 'directory' ? '文件夹' : formatSize(item.size)}</small>${!item.available && html`<em>不可用</em>`}
               </button>
               <button class="card-action" onClick=${() => openManage(item)} aria-label=${`管理 ${item.name}`}><${Icon} name="more" size=${18}/></button>

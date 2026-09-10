@@ -38,6 +38,13 @@ type Storage interface {
 	Remove(context.Context, string) error
 }
 
+// NativePather is an optional capability used by processors that require a
+// local filename, such as ffprobe. Remote backends can omit it and materialize
+// files through a different processor in the future.
+type NativePather interface {
+	NativePath(context.Context, string) (string, error)
+}
+
 type Registry struct {
 	items map[string]Storage
 }

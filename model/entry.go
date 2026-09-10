@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type EntryType string
 
@@ -54,4 +57,31 @@ type LibrarySource struct {
 	StorageID string `json:"storageId"`
 	Path      string `json:"-"`
 	EntryID   string `json:"entryId,omitempty"`
+}
+
+type MediaFile struct {
+	EntryID    string          `json:"entryId"`
+	Kind       string          `json:"kind"`
+	DurationMS *int64          `json:"durationMs,omitempty"`
+	Container  string          `json:"container,omitempty"`
+	Width      *int            `json:"width,omitempty"`
+	Height     *int            `json:"height,omitempty"`
+	VideoCodec string          `json:"videoCodec,omitempty"`
+	AudioCodec string          `json:"audioCodec,omitempty"`
+	Bitrate    *int64          `json:"bitrate,omitempty"`
+	Metadata   json.RawMessage `json:"metadata"`
+	UpdatedAt  time.Time       `json:"updatedAt"`
+}
+
+type Artifact struct {
+	ID             string    `json:"id"`
+	EntryID        string    `json:"entryId,omitempty"`
+	MediaID        string    `json:"mediaId,omitempty"`
+	Type           string    `json:"type"`
+	Variant        string    `json:"variant,omitempty"`
+	Key            string    `json:"-"`
+	MIME           string    `json:"mime,omitempty"`
+	Size           int64     `json:"size"`
+	CreatedAt      time.Time `json:"createdAt"`
+	LastAccessedAt time.Time `json:"lastAccessedAt"`
 }

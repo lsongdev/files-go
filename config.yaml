@@ -3,6 +3,11 @@ listen: ":8088"
 
 data: ""
 
+processing:
+  workers: 2
+  ffprobe: ffprobe
+  pdfinfo: pdfinfo
+
 storages:
   - id: data
     name: Data

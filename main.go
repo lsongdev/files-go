@@ -15,7 +15,9 @@ import (
 	"github.com/lsongdev/files-go/config"
 	"github.com/lsongdev/files-go/database"
 	"github.com/lsongdev/files-go/indexer"
+	"github.com/lsongdev/files-go/jobs"
 	"github.com/lsongdev/files-go/model"
+	"github.com/lsongdev/files-go/processor"
 	"github.com/lsongdev/files-go/storage"
 	"github.com/lsongdev/files-go/web"
 )
@@ -34,7 +36,12 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
-	catalogDB := catalog.New(db)
+	readerDB, err := database.OpenReader(ctx, cfg.Data)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer readerDB.Close()
+	catalogDB := catalog.NewWithReader(db, readerDB)
 	registry := storage.NewRegistry()
 	for _, item := range cfg.Storages {
 		backend, err := storage.NewLocal(item.Path)
@@ -58,6 +65,18 @@ func main() {
 		}
 	}
 	idx := indexer.New(catalogDB, registry)
+	jobQueue := jobs.New(db, 2*time.Minute)
+	processing := processor.New(catalogDB, jobQueue,
+		processor.NewImageMetadata(catalogDB, registry),
+		processor.NewFFProbe(catalogDB, registry, cfg.Processing.FFProbe, 30*time.Second),
+		processor.NewEPUBMetadata(catalogDB, registry),
+		processor.NewPDFMetadata(catalogDB, registry, cfg.Processing.PDFInfo, 30*time.Second),
+		processor.NewThumbnail(catalogDB, registry, cfg.CacheDir),
+	)
+	idx.SetEntrySink(processing)
+	workerPool := jobs.NewPool(jobQueue, cfg.Processing.Workers)
+	workerPool.Handle(processor.JobProcessEntry, processing.Handle)
+	workerPool.Start(ctx)
 	for _, item := range cfg.Storages {
 		var priority []string
 		for _, library := range cfg.Libraries {
@@ -77,19 +96,25 @@ func main() {
 			}
 		}()
 	}
-	apiServer := api.New(ctx, catalogDB, registry, idx, log.Default())
+	apiServer := api.New(ctx, catalogDB, registry, idx, log.Default(), cfg.CacheDir)
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiServer.Handler())
 	mux.Handle("/", web.Handler())
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	shutdownDone := make(chan struct{})
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = httpServer.Shutdown(shutdownCtx)
+		close(shutdownDone)
 	}()
 	log.Printf("files-go API listening on http://%s", cfg.Listen)
-	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+	serveErr := httpServer.ListenAndServe()
+	stop()
+	<-shutdownDone
+	workerPool.Wait()
+	if serveErr != nil && serveErr != http.ErrServerClosed {
+		log.Fatal(serveErr)
 	}
 }

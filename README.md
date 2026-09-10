@@ -6,7 +6,7 @@ rebuildable SQLite catalog so directory browsing and metadata requests never
 need to wake or enumerate disks.
 
 The current implementation provides the Phase 1 core, the Phase 2 file manager,
-and the Phase 3 job foundation described in [`docs/design.md`](docs/design.md):
+and Phase 3 background processing described in [`docs/design.md`](docs/design.md):
 
 - local storage isolation with traversal and symlink-escape protection;
 - an opaque-ID filesystem catalog and SQLite migrations;
@@ -19,6 +19,9 @@ and the Phase 3 job foundation described in [`docs/design.md`](docs/design.md):
 - storage-first directory creation, recursive copy, rename/move, and safe non-recursive delete.
 - streaming multipart uploads that never buffer an entire file in memory.
 - a persistent SQLite job queue with deduplication, retries, leases, and a bounded worker pool.
+- image dimensions and cached small/medium/large thumbnails;
+- ffprobe-backed video, audio, and normalized music metadata;
+- bounded EPUB package parsing and pdfinfo-backed PDF metadata.
 
 ## Configuration
 
@@ -27,6 +30,11 @@ Copy `config.yaml` to `~/.filesgo/config.yaml` and adjust the storage paths:
 ```yaml
 listen: ":8088"
 data: "/var/lib/files-go"
+
+processing:
+  workers: 2
+  ffprobe: ffprobe
+  pdfinfo: pdfinfo
 
 storages:
   - id: data
@@ -66,6 +74,8 @@ POST /api/v1/entries/{id}/copies
 GET  /api/v1/entries/{id}/content
 HEAD /api/v1/entries/{id}/content
 GET  /api/v1/entries/{id}/text
+GET  /api/v1/entries/{id}/media
+GET  /api/v1/entries/{id}/thumbnail?size=medium
 ```
 
 ## Development

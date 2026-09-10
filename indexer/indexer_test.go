@@ -8,6 +8,7 @@ import (
 
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/database"
+	"github.com/lsongdev/files-go/model"
 	"github.com/lsongdev/files-go/storage"
 )
 
@@ -99,5 +100,49 @@ func TestScanGenerationRenameAndOffline(t *testing.T) {
 	}
 	if state.State != "offline" {
 		t.Fatalf("storage state = %q, want offline", state.State)
+	}
+}
+
+type recordingSink struct{ entries []model.Entry }
+
+func (s *recordingSink) EnqueueEntries(_ context.Context, entries []model.Entry) error {
+	s.entries = append(s.entries, entries...)
+	return nil
+}
+
+func TestScanEnqueuesOnlyFilesForBackgroundProcessing(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "folder"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "folder", "one.txt"), []byte("one"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	local, err := storage.NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := storage.NewRegistry()
+	if err := registry.Add("disk", local); err != nil {
+		t.Fatal(err)
+	}
+	sink := &recordingSink{}
+	idx := New(cat, registry)
+	idx.SetEntrySink(sink)
+	if err := idx.Scan(ctx, "disk"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.entries) != 1 || sink.entries[0].Name != "one.txt" || sink.entries[0].Type != model.EntryFile {
+		t.Fatalf("enqueued entries = %#v", sink.entries)
 	}
 }

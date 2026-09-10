@@ -12,6 +12,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/indexer"
 	"github.com/lsongdev/files-go/model"
+	"github.com/lsongdev/files-go/processor"
 	"github.com/lsongdev/files-go/storage"
 )
 
@@ -31,10 +33,11 @@ type Server struct {
 	indexer  *indexer.Indexer
 	logger   *log.Logger
 	mux      *http.ServeMux
+	cacheDir string
 }
 
-func New(ctx context.Context, catalog *catalog.Catalog, storages *storage.Registry, indexer *indexer.Indexer, logger *log.Logger) *Server {
-	server := &Server{ctx: ctx, catalog: catalog, storages: storages, indexer: indexer, logger: logger, mux: http.NewServeMux()}
+func New(ctx context.Context, catalog *catalog.Catalog, storages *storage.Registry, indexer *indexer.Indexer, logger *log.Logger, cacheDir string) *Server {
+	server := &Server{ctx: ctx, catalog: catalog, storages: storages, indexer: indexer, logger: logger, mux: http.NewServeMux(), cacheDir: cacheDir}
 	server.routes()
 	return server
 }
@@ -57,6 +60,86 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/entries/{id}/copies", s.copyEntry)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/content", s.content)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/text", s.text)
+	s.mux.HandleFunc("GET /api/v1/entries/{id}/media", s.getMediaFile)
+	s.mux.HandleFunc("GET /api/v1/entries/{id}/thumbnail", s.thumbnail)
+}
+
+func (s *Server) getMediaFile(w http.ResponseWriter, r *http.Request) {
+	item, err := s.catalog.MediaFile(r.Context(), r.PathValue("id"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		if entry, entryErr := s.catalog.Entry(r.Context(), r.PathValue("id")); entryErr == nil {
+			s.reprocess(*entry)
+		}
+		writeError(w, http.StatusNotFound, "metadata_not_ready", "media metadata is not available yet")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) thumbnail(w http.ResponseWriter, r *http.Request) {
+	variant := r.URL.Query().Get("size")
+	if variant == "" {
+		variant = "medium"
+	}
+	if variant != "small" && variant != "medium" && variant != "large" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "size must be small, medium, or large")
+		return
+	}
+	artifact, err := s.catalog.ArtifactForEntry(r.Context(), r.PathValue("id"), "thumbnail", variant)
+	if errors.Is(err, catalog.ErrNotFound) {
+		if entry, entryErr := s.catalog.Entry(r.Context(), r.PathValue("id")); entryErr == nil {
+			s.reprocess(*entry)
+		}
+		w.Header().Set("Retry-After", "2")
+		writeError(w, http.StatusNotFound, "thumbnail_not_ready", "thumbnail is not available yet")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	filename, err := processor.ThumbnailPath(s.cacheDir, artifact.Key)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	file, err := os.Open(filename)
+	if errors.Is(err, os.ErrNotExist) {
+		if entry, entryErr := s.catalog.Entry(r.Context(), r.PathValue("id")); entryErr == nil {
+			s.reprocess(*entry)
+		}
+		w.Header().Set("Retry-After", "2")
+		writeError(w, http.StatusNotFound, "thumbnail_not_ready", "thumbnail cache is being rebuilt")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("ETag", `"`+artifact.Key+`"`)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, artifact.ID+".jpg", info.ModTime(), file)
+	go func() { _ = s.catalog.TouchArtifact(s.ctx, artifact.ID) }()
+}
+
+func (s *Server) reprocess(entry model.Entry) {
+	go func() {
+		if err := s.indexer.ReprocessEntry(s.ctx, entry); err != nil && !errors.Is(err, context.Canceled) {
+			s.logger.Printf("reprocess entry %s: %v", entry.ID, err)
+		}
+	}()
 }
 
 func (s *Server) copyEntry(w http.ResponseWriter, r *http.Request) {
@@ -199,6 +282,9 @@ func (s *Server) catalogStorageTree(ctx context.Context, backend storage.Storage
 	if err != nil {
 		return nil, err
 	}
+	if err := s.indexer.EnqueueEntries(ctx, []model.Entry{*created}); err != nil {
+		s.logger.Printf("enqueue copied entry %s: %v", created.ID, err)
+	}
 	if info.Type == model.EntryDirectory {
 		children, err := backend.ReadDir(ctx, entryPath)
 		if err != nil {
@@ -279,6 +365,9 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 			s.reconcile(parent.StorageID)
 			s.internalError(w, fmt.Errorf("catalog uploaded file: %w", err))
 			return
+		}
+		if err := s.indexer.EnqueueEntries(r.Context(), []model.Entry{*created}); err != nil {
+			s.logger.Printf("enqueue uploaded entry %s: %v", created.ID, err)
 		}
 		writeJSON(w, http.StatusCreated, responseFor(*created))
 		return
@@ -528,7 +617,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) system(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"version": "0.1.0", "features": map[string]bool{"media": false, "transcode": false}})
+	writeJSON(w, http.StatusOK, map[string]any{"version": "0.2.0", "features": map[string]bool{"media": true, "thumbnail": true, "transcode": false}})
 }
 
 func (s *Server) listStorages(w http.ResponseWriter, r *http.Request) {
@@ -602,10 +691,23 @@ func responseFor(entry model.Entry) entryResponse {
 	}
 	if entry.Type == model.EntryFile {
 		links["content"] = "/api/v1/entries/" + entry.ID + "/content"
+		links["media"] = "/api/v1/entries/" + entry.ID + "/media"
+		if isImageExtension(entry.Extension) {
+			links["thumbnail"] = "/api/v1/entries/" + entry.ID + "/thumbnail?size=medium"
+		}
 	}
 	return entryResponse{ID: entry.ID, ParentID: entry.ParentID, Name: entry.Name, Type: entry.Type,
 		Size: entry.Size, MIME: entry.MIME, Extension: entry.Extension, Available: entry.Available,
 		ModifiedAt: modified, CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt, Links: links}
+}
+
+func isImageExtension(extension string) bool {
+	switch strings.ToLower(extension) {
+	case "jpg", "jpeg", "png", "gif":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) getEntry(w http.ResponseWriter, r *http.Request) {
