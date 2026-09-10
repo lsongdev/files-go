@@ -31,6 +31,7 @@ type Storage interface {
 	Stat(context.Context, string) (FileInfo, error)
 	ReadDir(context.Context, string) ([]FileInfo, error)
 	Open(context.Context, string) (io.ReadSeekCloser, error)
+	Create(context.Context, string, io.Reader) (FileInfo, error)
 	Mkdir(context.Context, string) error
 	Rename(context.Context, string, string) error
 	Remove(context.Context, string) error

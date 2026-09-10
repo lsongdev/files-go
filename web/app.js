@@ -36,6 +36,7 @@ function Icon({ name, size = 20 }) {
     download: html`<path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/>`,
     plus: html`<path d="M12 5v14M5 12h14"/>`,
     trash: html`<path d="M4 7h16M9 7V4h6v3m3 0-1 14H7L6 7m4 4v6m4-6v6"/>`,
+    upload: html`<path d="M12 16V4m0 0L8 8m4-4 4 4M5 20h14"/>`,
   };
   return html`<svg class="icon" width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.file}</svg>`;
 }
@@ -129,6 +130,7 @@ function App() {
   const [actionError, setActionError] = useState('');
   const [actionSaving, setActionSaving] = useState(false);
   const [deleteArmed, setDeleteArmed] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   const activeLibrary = useMemo(() => libraries.find((item) => item.id === activeLibraryID), [libraries, activeLibraryID]);
   const storageByID = useMemo(() => Object.fromEntries(storages.map((item) => [item.id, item])), [storages]);
@@ -410,6 +412,26 @@ function App() {
     }
   };
 
+  const uploadFiles = async (event) => {
+    const files = Array.from(event.currentTarget.files || []);
+    event.currentTarget.value = '';
+    if (!entry || files.length === 0) return;
+    setUploading(true);
+    setError('');
+    try {
+      for (const file of files) {
+        const form = new FormData();
+        form.append('file', file, file.name);
+        const created = await request(`${API}/entries/${encodeURIComponent(entry.id)}/files`, { method: 'POST', body: form });
+        setItems((current) => [created, ...current]);
+      }
+    } catch (reason) {
+      setError(reason.message || '上传失败');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const refresh = async () => {
     setError('');
     try {
@@ -495,7 +517,7 @@ function App() {
 
       <section class="content-head">
         <div><p>${searchTerm ? `在 ${activeLibrary?.name || '所有文件'} 中搜索` : (activeLibrary?.type || 'files')}</p><h1>${searchTerm ? `“${searchTerm}”` : (entry?.name || activeLibrary?.name || '文件')}</h1></div>
-        <div class="head-meta"><span>${items.length}${cursor ? '+' : ''} 个项目</span>${entry && !searchTerm && html`<button class="scan-button" onClick=${() => { setFolderName(''); setActionError(''); setCreateFolderOpen(true); }}><${Icon} name="plus" size=${16}/>新建文件夹</button>`}<button class="scan-button" onClick=${rescan}><${Icon} name="refresh" size=${16}/>重新扫描</button></div>
+        <div class="head-meta"><span>${items.length}${cursor ? '+' : ''} 个项目</span>${entry && !searchTerm && html`<label class=${`scan-button upload-button ${uploading ? 'disabled' : ''}`}><${Icon} name="upload" size=${16}/>${uploading ? '正在上传…' : '上传'}<input type="file" multiple disabled=${uploading} onChange=${uploadFiles}/></label><button class="scan-button" onClick=${() => { setFolderName(''); setActionError(''); setCreateFolderOpen(true); }}><${Icon} name="plus" size=${16}/>新建文件夹</button>`}<button class="scan-button" onClick=${rescan}><${Icon} name="refresh" size=${16}/>重新扫描</button></div>
       </section>
 
       ${error && html`<div class="error-banner" role="alert"><span>${error}</span><button onClick=${refresh}>重试</button></div>`}

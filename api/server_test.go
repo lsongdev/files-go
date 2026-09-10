@@ -1,12 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -130,6 +132,9 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 	if got := res.Header().Get("Content-Range"); got != "bytes 2-5/10" {
 		t.Fatalf("Content-Range = %q", got)
 	}
+	if res.Header().Get("X-Content-Type-Options") != "nosniff" || !strings.Contains(res.Header().Get("Content-Security-Policy"), "sandbox") {
+		t.Fatalf("unsafe content headers: %#v", res.Header())
+	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+notes.ID+"/text", nil)
 	res = httptest.NewRecorder()
@@ -217,6 +222,36 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 	}
 	if _, err := cat.Entry(ctx, drafts.ID); !errors.Is(err, catalog.ErrNotFound) {
 		t.Fatalf("deleted catalog entry error = %v", err)
+	}
+
+	var upload bytes.Buffer
+	multipartWriter := multipart.NewWriter(&upload)
+	part, err := multipartWriter.CreateFormFile("file", "uploaded notes.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("streamed upload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := multipartWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/entries/"+rootEntry.ID+"/files", &upload)
+	req.Header.Set("Content-Type", multipartWriter.FormDataContentType())
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("upload file = %d %s", res.Code, res.Body.String())
+	}
+	var uploaded entryResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &uploaded); err != nil || uploaded.Name != "uploaded notes.txt" || uploaded.Size != 15 {
+		t.Fatalf("uploaded response = %#v, %v", uploaded, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "uploaded notes.txt")); err != nil || string(data) != "streamed upload" {
+		t.Fatalf("uploaded content = %q, %v", data, err)
+	}
+	if found, err := cat.EntryByPath(ctx, "disk", "uploaded notes.txt"); err != nil || found.ID != uploaded.ID {
+		t.Fatalf("uploaded catalog entry = %#v, %v", found, err)
 	}
 
 	// Catalog browsing remains functional without touching the now-missing disk.

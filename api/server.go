@@ -53,8 +53,81 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/v1/entries/{id}", s.deleteEntry)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/children", s.listChildren)
 	s.mux.HandleFunc("POST /api/v1/entries/{id}/directories", s.createDirectory)
+	s.mux.HandleFunc("POST /api/v1/entries/{id}/files", s.uploadFile)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/content", s.content)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/text", s.text)
+}
+
+func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
+	parent, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "entry_not_found", "parent entry not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if parent.Type != model.EntryDirectory {
+		writeError(w, http.StatusBadRequest, "invalid_request", "parent entry is not a directory")
+		return
+	}
+	if !parent.Available {
+		writeError(w, http.StatusServiceUnavailable, "storage_offline", "storage is offline")
+		return
+	}
+	backend, ok := s.storages.Get(parent.StorageID)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "storage_offline", "storage is offline")
+		return
+	}
+	reader, err := r.MultipartReader()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "multipart/form-data upload is required")
+		return
+	}
+	for {
+		part, err := reader.NextPart()
+		if errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid_request", "upload must contain a file field")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "invalid multipart upload")
+			return
+		}
+		name := part.FileName()
+		if name == "" {
+			_ = part.Close()
+			continue
+		}
+		if !validEntryName(name) {
+			_ = part.Close()
+			writeError(w, http.StatusBadRequest, "invalid_name", "filename must be a valid single path component")
+			return
+		}
+		entryPath := path.Join(parent.Path, name)
+		info, createErr := backend.Create(r.Context(), entryPath, part)
+		_ = part.Close()
+		if createErr != nil {
+			s.writeStorageError(w, createErr)
+			return
+		}
+		extension := strings.TrimPrefix(strings.ToLower(path.Ext(name)), ".")
+		contentType := mime.TypeByExtension(path.Ext(name))
+		created, err := s.catalog.AddEntry(r.Context(), model.Entry{
+			StorageID: parent.StorageID, ParentID: &parent.ID, Name: name, Path: entryPath,
+			Type: info.Type, Size: info.Size, ModifiedAt: info.ModifiedAt, Inode: info.Inode, Device: info.Device,
+			MIME: contentType, Extension: extension,
+		})
+		if err != nil {
+			s.reconcile(parent.StorageID)
+			s.internalError(w, fmt.Errorf("catalog uploaded file: %w", err))
+			return
+		}
+		writeJSON(w, http.StatusCreated, responseFor(*created))
+		return
+	}
 }
 
 func (s *Server) createDirectory(w http.ResponseWriter, r *http.Request) {
@@ -510,6 +583,8 @@ func (s *Server) content(w http.ResponseWriter, r *http.Request) {
 		contentType = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	disposition := mime.FormatMediaType("inline", map[string]string{"filename": entry.Name})
 	if disposition != "" {
 		w.Header().Set("Content-Disposition", disposition)

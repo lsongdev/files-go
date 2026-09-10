@@ -17,6 +17,7 @@ file-manager features described in [`docs/design.md`](docs/design.md):
 - SQLite FTS5 file search scoped by library, type, or extension.
 - native image, audio, video, PDF, and size-limited text previews.
 - storage-first directory creation, rename/move, and safe non-recursive delete.
+- streaming multipart uploads that never buffer an entire file in memory.
 
 ## Configuration
 
@@ -59,6 +60,7 @@ PATCH /api/v1/entries/{id}
 DELETE /api/v1/entries/{id}
 GET  /api/v1/entries/{id}/children
 POST /api/v1/entries/{id}/directories
+POST /api/v1/entries/{id}/files
 GET  /api/v1/entries/{id}/content
 HEAD /api/v1/entries/{id}/content
 GET  /api/v1/entries/{id}/text
