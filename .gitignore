@@ -1,5 +1,7 @@
+# Runtime catalog and SQLite sidecars
+*.db
+*.db-shm
+*.db-wal
 
-
-metadata.*
-
-bin/
+# Local build output
+/bin/
