@@ -1,39 +1,46 @@
 
 listen: ":8088"
-language: zh-CN
 
-database: ""
+data: ""
 
-tmdb:
-  api_key: "5640d0f3eea1e20a18d3a1f150b3a1ef"
+storages:
+  - id: data
+    name: Data
+    type: local
+    path: /Volumes/data
 
 libraries:
-  - name: "Movies"
-    slug: "movies"
-    path: "/Volumes/data/Videos/Movies"
+  - id: movies
+    name: Movies
+    type: movies
+    sources:
+      - storage: data
+        path: Videos/Movies
 
-  - name: "TV Shows"
-    slug: "tvshows"
-    path: "/Volumes/data/Videos/TV Shows"
+  - id: tvshows
+    name: TV Shows
+    type: tv
+    sources:
+      - storage: data
+        path: Videos/TV Shows
 
-  - name: "Music"
-    slug: "music"
-    path: "/Volumes/data/Music"
-    # username: "user"      # Uncomment and set username
-    # password: "secret123"  # Uncomment and set password to enable Basic Auth
+  - id: music
+    name: Music
+    type: music
+    sources:
+      - storage: data
+        path: Music
 
-  - name: "Photos"
-    slug: "photos"
-    path: "/Volumes/data/Pictures"
+  - id: photos
+    name: Photos
+    type: photos
+    sources:
+      - storage: data
+        path: Pictures
 
-  # - name: "Software"
-  #   slug: "software"
-  #   path: "/Volumes/software"
-
-  - name: "Books"
-    slug: "books"
-    path: "/Volumes/data/Documents/books/books"
-
-  # - name: "Japanese AV"
-  #   slug: "jav"
-  #   path: "/Volumes/data/Videos/JapaneseAV"
+  - id: documents
+    name: Documents
+    type: files
+    sources:
+      - storage: data
+        path: Documents
