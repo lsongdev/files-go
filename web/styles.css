@@ -226,10 +226,14 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .action-dialog > footer button.primary { border-color: var(--blue); color: white; background: var(--blue); }
 .action-dialog > footer button.danger { border-color: var(--error-border); color: var(--error-text); background: var(--error-bg); }
 .action-dialog > footer button:disabled { opacity: 0.55; cursor: wait; }
-.action-dialog > footer.manage-footer { display: grid; grid-template-columns: auto auto 1fr auto auto; }
+.action-dialog > footer.manage-footer { display: grid; grid-template-columns: auto auto auto 1fr auto auto; }
 .action-error { margin: -0.5rem 1.25rem 1rem; color: var(--error-text); font-size: 0.8rem; }
 .delete-warning { margin: -0.5rem 1.25rem 1rem; color: var(--error-text); font-size: 0.8rem; }
 .destination-dialog { width: min(34rem, 100%); display: grid; grid-template-rows: auto auto minmax(12rem, 1fr) auto auto; max-height: min(42rem, calc(100vh - 4rem)); }
+.destination-dialog.copy { grid-template-rows: auto auto auto minmax(12rem, 1fr) auto auto; }
+.copy-name { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 0.78rem; }
+.copy-name input { min-width: 0; padding: 0.55rem 0.65rem; border: 1px solid var(--line); border-radius: 0.5rem; outline: 0; color: var(--text); background: var(--bg); font: inherit; }
+.copy-name input:focus { border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-soft); }
 .destination-trail { min-width: 0; display: flex; align-items: center; overflow-x: auto; padding: 0.65rem 1rem; border-bottom: 1px solid var(--line); }
 .destination-trail span { display: flex; align-items: center; flex: none; color: var(--muted); }
 .destination-trail button { padding: 0.3rem; border: 0; color: inherit; background: transparent; font-size: 0.78rem; cursor: pointer; }

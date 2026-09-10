@@ -54,8 +54,163 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/children", s.listChildren)
 	s.mux.HandleFunc("POST /api/v1/entries/{id}/directories", s.createDirectory)
 	s.mux.HandleFunc("POST /api/v1/entries/{id}/files", s.uploadFile)
+	s.mux.HandleFunc("POST /api/v1/entries/{id}/copies", s.copyEntry)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/content", s.content)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/text", s.text)
+}
+
+func (s *Server) copyEntry(w http.ResponseWriter, r *http.Request) {
+	entry, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	var input struct {
+		ParentID string  `json:"parentId"`
+		Name     *string `json:"name"`
+	}
+	if err := decodeJSONBody(w, r, &input); err != nil {
+		return
+	}
+	name := entry.Name
+	if input.Name != nil {
+		name = *input.Name
+	}
+	if input.ParentID == "" || !validEntryName(name) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "parentId and a valid name are required")
+		return
+	}
+	parent, err := s.catalog.Entry(r.Context(), input.ParentID)
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "entry_not_found", "destination directory not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if parent.Type != model.EntryDirectory {
+		writeError(w, http.StatusBadRequest, "invalid_request", "destination is not a directory")
+		return
+	}
+	if !entry.Available || !parent.Available {
+		writeError(w, http.StatusServiceUnavailable, "storage_offline", "storage is offline")
+		return
+	}
+	if entry.Type == model.EntryDirectory && entry.StorageID == parent.StorageID &&
+		(parent.Path == entry.Path || strings.HasPrefix(parent.Path, entry.Path+"/")) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "a directory cannot be copied into itself")
+		return
+	}
+	source, sourceOK := s.storages.Get(entry.StorageID)
+	destination, destinationOK := s.storages.Get(parent.StorageID)
+	if !sourceOK || !destinationOK {
+		writeError(w, http.StatusServiceUnavailable, "storage_offline", "storage is offline")
+		return
+	}
+	destinationPath := path.Join(parent.Path, name)
+	createdRoot, err := copyStorageTree(r.Context(), source, destination, entry.Path, destinationPath)
+	if err != nil {
+		if createdRoot {
+			_ = removeStorageTree(context.Background(), destination, destinationPath)
+		}
+		s.writeStorageError(w, err)
+		return
+	}
+	created, err := s.catalogStorageTree(r.Context(), destination, parent.StorageID, destinationPath, &parent.ID)
+	if err != nil {
+		s.reconcile(parent.StorageID)
+		s.internalError(w, fmt.Errorf("catalog copied entry: %w", err))
+		return
+	}
+	writeJSON(w, http.StatusCreated, responseFor(*created))
+}
+
+func copyStorageTree(ctx context.Context, source, destination storage.Storage, sourcePath, destinationPath string) (bool, error) {
+	info, err := source.Stat(ctx, sourcePath)
+	if err != nil {
+		return false, err
+	}
+	switch info.Type {
+	case model.EntryFile:
+		file, err := source.Open(ctx, sourcePath)
+		if err != nil {
+			return false, err
+		}
+		defer file.Close()
+		_, err = destination.Create(ctx, destinationPath, file)
+		return err == nil, err
+	case model.EntryDirectory:
+		if err := destination.Mkdir(ctx, destinationPath); err != nil {
+			return false, err
+		}
+		children, err := source.ReadDir(ctx, sourcePath)
+		if err != nil {
+			return true, err
+		}
+		for _, child := range children {
+			if _, err := copyStorageTree(ctx, source, destination, child.Path, path.Join(destinationPath, child.Name)); err != nil {
+				return true, err
+			}
+		}
+		return true, nil
+	default:
+		return false, storage.ErrUnsupported
+	}
+}
+
+func removeStorageTree(ctx context.Context, backend storage.Storage, entryPath string) error {
+	info, err := backend.Stat(ctx, entryPath)
+	if errors.Is(err, storage.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Type == model.EntryDirectory {
+		children, err := backend.ReadDir(ctx, entryPath)
+		if err != nil {
+			return err
+		}
+		for _, child := range children {
+			if err := removeStorageTree(ctx, backend, child.Path); err != nil {
+				return err
+			}
+		}
+	}
+	return backend.Remove(ctx, entryPath)
+}
+
+func (s *Server) catalogStorageTree(ctx context.Context, backend storage.Storage, storageID, entryPath string, parentID *string) (*model.Entry, error) {
+	info, err := backend.Stat(ctx, entryPath)
+	if err != nil {
+		return nil, err
+	}
+	extension := strings.TrimPrefix(strings.ToLower(path.Ext(info.Name)), ".")
+	created, err := s.catalog.AddEntry(ctx, model.Entry{
+		StorageID: storageID, ParentID: parentID, Name: info.Name, Path: entryPath, Type: info.Type,
+		Size: info.Size, ModifiedAt: info.ModifiedAt, Inode: info.Inode, Device: info.Device,
+		MIME: mime.TypeByExtension(path.Ext(info.Name)), Extension: extension,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if info.Type == model.EntryDirectory {
+		children, err := backend.ReadDir(ctx, entryPath)
+		if err != nil {
+			return nil, err
+		}
+		for _, child := range children {
+			if _, err := s.catalogStorageTree(ctx, backend, storageID, child.Path, &created.ID); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return created, nil
 }
 
 func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
@@ -322,6 +477,8 @@ func (s *Server) writeStorageError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusServiceUnavailable, "storage_offline", "storage is offline")
 	case errors.Is(err, storage.ErrPathTraversal):
 		writeError(w, http.StatusBadRequest, "invalid_path", "invalid storage path")
+	case errors.Is(err, storage.ErrUnsupported):
+		writeError(w, http.StatusBadRequest, "unsupported_entry", "entry type is not supported for this operation")
 	default:
 		s.internalError(w, err)
 	}

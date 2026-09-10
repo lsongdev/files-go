@@ -16,7 +16,7 @@ file-manager features described in [`docs/design.md`](docs/design.md):
 - a responsive Preact list/grid UI with persistent light and dark themes;
 - SQLite FTS5 file search scoped by library, type, or extension.
 - native image, audio, video, PDF, and size-limited text previews.
-- storage-first directory creation, rename/move, and safe non-recursive delete.
+- storage-first directory creation, recursive copy, rename/move, and safe non-recursive delete.
 - streaming multipart uploads that never buffer an entire file in memory.
 
 ## Configuration
@@ -61,6 +61,7 @@ DELETE /api/v1/entries/{id}
 GET  /api/v1/entries/{id}/children
 POST /api/v1/entries/{id}/directories
 POST /api/v1/entries/{id}/files
+POST /api/v1/entries/{id}/copies
 GET  /api/v1/entries/{id}/content
 HEAD /api/v1/entries/{id}/content
 GET  /api/v1/entries/{id}/text

@@ -38,6 +38,7 @@ function Icon({ name, size = 20 }) {
     trash: html`<path d="M4 7h16M9 7V4h6v3m3 0-1 14H7L6 7m4 4v6m4-6v6"/>`,
     upload: html`<path d="M12 16V4m0 0L8 8m4-4 4 4M5 20h14"/>`,
     move: html`<path d="M5 9V5h4m10 10v4h-4M5 5l6 6m8 8-6-6M15 5h4v4m0-4-6 6M9 19H5v-4m0 4 6-6"/>`,
+    copy: html`<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>`,
   };
   return html`<svg class="icon" width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.file}</svg>`;
 }
@@ -67,6 +68,12 @@ function previewKind(item) {
   if (mime === 'application/pdf' || extension === 'pdf') return 'pdf';
   if (mime.startsWith('text/') || ['application/json', 'application/xml', 'application/x-subrip'].includes(mime) || textExtensions.has(extension)) return 'text';
   return 'unknown';
+}
+
+function copyNameFor(item) {
+  if (item.type === 'directory') return `${item.name} copy`;
+  const dot = item.name.lastIndexOf('.');
+  return dot > 0 ? `${item.name.slice(0, dot)} copy${item.name.slice(dot)}` : `${item.name} copy`;
 }
 
 function Preview({ item, text, loading, error, onClose }) {
@@ -133,6 +140,8 @@ function App() {
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [movingItem, setMovingItem] = useState(null);
+  const [transferMode, setTransferMode] = useState('move');
+  const [copyName, setCopyName] = useState('');
   const [destination, setDestination] = useState(null);
   const [destinationTrail, setDestinationTrail] = useState([]);
   const [destinationFolders, setDestinationFolders] = useState([]);
@@ -457,11 +466,13 @@ function App() {
     }
   };
 
-  const openMove = () => {
+  const openTransfer = (mode) => {
     if (!manageItem) return;
     const item = manageItem;
     const rootID = activeLibrary?.sources?.find((source) => source.entryId)?.entryId || entry?.id;
     setMovingItem(item);
+    setTransferMode(mode);
+    setCopyName(mode === 'copy' ? copyNameFor(item) : item.name);
     setManageItem(null);
     setDestination(null);
     setDestinationFolders([]);
@@ -469,18 +480,24 @@ function App() {
     if (rootID) loadDestination(rootID, item.id);
   };
 
-  const confirmMove = async () => {
+  const confirmTransfer = async () => {
     if (!movingItem || !destination) return;
     setActionSaving(true);
     setActionError('');
     try {
-      const updated = await request(`${API}/entries/${encodeURIComponent(movingItem.id)}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parentId: destination.id }),
-      });
-      setItems((current) => !searchTerm && entry?.id !== updated.parentId ? current.filter((item) => item.id !== updated.id) : current.map((item) => item.id === updated.id ? updated : item));
+      const updated = transferMode === 'copy'
+        ? await request(`${API}/entries/${encodeURIComponent(movingItem.id)}/copies`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parentId: destination.id, name: copyName.trim() }),
+        })
+        : await request(`${API}/entries/${encodeURIComponent(movingItem.id)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parentId: destination.id }),
+        });
+      setItems((current) => transferMode === 'copy'
+        ? (!searchTerm && entry?.id === updated.parentId ? [updated, ...current] : current)
+        : (!searchTerm && entry?.id !== updated.parentId ? current.filter((item) => item.id !== updated.id) : current.map((item) => item.id === updated.id ? updated : item)));
       setMovingItem(null);
     } catch (reason) {
-      setActionError(reason.message || '无法移动条目');
+      setActionError(reason.message || (transferMode === 'copy' ? '无法复制条目' : '无法移动条目'));
     } finally {
       setActionSaving(false);
     }
@@ -603,8 +620,8 @@ function App() {
     </main>
     <${Preview} item=${preview} text=${previewText} loading=${previewLoading} error=${previewError} onClose=${() => setPreview(null)}/>
     ${createFolderOpen && html`<div class="preview-scrim" onClick=${() => !actionSaving && setCreateFolderOpen(false)}><form class="action-dialog" role="dialog" aria-modal="true" aria-labelledby="create-folder-title" onSubmit=${createFolder} onClick=${(event) => event.stopPropagation()}><header><div><strong id="create-folder-title">新建文件夹</strong><span>在 ${entry?.name || activeLibrary?.name || '当前目录'} 中创建</span></div><button type="button" class="icon-button" onClick=${() => setCreateFolderOpen(false)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header><label>名称<input value=${folderName} onInput=${(event) => setFolderName(event.currentTarget.value)} maxlength="255" required/></label>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}<footer><button type="button" onClick=${() => setCreateFolderOpen(false)}>取消</button><button class="primary" disabled=${actionSaving}>${actionSaving ? '正在创建…' : '创建'}</button></footer></form></div>`}
-    ${manageItem && html`<div class="preview-scrim" onClick=${() => !actionSaving && setManageItem(null)}><form class="action-dialog" role="dialog" aria-modal="true" aria-labelledby="manage-entry-title" onSubmit=${renameEntry} onClick=${(event) => event.stopPropagation()}><header><div><strong id="manage-entry-title">管理条目</strong><span>${manageItem.type === 'directory' ? '文件夹' : formatSize(manageItem.size)}</span></div><button type="button" class="icon-button" onClick=${() => setManageItem(null)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header><label>名称<input value=${renameValue} onInput=${(event) => { setRenameValue(event.currentTarget.value); setDeleteArmed(false); }} maxlength="255" required/></label>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}${deleteArmed && html`<p class="delete-warning" role="alert">此操作无法撤销。再次点击删除以确认。</p>`}<footer class="manage-footer"><button type="button" class="danger" onClick=${() => deleteArmed ? deleteManagedEntry() : setDeleteArmed(true)} disabled=${actionSaving}><${Icon} name="trash" size=${16}/>${deleteArmed ? '确认删除' : '删除'}</button><button type="button" onClick=${openMove}><${Icon} name="move" size=${16}/>移动</button><span></span><button type="button" onClick=${() => setManageItem(null)}>取消</button><button class="primary" disabled=${actionSaving || renameValue.trim() === manageItem.name}>${actionSaving ? '正在保存…' : '重命名'}</button></footer></form></div>`}
-    ${movingItem && html`<div class="preview-scrim" onClick=${() => !actionSaving && setMovingItem(null)}><section class="action-dialog destination-dialog" role="dialog" aria-modal="true" aria-labelledby="move-entry-title" onClick=${(event) => event.stopPropagation()}><header><div><strong id="move-entry-title">移动“${movingItem.name}”</strong><span>选择同一存储中的目标文件夹</span></div><button type="button" class="icon-button" onClick=${() => setMovingItem(null)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header><nav class="destination-trail" aria-label="目标位置">${destinationTrail.map((item, index) => html`<span key=${item.id || index}>${index > 0 && html`<${Icon} name="chevron" size=${14}/>`}<button onClick=${() => item.id && loadDestination(item.id)}>${item.label}</button></span>`)}</nav><div class="destination-list">${destinationLoading ? html`<p>正在读取文件夹…</p>` : destinationFolders.length ? destinationFolders.map((folder) => html`<button key=${folder.id} onClick=${() => loadDestination(folder.id)}><span class="folder"><${Icon} name="folder" size=${18}/></span>${folder.name}<${Icon} name="chevron" size=${15}/></button>`) : html`<p>这里没有子文件夹</p>`}</div>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}<footer><button type="button" onClick=${() => setMovingItem(null)}>取消</button><button class="primary" onClick=${confirmMove} disabled=${actionSaving || destinationLoading || !destination || destination.id === movingItem.parentId}>${actionSaving ? '正在移动…' : destination?.id === movingItem.parentId ? '已在此位置' : '移动到这里'}</button></footer></section></div>`}
+    ${manageItem && html`<div class="preview-scrim" onClick=${() => !actionSaving && setManageItem(null)}><form class="action-dialog" role="dialog" aria-modal="true" aria-labelledby="manage-entry-title" onSubmit=${renameEntry} onClick=${(event) => event.stopPropagation()}><header><div><strong id="manage-entry-title">管理条目</strong><span>${manageItem.type === 'directory' ? '文件夹' : formatSize(manageItem.size)}</span></div><button type="button" class="icon-button" onClick=${() => setManageItem(null)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header><label>名称<input value=${renameValue} onInput=${(event) => { setRenameValue(event.currentTarget.value); setDeleteArmed(false); }} maxlength="255" required/></label>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}${deleteArmed && html`<p class="delete-warning" role="alert">此操作无法撤销。再次点击删除以确认。</p>`}<footer class="manage-footer"><button type="button" class="danger" onClick=${() => deleteArmed ? deleteManagedEntry() : setDeleteArmed(true)} disabled=${actionSaving}><${Icon} name="trash" size=${16}/>${deleteArmed ? '确认删除' : '删除'}</button><button type="button" onClick=${() => openTransfer('copy')}><${Icon} name="copy" size=${16}/>复制</button><button type="button" onClick=${() => openTransfer('move')}><${Icon} name="move" size=${16}/>移动</button><span></span><button type="button" onClick=${() => setManageItem(null)}>取消</button><button class="primary" disabled=${actionSaving || renameValue.trim() === manageItem.name}>${actionSaving ? '正在保存…' : '重命名'}</button></footer></form></div>`}
+    ${movingItem && html`<div class="preview-scrim" onClick=${() => !actionSaving && setMovingItem(null)}><section class=${`action-dialog destination-dialog ${transferMode}`} role="dialog" aria-modal="true" aria-labelledby="transfer-entry-title" onClick=${(event) => event.stopPropagation()}><header><div><strong id="transfer-entry-title">${transferMode === 'copy' ? '复制' : '移动'}“${movingItem.name}”</strong><span>选择${transferMode === 'copy' ? '目标名称和' : ''}目标文件夹</span></div><button type="button" class="icon-button" onClick=${() => setMovingItem(null)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header>${transferMode === 'copy' && html`<label class="copy-name">副本名称<input value=${copyName} onInput=${(event) => setCopyName(event.currentTarget.value)} maxlength="255" required/></label>`}<nav class="destination-trail" aria-label="目标位置">${destinationTrail.map((item, index) => html`<span key=${item.id || index}>${index > 0 && html`<${Icon} name="chevron" size=${14}/>`}<button onClick=${() => item.id && loadDestination(item.id)}>${item.label}</button></span>`)}</nav><div class="destination-list">${destinationLoading ? html`<p>正在读取文件夹…</p>` : destinationFolders.length ? destinationFolders.map((folder) => html`<button key=${folder.id} onClick=${() => loadDestination(folder.id)}><span class="folder"><${Icon} name="folder" size=${18}/></span>${folder.name}<${Icon} name="chevron" size=${15}/></button>`) : html`<p>这里没有子文件夹</p>`}</div>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}<footer><button type="button" onClick=${() => setMovingItem(null)}>取消</button><button class="primary" onClick=${confirmTransfer} disabled=${actionSaving || destinationLoading || !destination || !copyName.trim() || (transferMode === 'move' && destination.id === movingItem.parentId) || (transferMode === 'copy' && destination.id === movingItem.parentId && copyName.trim() === movingItem.name)}>${actionSaving ? (transferMode === 'copy' ? '正在复制…' : '正在移动…') : transferMode === 'move' && destination?.id === movingItem.parentId ? '已在此位置' : transferMode === 'copy' ? '复制到这里' : '移动到这里'}</button></footer></section></div>`}
   </div>`;
 }
 
