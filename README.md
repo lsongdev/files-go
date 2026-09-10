@@ -5,8 +5,8 @@
 rebuildable SQLite catalog so directory browsing and metadata requests never
 need to wake or enumerate disks.
 
-The current implementation provides the Phase 1 core and the first Phase 2
-file-manager features described in [`docs/design.md`](docs/design.md):
+The current implementation provides the Phase 1 core, the Phase 2 file manager,
+and the Phase 3 job foundation described in [`docs/design.md`](docs/design.md):
 
 - local storage isolation with traversal and symlink-escape protection;
 - an opaque-ID filesystem catalog and SQLite migrations;
@@ -18,6 +18,7 @@ file-manager features described in [`docs/design.md`](docs/design.md):
 - native image, audio, video, PDF, and size-limited text previews.
 - storage-first directory creation, recursive copy, rename/move, and safe non-recursive delete.
 - streaming multipart uploads that never buffer an entire file in memory.
+- a persistent SQLite job queue with deduplication, retries, leases, and a bounded worker pool.
 
 ## Configuration
 
