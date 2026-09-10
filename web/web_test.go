@@ -63,3 +63,14 @@ func TestSearchAssetsIncludeSearchAPIAndAccessibleControl(t *testing.T) {
 		}
 	}
 }
+
+func TestPreviewAssetsIncludeNativeAndTextPreviews(t *testing.T) {
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	body := response.Body.String()
+	for _, expected := range []string{"/text`", "aria-modal", "<video", "<audio", "<iframe", "关闭预览"} {
+		if response.Code != http.StatusOK || !strings.Contains(body, expected) {
+			t.Fatalf("app.js does not contain %q", expected)
+		}
+	}
+}

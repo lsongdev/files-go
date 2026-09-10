@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"log"
@@ -19,6 +20,18 @@ import (
 	"github.com/lsongdev/files-go/storage"
 )
 
+func TestDecodeText(t *testing.T) {
+	utf16LE := []byte{0xff, 0xfe, 0, 0, 0, 0}
+	binary.LittleEndian.PutUint16(utf16LE[2:], 'A')
+	binary.LittleEndian.PutUint16(utf16LE[4:], '中')
+	if got, ok := decodeText(utf16LE); !ok || got != "A中" {
+		t.Fatalf("UTF-16 decode = %q, %v", got, ok)
+	}
+	if _, ok := decodeText([]byte{'a', 0, 'b'}); ok {
+		t.Fatal("binary data was accepted as text")
+	}
+}
+
 func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "private-mount")
@@ -26,6 +39,12 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "movie.mp4"), []byte("0123456789"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("你好，files-go\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "binary.dat"), []byte{'a', 0, 'b'}, 0644); err != nil {
 		t.Fatal(err)
 	}
 	db, err := database.Open(ctx, t.TempDir())
@@ -60,6 +79,14 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	notes, err := cat.EntryByPath(ctx, "disk", "notes.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binaryFile, err := cat.EntryByPath(ctx, "disk", "binary.dat")
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler := New(ctx, cat, registry, idx, log.New(io.Discard, "", 0)).Handler()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+rootEntry.ID+"/children?limit=1", nil)
@@ -87,6 +114,20 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 	}
 	if got := res.Header().Get("Content-Range"); got != "bytes 2-5/10" {
 		t.Fatalf("Content-Range = %q", got)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+notes.ID+"/text", nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK || res.Body.String() != "你好，files-go\n" || res.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
+		t.Fatalf("text preview = %d %q %q", res.Code, res.Body.String(), res.Header().Get("Content-Type"))
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+binaryFile.ID+"/text", nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusUnsupportedMediaType || !strings.Contains(res.Body.String(), "binary_file") {
+		t.Fatalf("binary preview = %d %s", res.Code, res.Body.String())
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/search?q=mov&library=movies&type=file&extension=.MP4", nil)
