@@ -180,6 +180,91 @@ func (c *Catalog) Search(ctx context.Context, opts SearchOptions) ([]model.Entry
 	return items, rows.Err()
 }
 
+func (c *Catalog) AddEntry(ctx context.Context, entry model.Entry) (*model.Entry, error) {
+	generation, err := c.mutationGeneration(ctx, c.db, entry.StorageID)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := c.UpsertEntries(ctx, []model.Entry{entry}, generation)
+	if err != nil {
+		return nil, err
+	}
+	return &entries[0], nil
+}
+
+func (c *Catalog) MoveEntry(ctx context.Context, id, parentID, name, newPath string) (*model.Entry, error) {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var storageID, oldPath string
+	if err := tx.QueryRowContext(ctx, `SELECT storage_id, path FROM entries WHERE id=?`, id).Scan(&storageID, &oldPath); errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, err
+	}
+	generation, err := c.mutationGeneration(ctx, tx, storageID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	if _, err := tx.ExecContext(ctx, `UPDATE entries
+		SET path=? || substr(path, length(?) + 1), scan_generation=?, updated_at=?
+		WHERE storage_id=? AND substr(path, 1, length(?) + 1)=? || '/'`,
+		newPath, oldPath, generation, now, storageID, oldPath, oldPath); err != nil {
+		return nil, err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE entries SET parent_id=?, name=?, path=?, scan_generation=?, updated_at=? WHERE id=?`, parentID, name, newPath, generation, now, id)
+	if err != nil {
+		return nil, err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return nil, ErrNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return c.Entry(ctx, id)
+}
+
+func (c *Catalog) DeleteEntry(ctx context.Context, id string) error {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var storageID, entryPath string
+	if err := tx.QueryRowContext(ctx, `SELECT storage_id, path FROM entries WHERE id=?`, id).Scan(&storageID, &entryPath); errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM entries
+		WHERE storage_id=? AND (path=? OR substr(path, 1, length(?) + 1)=? || '/')`, storageID, entryPath, entryPath, entryPath); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+type queryRower interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (c *Catalog) mutationGeneration(ctx context.Context, queryer queryRower, storageID string) (int64, error) {
+	var generation int64
+	var state string
+	if err := queryer.QueryRowContext(ctx, `SELECT scan_generation, state FROM storages WHERE id=?`, storageID).Scan(&generation, &state); errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	} else if err != nil {
+		return 0, err
+	}
+	if state == "scanning" {
+		generation++
+	}
+	return generation, nil
+}
+
 func ftsPrefixQuery(value string) string {
 	parts := strings.Fields(strings.TrimSpace(value))
 	for index, part := range parts {

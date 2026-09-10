@@ -34,6 +34,8 @@ function Icon({ name, size = 20 }) {
     search: html`<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>`,
     x: html`<path d="m6 6 12 12M18 6 6 18"/>`,
     download: html`<path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/>`,
+    plus: html`<path d="M12 5v14M5 12h14"/>`,
+    trash: html`<path d="M4 7h16M9 7V4h6v3m3 0-1 14H7L6 7m4 4v6m4-6v6"/>`,
   };
   return html`<svg class="icon" width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.file}</svg>`;
 }
@@ -120,6 +122,13 @@ function App() {
   const [previewText, setPreviewText] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState('');
+  const [createFolderOpen, setCreateFolderOpen] = useState(false);
+  const [folderName, setFolderName] = useState('');
+  const [manageItem, setManageItem] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [actionSaving, setActionSaving] = useState(false);
+  const [deleteArmed, setDeleteArmed] = useState(false);
 
   const activeLibrary = useMemo(() => libraries.find((item) => item.id === activeLibraryID), [libraries, activeLibraryID]);
   const storageByID = useMemo(() => Object.fromEntries(storages.map((item) => [item.id, item])), [storages]);
@@ -140,6 +149,23 @@ function App() {
       window.removeEventListener('keydown', close);
     };
   }, [preview]);
+
+  useEffect(() => {
+    if (!createFolderOpen && !manageItem) return undefined;
+    const frame = window.requestAnimationFrame(() => document.querySelector('.action-dialog input')?.focus());
+    const close = (event) => {
+      if (event.key !== 'Escape' || actionSaving) return;
+      setCreateFolderOpen(false);
+      setManageItem(null);
+    };
+    document.body.classList.add('preview-open');
+    window.addEventListener('keydown', close);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.body.classList.remove('preview-open');
+      window.removeEventListener('keydown', close);
+    };
+  }, [createFolderOpen, manageItem, actionSaving]);
 
   const loadNavigation = useCallback(async () => {
     const [libraryData, storageData] = await Promise.all([request(`${API}/libraries`), request(`${API}/storages`)]);
@@ -324,6 +350,66 @@ function App() {
     }
   };
 
+  const createFolder = async (event) => {
+    event.preventDefault();
+    if (!entry || !folderName.trim()) return;
+    setActionSaving(true);
+    setActionError('');
+    try {
+      await request(`${API}/entries/${encodeURIComponent(entry.id)}/directories`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: folderName.trim() }),
+      });
+      setCreateFolderOpen(false);
+      setFolderName('');
+      await openEntry(entry.id, { history: false, libraryID: activeLibraryID });
+    } catch (reason) {
+      setActionError(reason.message || '无法创建文件夹');
+    } finally {
+      setActionSaving(false);
+    }
+  };
+
+  const openManage = (item) => {
+    setManageItem(item);
+    setRenameValue(item.name);
+    setActionError('');
+    setDeleteArmed(false);
+  };
+
+  const renameEntry = async (event) => {
+    event.preventDefault();
+    if (!manageItem || !renameValue.trim()) return;
+    setActionSaving(true);
+    setActionError('');
+    try {
+      const updated = await request(`${API}/entries/${encodeURIComponent(manageItem.id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: renameValue.trim() }),
+      });
+      setItems((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setManageItem(null);
+    } catch (reason) {
+      setActionError(reason.message || '无法重命名');
+    } finally {
+      setActionSaving(false);
+    }
+  };
+
+  const deleteManagedEntry = async () => {
+    if (!manageItem) return;
+    setActionSaving(true);
+    setActionError('');
+    try {
+      await request(`${API}/entries/${encodeURIComponent(manageItem.id)}`, { method: 'DELETE' });
+      setItems((current) => current.filter((item) => item.id !== manageItem.id));
+      if (preview?.id === manageItem.id) setPreview(null);
+      setManageItem(null);
+    } catch (reason) {
+      setActionError(reason.message || '无法删除');
+    } finally {
+      setActionSaving(false);
+    }
+  };
+
   const refresh = async () => {
     setError('');
     try {
@@ -409,7 +495,7 @@ function App() {
 
       <section class="content-head">
         <div><p>${searchTerm ? `在 ${activeLibrary?.name || '所有文件'} 中搜索` : (activeLibrary?.type || 'files')}</p><h1>${searchTerm ? `“${searchTerm}”` : (entry?.name || activeLibrary?.name || '文件')}</h1></div>
-        <div class="head-meta"><span>${items.length}${cursor ? '+' : ''} 个项目</span><button class="scan-button" onClick=${rescan}><${Icon} name="refresh" size=${16}/>重新扫描</button></div>
+        <div class="head-meta"><span>${items.length}${cursor ? '+' : ''} 个项目</span>${entry && !searchTerm && html`<button class="scan-button" onClick=${() => { setFolderName(''); setActionError(''); setCreateFolderOpen(true); }}><${Icon} name="plus" size=${16}/>新建文件夹</button>`}<button class="scan-button" onClick=${rescan}><${Icon} name="refresh" size=${16}/>重新扫描</button></div>
       </section>
 
       ${error && html`<div class="error-banner" role="alert"><span>${error}</span><button onClick=${refresh}>重试</button></div>`}
@@ -417,23 +503,31 @@ function App() {
       <section class="browser" aria-live="polite">
         ${loading ? html`<${Skeleton}/>` : items.length === 0 ? html`<${EmptyState} searchTerm=${searchTerm}/>` : view === 'list' ? html`
           <div class="file-table" role="table" aria-label="文件">
-            <div class="table-head" role="row"><span>名称</span><span>大小</span><span>修改时间</span></div>
-            ${items.map((item) => html`<button key=${item.id} class="file-row" role="row" onClick=${() => item.type === 'directory' ? openEntry(item.id) : openFile(item)}>
-              <span class="name-cell" role="cell"><i class=${item.type === 'directory' ? 'folder' : 'document'}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${20}/></i><span><strong>${item.name}</strong><small>${item.type === 'directory' ? '文件夹' : (item.extension?.toUpperCase() || '文件')}</small></span>${!item.available && html`<em>不可用</em>`}</span>
-              <span class="size-cell" role="cell">${item.type === 'directory' ? '—' : formatSize(item.size)}</span>
-              <span class="date-cell" role="cell">${formatDate(item.modifiedAt)}</span>
-            </button>`)}
+            <div class="table-head" role="row"><span>名称</span><span>大小</span><span>修改时间</span><span></span></div>
+            ${items.map((item) => html`<div key=${item.id} class="file-row" role="row">
+              <button class="file-main" onClick=${() => item.type === 'directory' ? openEntry(item.id) : openFile(item)}>
+                <span class="name-cell" role="cell"><i class=${item.type === 'directory' ? 'folder' : 'document'}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${20}/></i><span><strong>${item.name}</strong><small>${item.type === 'directory' ? '文件夹' : (item.extension?.toUpperCase() || '文件')}</small></span>${!item.available && html`<em>不可用</em>`}</span>
+                <span class="size-cell" role="cell">${item.type === 'directory' ? '—' : formatSize(item.size)}</span>
+                <span class="date-cell" role="cell">${formatDate(item.modifiedAt)}</span>
+              </button>
+              <button class="row-action" onClick=${() => openManage(item)} aria-label=${`管理 ${item.name}`}><${Icon} name="more" size=${18}/></button>
+            </div>`)}
           </div>` : html`
           <div class="file-grid">
-            ${items.map((item) => html`<button key=${item.id} class="file-card" onClick=${() => item.type === 'directory' ? openEntry(item.id) : openFile(item)}>
-              <span class=${`card-icon ${item.type}`}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${30}/></span>
-              <strong title=${item.name}>${item.name}</strong><small>${item.type === 'directory' ? '文件夹' : formatSize(item.size)}</small>${!item.available && html`<em>不可用</em>`}
-            </button>`)}
+            ${items.map((item) => html`<article key=${item.id} class="file-card">
+              <button class="card-main" onClick=${() => item.type === 'directory' ? openEntry(item.id) : openFile(item)}>
+                <span class=${`card-icon ${item.type}`}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${30}/></span>
+                <strong title=${item.name}>${item.name}</strong><small>${item.type === 'directory' ? '文件夹' : formatSize(item.size)}</small>${!item.available && html`<em>不可用</em>`}
+              </button>
+              <button class="card-action" onClick=${() => openManage(item)} aria-label=${`管理 ${item.name}`}><${Icon} name="more" size=${18}/></button>
+            </article>`)}
           </div>`}
         ${cursor && html`<div class="load-more"><button onClick=${loadMore} disabled=${moreLoading}><${Icon} name="more"/>${moreLoading ? '正在加载…' : '加载更多'}</button></div>`}
       </section>
     </main>
     <${Preview} item=${preview} text=${previewText} loading=${previewLoading} error=${previewError} onClose=${() => setPreview(null)}/>
+    ${createFolderOpen && html`<div class="preview-scrim" onClick=${() => !actionSaving && setCreateFolderOpen(false)}><form class="action-dialog" role="dialog" aria-modal="true" aria-labelledby="create-folder-title" onSubmit=${createFolder} onClick=${(event) => event.stopPropagation()}><header><div><strong id="create-folder-title">新建文件夹</strong><span>在 ${entry?.name || activeLibrary?.name || '当前目录'} 中创建</span></div><button type="button" class="icon-button" onClick=${() => setCreateFolderOpen(false)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header><label>名称<input value=${folderName} onInput=${(event) => setFolderName(event.currentTarget.value)} maxlength="255" required/></label>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}<footer><button type="button" onClick=${() => setCreateFolderOpen(false)}>取消</button><button class="primary" disabled=${actionSaving}>${actionSaving ? '正在创建…' : '创建'}</button></footer></form></div>`}
+    ${manageItem && html`<div class="preview-scrim" onClick=${() => !actionSaving && setManageItem(null)}><form class="action-dialog" role="dialog" aria-modal="true" aria-labelledby="manage-entry-title" onSubmit=${renameEntry} onClick=${(event) => event.stopPropagation()}><header><div><strong id="manage-entry-title">管理条目</strong><span>${manageItem.type === 'directory' ? '文件夹' : formatSize(manageItem.size)}</span></div><button type="button" class="icon-button" onClick=${() => setManageItem(null)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header><label>名称<input value=${renameValue} onInput=${(event) => { setRenameValue(event.currentTarget.value); setDeleteArmed(false); }} maxlength="255" required/></label>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}${deleteArmed && html`<p class="delete-warning" role="alert">此操作无法撤销。再次点击删除以确认。</p>`}<footer class="manage-footer"><button type="button" class="danger" onClick=${() => deleteArmed ? deleteManagedEntry() : setDeleteArmed(true)} disabled=${actionSaving}><${Icon} name="trash" size=${16}/>${deleteArmed ? '确认删除' : '删除'}</button><span></span><button type="button" onClick=${() => setManageItem(null)}>取消</button><button class="primary" disabled=${actionSaving || renameValue.trim() === manageItem.name}>${actionSaving ? '正在保存…' : '重命名'}</button></footer></form></div>`}
   </div>`;
 }
 

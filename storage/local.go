@@ -169,7 +169,14 @@ func (l *Local) Mkdir(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	return os.Mkdir(full, 0755)
+	err = os.Mkdir(full, 0755)
+	if errors.Is(err, os.ErrExist) {
+		return ErrAlreadyExists
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return ErrNotFound
+	}
+	return err
 }
 
 func (l *Local) Rename(ctx context.Context, oldPath, newPath string) error {
@@ -184,7 +191,16 @@ func (l *Local) Rename(ctx context.Context, oldPath, newPath string) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(oldFull, newFull)
+	if _, err := os.Lstat(newFull); err == nil {
+		return ErrAlreadyExists
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	err = os.Rename(oldFull, newFull)
+	if errors.Is(err, os.ErrNotExist) {
+		return ErrNotFound
+	}
+	return err
 }
 
 func (l *Local) Remove(ctx context.Context, path string) error {
@@ -198,5 +214,12 @@ func (l *Local) Remove(ctx context.Context, path string) error {
 	if full == l.root {
 		return ErrPathTraversal
 	}
-	return os.Remove(full)
+	err = os.Remove(full)
+	if errors.Is(err, os.ErrNotExist) {
+		return ErrNotFound
+	}
+	if errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+		return ErrNotEmpty
+	}
+	return err
 }

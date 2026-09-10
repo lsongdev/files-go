@@ -54,3 +54,33 @@ func TestLocalOpenIsSeekable(t *testing.T) {
 		t.Fatalf("read = %q, want 56", buf)
 	}
 }
+
+func TestLocalMutationsDoNotOverwriteOrDeleteNonEmptyDirectories(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	local, err := NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Mkdir(ctx, "source"); err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Mkdir(ctx, "target"); err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Rename(ctx, "source", "target"); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("overwrite rename error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "source", "child.txt"), []byte("child"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Remove(ctx, "source"); !errors.Is(err, ErrNotEmpty) {
+		t.Fatalf("non-empty remove error = %v", err)
+	}
+	if err := local.Remove(ctx, "source/child.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Remove(ctx, "source"); err != nil {
+		t.Fatal(err)
+	}
+}

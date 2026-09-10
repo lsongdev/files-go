@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -47,6 +48,12 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "binary.dat"), []byte{'a', 0, 'b'}, 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Mkdir(filepath.Join(root, "Season"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Season", "episode.txt"), []byte("episode"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	db, err := database.Open(ctx, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +91,14 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	binaryFile, err := cat.EntryByPath(ctx, "disk", "binary.dat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	season, err := cat.EntryByPath(ctx, "disk", "Season")
+	if err != nil {
+		t.Fatal(err)
+	}
+	episode, err := cat.EntryByPath(ctx, "disk", "Season/episode.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,6 +160,63 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 	handler.ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
 		t.Fatalf("quoted search response = %d %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/entries/"+rootEntry.ID+"/directories", strings.NewReader(`{"name":"Drafts"}`))
+	req.Header.Set("Content-Type", "application/json")
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("create directory = %d %s", res.Code, res.Body.String())
+	}
+	var drafts entryResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &drafts); err != nil || drafts.Name != "Drafts" {
+		t.Fatalf("created directory response = %#v, %v", drafts, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Drafts")); err != nil {
+		t.Fatalf("created directory missing: %v", err)
+	}
+
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/entries/"+season.ID, strings.NewReader(`{"name":"Series"}`))
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("rename directory = %d %s", res.Code, res.Body.String())
+	}
+	if _, err := cat.EntryByPath(ctx, "disk", "Series/episode.txt"); err != nil {
+		t.Fatalf("descendant catalog path was not updated: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Series", "episode.txt")); err != nil {
+		t.Fatalf("renamed directory missing: %v", err)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/entries/"+season.ID, nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusConflict || !strings.Contains(res.Body.String(), "directory_not_empty") {
+		t.Fatalf("non-empty delete = %d %s", res.Code, res.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/entries/"+episode.ID, nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("delete file = %d %s", res.Code, res.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/entries/"+season.ID, nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("delete empty directory = %d %s", res.Code, res.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/entries/"+drafts.ID, nil)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("delete created directory = %d %s", res.Code, res.Body.String())
+	}
+	if _, err := cat.Entry(ctx, drafts.ID); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("deleted catalog entry error = %v", err)
 	}
 
 	// Catalog browsing remains functional without touching the now-missing disk.
