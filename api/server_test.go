@@ -181,6 +181,41 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "Drafts")); err != nil {
 		t.Fatalf("created directory missing: %v", err)
 	}
+	copyPayload, err := json.Marshal(map[string]string{"parentId": drafts.ID, "name": "Season Copy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/entries/"+season.ID+"/copies", bytes.NewReader(copyPayload))
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("copy directory = %d %s", res.Code, res.Body.String())
+	}
+	var copiedSeason entryResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &copiedSeason); err != nil {
+		t.Fatal(err)
+	}
+	copiedEpisode, err := cat.EntryByPath(ctx, "disk", "Drafts/Season Copy/episode.txt")
+	if err != nil {
+		t.Fatalf("copied descendant missing from catalog: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "Drafts", "Season Copy", "episode.txt")); err != nil || string(data) != "episode" {
+		t.Fatalf("copied descendant content = %q, %v", data, err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/entries/"+season.ID+"/copies", bytes.NewReader(copyPayload))
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusConflict || !strings.Contains(res.Body.String(), "entry_exists") {
+		t.Fatalf("duplicate copy = %d %s", res.Code, res.Body.String())
+	}
+	for _, copiedID := range []string{copiedEpisode.ID, copiedSeason.ID} {
+		req = httptest.NewRequest(http.MethodDelete, "/api/v1/entries/"+copiedID, nil)
+		res = httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+		if res.Code != http.StatusNoContent {
+			t.Fatalf("delete copied entry %s = %d %s", copiedID, res.Code, res.Body.String())
+		}
+	}
 	movePayload, err := json.Marshal(map[string]string{"parentId": drafts.ID})
 	if err != nil {
 		t.Fatal(err)

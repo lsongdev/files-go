@@ -15,6 +15,7 @@ var (
 	ErrOffline       = errors.New("storage offline")
 	ErrAlreadyExists = errors.New("storage path already exists")
 	ErrNotEmpty      = errors.New("storage directory is not empty")
+	ErrUnsupported   = errors.New("storage operation is not supported")
 )
 
 type FileInfo struct {
