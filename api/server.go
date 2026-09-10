@@ -1,16 +1,21 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"mime"
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/indexer"
@@ -45,6 +50,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/entries/{id}", s.getEntry)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/children", s.listChildren)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/content", s.content)
+	s.mux.HandleFunc("GET /api/v1/entries/{id}/text", s.text)
 }
 
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {
@@ -306,6 +312,88 @@ func (s *Server) content(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.ServeContent(w, r, entry.Name, entry.ModifiedAt, file)
+}
+
+const maxTextPreviewSize = 1 << 20
+
+func (s *Server) text(w http.ResponseWriter, r *http.Request) {
+	entry, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if entry.Type != model.EntryFile {
+		writeError(w, http.StatusBadRequest, "invalid_request", "entry is not a file")
+		return
+	}
+	if entry.Size > maxTextPreviewSize {
+		writeError(w, http.StatusRequestEntityTooLarge, "preview_too_large", "text preview is limited to 1 MiB")
+		return
+	}
+	if !entry.Available {
+		writeError(w, http.StatusNotFound, "entry_not_found", "entry is not available")
+		return
+	}
+	backend, ok := s.storages.Get(entry.StorageID)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "storage_offline", "storage is offline")
+		return
+	}
+	file, err := backend.Open(r.Context(), entry.Path)
+	if errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrOffline) {
+		writeError(w, http.StatusNotFound, "file_not_found", "file not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, fmt.Errorf("open text entry %s: %w", entry.ID, err))
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxTextPreviewSize+1))
+	if err != nil {
+		s.internalError(w, fmt.Errorf("read text entry %s: %w", entry.ID, err))
+		return
+	}
+	if len(data) > maxTextPreviewSize {
+		writeError(w, http.StatusRequestEntityTooLarge, "preview_too_large", "text preview is limited to 1 MiB")
+		return
+	}
+	text, ok := decodeText(data)
+	if !ok {
+		writeError(w, http.StatusUnsupportedMediaType, "binary_file", "file is not recognized as text")
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = io.WriteString(w, text)
+}
+
+func decodeText(data []byte) (string, bool) {
+	if bytes.HasPrefix(data, []byte{0xff, 0xfe}) || bytes.HasPrefix(data, []byte{0xfe, 0xff}) {
+		littleEndian := data[0] == 0xff
+		data = data[2:]
+		if len(data)%2 != 0 {
+			return "", false
+		}
+		units := make([]uint16, len(data)/2)
+		for index := range units {
+			if littleEndian {
+				units[index] = binary.LittleEndian.Uint16(data[index*2:])
+			} else {
+				units[index] = binary.BigEndian.Uint16(data[index*2:])
+			}
+		}
+		return string(utf16.Decode(units)), true
+	}
+	data = bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
+	if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
+		return "", false
+	}
+	return string(data), true
 }
 
 func (s *Server) internalError(w http.ResponseWriter, err error) {

@@ -15,6 +15,7 @@ file-manager features described in [`docs/design.md`](docs/design.md):
 - direct file content and HTTP Range support.
 - a responsive Preact list/grid UI with persistent light and dark themes;
 - SQLite FTS5 file search scoped by library, type, or extension.
+- native image, audio, video, PDF, and size-limited text previews.
 
 ## Configuration
 
@@ -56,6 +57,7 @@ GET  /api/v1/entries/{id}
 GET  /api/v1/entries/{id}/children
 GET  /api/v1/entries/{id}/content
 HEAD /api/v1/entries/{id}/content
+GET  /api/v1/entries/{id}/text
 ```
 
 ## Development

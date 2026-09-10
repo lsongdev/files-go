@@ -33,6 +33,7 @@ function Icon({ name, size = 20 }) {
     moon: html`<path d="M21 12.8A8.5 8.5 0 1 1 11.2 3 6.5 6.5 0 0 0 21 12.8z"/>`,
     search: html`<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>`,
     x: html`<path d="m6 6 12 12M18 6 6 18"/>`,
+    download: html`<path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/>`,
   };
   return html`<svg class="icon" width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.file}</svg>`;
 }
@@ -49,6 +50,39 @@ function formatSize(bytes) {
 function formatDate(value) {
   if (!value) return '—';
   return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
+}
+
+const textExtensions = new Set(['txt', 'md', 'nfo', 'srt', 'vtt', 'json', 'yaml', 'yml', 'toml', 'ini', 'conf', 'log', 'csv', 'xml', 'html', 'css', 'js', 'ts', 'jsx', 'tsx', 'go', 'py', 'sh']);
+
+function previewKind(item) {
+  const mime = item.mime || '';
+  const extension = (item.extension || '').toLowerCase();
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime === 'application/pdf' || extension === 'pdf') return 'pdf';
+  if (mime.startsWith('text/') || ['application/json', 'application/xml', 'application/x-subrip'].includes(mime) || textExtensions.has(extension)) return 'text';
+  return 'unknown';
+}
+
+function Preview({ item, text, loading, error, onClose }) {
+  if (!item) return null;
+  const kind = previewKind(item);
+  const contentURL = item.links.content;
+  return html`<div class="preview-scrim" onClick=${onClose}>
+    <section class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-title" onClick=${(event) => event.stopPropagation()}>
+      <header>
+        <div><strong id="preview-title" title=${item.name}>${item.name}</strong><span>${item.extension?.toUpperCase() || item.mime || '文件'} · ${formatSize(item.size)}</span></div>
+        <nav aria-label="预览操作">
+          <a class="icon-button" href=${contentURL} download=${item.name} aria-label="下载"><${Icon} name="download" size=${18}/></a>
+          <button class="icon-button" onClick=${onClose} aria-label="关闭预览" autofocus><${Icon} name="x" size=${18}/></button>
+        </nav>
+      </header>
+      <div class=${`preview-body ${kind}`}>
+        ${!item.available ? html`<div class="preview-message"><h2>文件当前不可用</h2><p>重新连接存储并扫描后即可预览。</p></div>` : kind === 'image' ? html`<img src=${contentURL} alt=${item.name}/>` : kind === 'audio' ? html`<audio src=${contentURL} controls preload="metadata"></audio>` : kind === 'video' ? html`<video src=${contentURL} controls preload="metadata"></video>` : kind === 'pdf' ? html`<iframe src=${contentURL} title=${item.name}></iframe>` : kind === 'text' ? (loading ? html`<div class="preview-message">正在读取文本…</div>` : error ? html`<div class="preview-message"><h2>无法预览文本</h2><p>${error}</p></div>` : html`<pre>${text}</pre>`) : html`<div class="preview-message"><div class="empty-icon"><${Icon} name="file" size=${30}/></div><h2>此格式没有内置预览</h2><p>${item.mime || '未知文件类型'}</p><a href=${contentURL} download=${item.name}>下载文件</a></div>`}
+      </div>
+    </section>
+  </div>`;
 }
 
 function routeEntryID() {
@@ -82,6 +116,10 @@ function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem('files-go-theme') || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
   const [searchQuery, setSearchQuery] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  const [preview, setPreview] = useState(null);
+  const [previewText, setPreviewText] = useState('');
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
 
   const activeLibrary = useMemo(() => libraries.find((item) => item.id === activeLibraryID), [libraries, activeLibraryID]);
   const storageByID = useMemo(() => Object.fromEntries(storages.map((item) => [item.id, item])), [storages]);
@@ -91,6 +129,17 @@ function App() {
     document.documentElement.style.colorScheme = theme;
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'light' ? '#f5f7fb' : '#0b0d12');
   }, [theme]);
+
+  useEffect(() => {
+    if (!preview) return undefined;
+    const close = (event) => { if (event.key === 'Escape') setPreview(null); };
+    document.body.classList.add('preview-open');
+    window.addEventListener('keydown', close);
+    return () => {
+      document.body.classList.remove('preview-open');
+      window.removeEventListener('keydown', close);
+    };
+  }, [preview]);
 
   const loadNavigation = useCallback(async () => {
     const [libraryData, storageData] = await Promise.all([request(`${API}/libraries`), request(`${API}/storages`)]);
@@ -255,6 +304,26 @@ function App() {
     if (entry) openEntry(entry.id, { history: false, libraryID: activeLibraryID });
   };
 
+  const openFile = async (item) => {
+    setPreview(item);
+    setPreviewText('');
+    setPreviewError('');
+    if (previewKind(item) !== 'text' || !item.available) return;
+    setPreviewLoading(true);
+    try {
+      const response = await fetch(`${API}/entries/${encodeURIComponent(item.id)}/text`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error?.message || `请求失败 (${response.status})`);
+      }
+      setPreviewText(await response.text());
+    } catch (reason) {
+      setPreviewError(reason.message || '无法读取文本');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
   const refresh = async () => {
     setError('');
     try {
@@ -349,14 +418,14 @@ function App() {
         ${loading ? html`<${Skeleton}/>` : items.length === 0 ? html`<${EmptyState} searchTerm=${searchTerm}/>` : view === 'list' ? html`
           <div class="file-table" role="table" aria-label="文件">
             <div class="table-head" role="row"><span>名称</span><span>大小</span><span>修改时间</span></div>
-            ${items.map((item) => html`<button key=${item.id} class="file-row" role="row" onClick=${() => item.type === 'directory' ? openEntry(item.id) : window.open(item.links.content, '_blank', 'noopener')}>
+            ${items.map((item) => html`<button key=${item.id} class="file-row" role="row" onClick=${() => item.type === 'directory' ? openEntry(item.id) : openFile(item)}>
               <span class="name-cell" role="cell"><i class=${item.type === 'directory' ? 'folder' : 'document'}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${20}/></i><span><strong>${item.name}</strong><small>${item.type === 'directory' ? '文件夹' : (item.extension?.toUpperCase() || '文件')}</small></span>${!item.available && html`<em>不可用</em>`}</span>
               <span class="size-cell" role="cell">${item.type === 'directory' ? '—' : formatSize(item.size)}</span>
               <span class="date-cell" role="cell">${formatDate(item.modifiedAt)}</span>
             </button>`)}
           </div>` : html`
           <div class="file-grid">
-            ${items.map((item) => html`<button key=${item.id} class="file-card" onClick=${() => item.type === 'directory' ? openEntry(item.id) : window.open(item.links.content, '_blank', 'noopener')}>
+            ${items.map((item) => html`<button key=${item.id} class="file-card" onClick=${() => item.type === 'directory' ? openEntry(item.id) : openFile(item)}>
               <span class=${`card-icon ${item.type}`}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${30}/></span>
               <strong title=${item.name}>${item.name}</strong><small>${item.type === 'directory' ? '文件夹' : formatSize(item.size)}</small>${!item.available && html`<em>不可用</em>`}
             </button>`)}
@@ -364,6 +433,7 @@ function App() {
         ${cursor && html`<div class="load-more"><button onClick=${loadMore} disabled=${moreLoading}><${Icon} name="more"/>${moreLoading ? '正在加载…' : '加载更多'}</button></div>`}
       </section>
     </main>
+    <${Preview} item=${preview} text=${previewText} loading=${previewLoading} error=${previewError} onClose=${() => setPreview(null)}/>
   </div>`;
 }
 
