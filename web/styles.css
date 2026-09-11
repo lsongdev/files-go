@@ -102,21 +102,13 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .side-label { margin: 2rem 0.65rem 0.65rem; color: var(--muted-2); font-size: 0.75rem; font-weight: 700; letter-spacing: 0.11em; text-transform: uppercase; }
 .library-nav { display: grid; gap: 0.25rem; }
 .library-item { min-width: 0; }
-.library-link { width: 100%; display: grid; grid-template-columns: 2rem 1fr auto; align-items: center; gap: 0.7rem; padding: 0.62rem 0.65rem; border: 1px solid transparent; border-radius: 0.7rem; background: transparent; text-align: left; cursor: pointer; }
+.library-link { width: 100%; min-height: 2.85rem; display: grid; grid-template-columns: 2rem minmax(0, 1fr); align-items: center; gap: 0.7rem; padding: 0.62rem 0.65rem; border: 1px solid transparent; border-radius: 0.7rem; background: transparent; text-align: left; cursor: pointer; }
 .library-link:hover { background: var(--panel-raised); }
 .library-link.active { border-color: var(--blue-border); background: var(--blue-soft); }
 .library-icon { color: var(--muted); }
 .library-link.active .library-icon { color: var(--active-icon); }
 .library-copy { display: grid; gap: 0.18rem; min-width: 0; }
 .library-copy strong { overflow: hidden; font-size: 0.9rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.library-copy small { color: var(--muted-2); font-size: 0.72rem; }
-.library-progress { height: 0.2rem; overflow: hidden; margin: -0.05rem 0.65rem 0.35rem 3.35rem; border-radius: 1rem; background: var(--line); }
-.library-progress span { height: 100%; display: block; border-radius: inherit; background: var(--blue); transition: width 0.3s ease; }
-.library-progress.indeterminate span { width: 38%; animation: scan-progress 1.35s ease-in-out infinite; }
-.status-dot { width: 0.42rem; height: 0.42rem; border-radius: 50%; background: var(--muted-2); }
-.status-dot.online { background: var(--green); box-shadow: 0 0 0.7rem var(--online-shadow); }
-.status-dot.scanning { background: var(--amber); animation: pulse 1.4s infinite; }
-.status-dot.offline, .status-dot.error, .status-dot.interrupted { background: var(--danger); }
 .activity-panel { margin-top: auto; display: grid; gap: 0.7rem; padding: 0.8rem; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--panel); }
 .activity-panel + .storage-summary { margin-top: 0.65rem; }
 .activity-panel > strong { color: var(--muted-2); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; }
@@ -125,8 +117,11 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .activity-row.interrupted > span { width: auto; height: auto; margin-top: 0; background: transparent; }
 .activity-row p { min-width: 0; display: grid; gap: 0.2rem; margin: 0; }
 .activity-row b { font-size: 0.78rem; font-weight: 650; }
-.activity-row small { color: var(--muted); font-size: 0.68rem; line-height: 1.45; }
+.activity-row small { color: var(--muted); font-size: 0.75rem; line-height: 1.45; }
 .activity-pulse { animation: pulse 1.4s infinite; }
+.activity-progress { height: 0.25rem; overflow: hidden; margin-top: 0.25rem; border-radius: 1rem; background: var(--line); }
+.activity-progress i { height: 100%; display: block; border-radius: inherit; background: var(--blue); transition: width 0.3s ease; }
+.activity-progress.indeterminate i { width: 38%; animation: activity-scan 1.35s ease-in-out infinite; }
 .storage-summary { margin-top: auto; display: flex; gap: 0.7rem; align-items: center; padding: 0.85rem; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--panel); }
 .summary-icon { color: var(--blue); }
 .storage-summary div { display: grid; gap: 0.15rem; }
@@ -267,7 +262,7 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .destination-list > p { margin: 0; padding: 2rem; color: var(--muted); font-size: 0.82rem; text-align: center; }
 
 @keyframes pulse { 50% { opacity: 0.35; } }
-@keyframes scan-progress { from { transform: translateX(-110%); } to { transform: translateX(290%); } }
+@keyframes activity-scan { from { transform: translateX(-110%); } to { transform: translateX(290%); } }
 @keyframes shimmer { to { background: var(--skeleton-active); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
 

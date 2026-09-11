@@ -62,31 +62,26 @@ function formatCount(value) {
   return new Intl.NumberFormat('zh-CN').format(value || 0);
 }
 
-function storageSubtitle(storage) {
-  if (!storage) return '等待存储状态';
-  if (storage.state === 'scanning') return `正在扫描 ${formatCount(storage.scanEntries)} 项 · ${formatCount(storage.scanDirectories)} 文件夹 · ${formatCount(storage.scanFiles)} 文件…`;
-  if (storage.state === 'interrupted') return '上次扫描已中断';
-  if (storage.state === 'offline') return '存储离线';
-  if (storage.state === 'error') return '扫描失败';
-  return '文件资料库';
-}
-
-function scanPercent(storage) {
-  if (!storage?.scanEstimate) return null;
-  return Math.min(99, Math.round((storage.scanEntries || 0) * 100 / storage.scanEstimate));
-}
-
 function ActivityPanel({ storages, processing }) {
   const scanning = storages.find((item) => item.state === 'scanning');
   const interrupted = storages.find((item) => item.state === 'interrupted');
   const activeJobs = (processing.pending || 0) + (processing.running || 0);
+  const scanPercent = scanning?.scanEstimate ? Math.min(99, Math.round((scanning.scanEntries || 0) * 100 / scanning.scanEstimate)) : null;
   if (!scanning && !interrupted && !activeJobs && !(processing.failed || 0)) return null;
   return html`<section class="activity-panel" aria-live="polite">
     <strong>后台活动</strong>
-    ${scanning && html`<div class="activity-row"><span class="activity-pulse"></span><p><b>正在扫描文件</b><small>${formatCount(scanning.scanEntries)} 个条目 · ${formatCount(scanning.scanDirectories)} 个文件夹 · ${formatCount(scanning.scanFiles)} 个文件</small></p></div>`}
+    ${scanning && html`<div class="activity-row"><span class="activity-pulse"></span><p><b>正在扫描文件${scanPercent == null ? '' : ` · ${scanPercent}%`}</b><small>${formatCount(scanning.scanEntries)} 个条目 · ${formatCount(scanning.scanDirectories)} 个文件夹 · ${formatCount(scanning.scanFiles)} 个文件</small><span class=${`activity-progress ${scanPercent == null ? 'indeterminate' : ''}`} role="progressbar" aria-label="整体扫描进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow=${scanPercent == null ? undefined : scanPercent}><i style=${scanPercent == null ? undefined : { width: `${scanPercent}%` }}></i></span></p></div>`}
     ${!scanning && interrupted && html`<div class="activity-row interrupted"><span>!</span><p><b>上次扫描已中断</b><small>已保留 ${formatCount(interrupted.scanEntries)} 个条目，可手动重新扫描</small></p></div>`}
     ${(activeJobs > 0 || processing.failed > 0) && html`<div class="activity-row"><span class=${processing.running ? 'activity-pulse' : ''}></span><p><b>媒体增强</b><small>${formatCount(processing.running)} 个处理中 · ${formatCount(processing.pending)} 个等待${processing.failed ? ` · ${formatCount(processing.failed)} 个失败` : ''}</small></p></div>`}
   </section>`;
+}
+
+function storageSummaryText(storages) {
+  const scanning = storages.filter((item) => item.state === 'scanning').length;
+  if (scanning) return `${scanning} 个正在扫描 · 可浏览`;
+  const available = storages.filter((item) => item.state === 'online').length;
+  const issues = storages.filter((item) => ['offline', 'error', 'interrupted'].includes(item.state)).length;
+  return issues ? `${available} 个可用 · ${issues} 个异常` : `${available} 个在线`;
 }
 
 const textExtensions = new Set(['txt', 'md', 'nfo', 'srt', 'vtt', 'json', 'yaml', 'yml', 'toml', 'ini', 'conf', 'log', 'csv', 'xml', 'html', 'css', 'js', 'ts', 'jsx', 'tsx', 'go', 'py', 'sh']);
@@ -681,21 +676,16 @@ function App() {
       <div class="side-label">资料库</div>
       <nav class="library-nav" aria-label="资料库">
         ${libraries.map((library) => {
-          const source = library.sources?.[0];
-          const libraryStorage = source ? storageByID[source.storageId] : null;
-          const storageState = libraryStorage?.state || 'unknown';
-          const percent = scanPercent(libraryStorage);
           return html`<div key=${library.id} class="library-item"><button class=${`library-link ${library.id === activeLibraryID ? 'active' : ''}`} onClick=${() => openLibrary(library)}>
             <span class="library-icon"><${Icon} name=${iconForLibrary(library.type)}/></span>
-            <span class="library-copy"><strong>${library.name}</strong><small>${storageSubtitle(libraryStorage)}</small></span>
-            <span class=${`status-dot ${storageState}`} title=${storageState}></span>
-          </button>${storageState === 'scanning' && html`<div class=${`library-progress ${percent == null ? 'indeterminate' : ''}`} role="progressbar" aria-label=${`${library.name} 扫描进度`} aria-valuemin="0" aria-valuemax="100" aria-valuenow=${percent == null ? undefined : percent}><span style=${percent == null ? undefined : { width: `${percent}%` }}></span></div>`}</div>`;
+            <span class="library-copy"><strong>${library.name}</strong></span>
+          </button></div>`;
         })}
       </nav>
       <${ActivityPanel} storages=${storages} processing=${processingStatus}/>
       <div class="storage-summary">
         <span class="summary-icon"><${Icon} name="drive"/></span>
-        <div><strong>${storages.length || '—'} 个存储</strong><span>${storages.filter((item) => item.state === 'online').length} 个在线</span></div>
+        <div><strong>${storages.length || '—'} 个存储</strong><span>${storageSummaryText(storages)}</span></div>
       </div>
     </aside>
 
