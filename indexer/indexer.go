@@ -115,13 +115,18 @@ func (i *Indexer) Scan(ctx context.Context, storageID string) error {
 	if !ok {
 		return fmt.Errorf("storage %q is not configured", storageID)
 	}
-	generation, err := i.catalog.BeginScan(ctx, storageID)
+	session, err := i.catalog.BeginScanSession(ctx, storageID)
 	if err != nil {
 		return err
 	}
+	generation := session.Generation
 	root, err := i.catalog.EnsureRoot(ctx, storageID, generation)
 	if err == nil {
-		progress := &scanProgress{entries: 1, directories: 1}
+		progress := &scanProgress{entries: session.Entries, files: session.Files, directories: session.Directories}
+		if !session.Resumed {
+			progress.entries = 1
+			progress.directories = 1
+		}
 		err = i.flushProgress(ctx, storageID, progress, true)
 		if err == nil {
 			err = i.scanDirectory(ctx, backend, storageID, root, generation, progress)
@@ -150,6 +155,13 @@ func (i *Indexer) Scan(ctx context.Context, storageID string) error {
 }
 
 func (i *Indexer) scanDirectory(ctx context.Context, backend storage.Storage, storageID string, parent *model.Entry, generation int64, progress *scanProgress) error {
+	checkpoint, err := i.catalog.ScanCheckpoint(ctx, storageID, generation, parent.Path)
+	if err != nil {
+		return err
+	}
+	if checkpoint.Complete {
+		return nil
+	}
 	infos, err := backend.ReadDir(ctx, parent.Path)
 	if err != nil {
 		return err
@@ -170,12 +182,14 @@ func (i *Indexer) scanDirectory(ctx context.Context, backend storage.Storage, st
 			MIME: mimeType, Extension: ext, ModifiedAt: info.ModifiedAt,
 			Inode: info.Inode, Device: info.Device, Available: true,
 		})
-		progress.entries++
-		progress.pending++
-		if info.Type == model.EntryDirectory {
-			progress.directories++
-		} else {
-			progress.files++
+		if !checkpoint.Listed {
+			progress.entries++
+			progress.pending++
+			if info.Type == model.EntryDirectory {
+				progress.directories++
+			} else {
+				progress.files++
+			}
 		}
 	}
 	if err := i.flushProgress(ctx, storageID, progress, false); err != nil {
@@ -195,6 +209,9 @@ func (i *Indexer) scanDirectory(ctx context.Context, backend storage.Storage, st
 			log.Printf("enqueue scanned entries: %v", err)
 		}
 	}
+	if err := i.catalog.MarkScanDirectoryListed(ctx, storageID, generation, parent.Path); err != nil {
+		return err
+	}
 	for index := range entries {
 		if entries[index].Type == model.EntryDirectory {
 			if err := i.scanDirectory(ctx, backend, storageID, &entries[index], generation, progress); err != nil {
@@ -202,7 +219,7 @@ func (i *Indexer) scanDirectory(ctx context.Context, backend storage.Storage, st
 			}
 		}
 	}
-	return nil
+	return i.catalog.MarkScanDirectoryComplete(ctx, storageID, generation, parent.Path)
 }
 
 func (i *Indexer) flushProgress(ctx context.Context, storageID string, progress *scanProgress, force bool) error {

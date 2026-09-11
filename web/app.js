@@ -66,12 +66,15 @@ function ActivityPanel({ storages, processing }) {
   const scanning = storages.find((item) => item.state === 'scanning');
   const interrupted = storages.find((item) => item.state === 'interrupted');
   const activeJobs = (processing.pending || 0) + (processing.running || 0);
-  const scanPercent = scanning?.scanEstimate ? Math.min(99, Math.round((scanning.scanEntries || 0) * 100 / scanning.scanEstimate)) : null;
+  const exactScanPercent = scanning?.scanEstimate ? (scanning.scanEntries || 0) * 100 / scanning.scanEstimate : null;
+  const scanPercent = exactScanPercent == null ? null : Math.min(99, Math.floor(exactScanPercent));
+  const scanPercentLabel = scanPercent === 0 && scanning.scanEntries > 0 ? '<1%' : `${scanPercent}%`;
+  const scanProgressWidth = scanPercent === 0 && scanning?.scanEntries > 0 ? 0.5 : scanPercent;
   if (!scanning && !interrupted && !activeJobs && !(processing.failed || 0)) return null;
   return html`<section class="activity-panel" aria-live="polite">
     <strong>后台活动</strong>
-    ${scanning && html`<div class="activity-row"><span class="activity-pulse"></span><p><b>正在扫描文件${scanPercent == null ? '' : ` · ${scanPercent}%`}</b><small>${formatCount(scanning.scanEntries)} 个条目 · ${formatCount(scanning.scanDirectories)} 个文件夹 · ${formatCount(scanning.scanFiles)} 个文件</small><span class=${`activity-progress ${scanPercent == null ? 'indeterminate' : ''}`} role="progressbar" aria-label="整体扫描进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow=${scanPercent == null ? undefined : scanPercent}><i style=${scanPercent == null ? undefined : { width: `${scanPercent}%` }}></i></span></p></div>`}
-    ${!scanning && interrupted && html`<div class="activity-row interrupted"><span>!</span><p><b>上次扫描已中断</b><small>已保留 ${formatCount(interrupted.scanEntries)} 个条目，可手动重新扫描</small></p></div>`}
+    ${scanning && html`<div class="activity-row"><span class="activity-pulse"></span><p><b>正在扫描文件${scanPercent == null ? '' : ` · ${scanPercentLabel}`}</b><small>${formatCount(scanning.scanEntries)} 个条目 · ${formatCount(scanning.scanDirectories)} 个文件夹 · ${formatCount(scanning.scanFiles)} 个文件</small><span class=${`activity-progress ${scanPercent == null ? 'indeterminate' : ''}`} role="progressbar" aria-label="整体扫描进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow=${scanPercent == null ? undefined : scanPercent}><i style=${scanPercent == null ? undefined : { width: `${scanProgressWidth}%` }}></i></span></p></div>`}
+    ${!scanning && interrupted && html`<div class="activity-row interrupted"><span>!</span><p><b>上次扫描已中断</b><small>已保留 ${formatCount(interrupted.scanEntries)} 个条目，服务恢复后会从检查点继续</small></p></div>`}
     ${(activeJobs > 0 || processing.failed > 0) && html`<div class="activity-row"><span class=${processing.running ? 'activity-pulse' : ''}></span><p><b>媒体增强</b><small>${formatCount(processing.running)} 个处理中 · ${formatCount(processing.pending)} 个等待${processing.failed ? ` · ${formatCount(processing.failed)} 个失败` : ''}</small></p></div>`}
   </section>`;
 }
