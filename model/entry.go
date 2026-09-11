@@ -111,3 +111,12 @@ type MediaItemFile struct {
 	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"createdAt"`
 }
+
+type PlaybackState struct {
+	UserID     string     `json:"-"`
+	MediaID    string     `json:"mediaId"`
+	PositionMS int64      `json:"positionMs"`
+	Played     bool       `json:"played"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
+	Media      *MediaItem `json:"media,omitempty"`
+}

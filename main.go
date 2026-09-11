@@ -18,6 +18,7 @@ import (
 	"github.com/lsongdev/files-go/jobs"
 	mediaengine "github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/model"
+	"github.com/lsongdev/files-go/playback"
 	"github.com/lsongdev/files-go/processor"
 	"github.com/lsongdev/files-go/storage"
 	"github.com/lsongdev/files-go/web"
@@ -105,7 +106,8 @@ func main() {
 			}
 		}()
 	}
-	apiServer := api.New(ctx, catalogDB, registry, idx, log.Default(), cfg.CacheDir)
+	playbackManager := playback.NewManager(ctx, catalogDB, registry, cfg.Processing.FFmpeg, cfg.CacheDir, 2)
+	apiServer := api.New(ctx, catalogDB, registry, idx, log.Default(), cfg.CacheDir, playbackManager)
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiServer.Handler())
 	mux.Handle("/", web.Handler())
