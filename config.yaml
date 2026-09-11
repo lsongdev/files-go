@@ -8,6 +8,11 @@ processing:
   ffprobe: ffprobe
   pdfinfo: pdfinfo
 
+media:
+  tmdb:
+    token: "${TMDB_TOKEN}"
+    language: zh-CN
+
 storages:
   - id: data
     name: Data

@@ -44,6 +44,7 @@ function Icon({ name, size = 20 }) {
 }
 
 const iconForLibrary = (type) => ({ movies: 'movies', tv: 'tv', music: 'music', photos: 'photos', books: 'files', files: 'files' }[type] || 'files');
+const mediaTypeForLibrary = (type) => ({ movies: 'movie', tv: 'series', music: 'track', photos: 'photo', books: 'book' }[type]);
 
 function formatSize(bytes) {
   if (!bytes) return '—';
@@ -111,6 +112,15 @@ function EmptyState({ searchTerm }) {
   return html`<div class="empty-state"><div class="empty-icon"><${Icon} name=${searchTerm ? 'search' : 'folder'} size=${30}/></div><h2>${searchTerm ? '没有找到匹配文件' : '这个目录是空的'}</h2><p>${searchTerm ? `尝试更换关键词，或在其他资料库中搜索。` : '扫描到的文件会显示在这里。'}</p></div>`;
 }
 
+function MediaGallery({ items, onOpen }) {
+  return html`<div class="media-grid">${items.map((item) => {
+    const detail = item.metadata || {};
+    const subtitle = item.type === 'track' ? (detail.music?.artist || detail.music?.album || '音乐') : item.type === 'photo' ? '照片' : item.type === 'book' ? (detail.authors?.join('、') || '图书') : (item.year || item.type);
+    const artwork = ['movie', 'series', 'season', 'episode'].includes(item.type) ? `${API}/media/${encodeURIComponent(item.id)}/poster` : item.type === 'photo' && item.primaryEntryId ? `${API}/entries/${encodeURIComponent(item.primaryEntryId)}/thumbnail?size=medium` : '';
+    return html`<button key=${item.id} class=${`media-card ${item.type}`} onClick=${() => onOpen(item)}><span class="media-art">${artwork ? html`<img src=${artwork} alt="" loading="lazy" onError=${(event) => event.currentTarget.classList.add('failed')}/>` : html`<i><${Icon} name=${item.type === 'track' ? 'music' : item.type === 'photo' ? 'photos' : 'files'} size=${38}/></i>`}</span><strong title=${item.title}>${item.title}</strong><small>${subtitle}</small></button>`;
+  })}</div>`;
+}
+
 function App() {
   const [libraries, setLibraries] = useState([]);
   const [storages, setStorages] = useState([]);
@@ -118,6 +128,8 @@ function App() {
   const [entry, setEntry] = useState(null);
   const [trail, setTrail] = useState([]);
   const [items, setItems] = useState([]);
+  const [mediaItems, setMediaItems] = useState([]);
+  const [browseMode, setBrowseMode] = useState('files');
   const [cursor, setCursor] = useState(null);
   const [loading, setLoading] = useState(true);
   const [moreLoading, setMoreLoading] = useState(false);
@@ -218,6 +230,8 @@ function App() {
     setError('');
     setSearchQuery('');
     setSearchTerm('');
+    setBrowseMode('files');
+    setMediaItems([]);
     setNavOpen(false);
     try {
       const [current, children] = await Promise.all([
@@ -236,11 +250,26 @@ function App() {
     }
   }, [activeLibraryID, buildTrail, libraries]);
 
-  const openLibrary = useCallback((library) => {
+  const loadMediaLibrary = useCallback(async (library) => {
+    const mediaType = mediaTypeForLibrary(library?.type);
+    if (!mediaType) return;
+    try {
+      const parameters = new URLSearchParams({ type: mediaType, library: library.id, limit: '500' });
+      const data = await request(`${API}/media?${parameters}`);
+      const enhanced = data.items || [];
+      setMediaItems(enhanced);
+      if (enhanced.length) setBrowseMode('media');
+    } catch (_) {
+      // Media enhancement is optional; file browsing remains available.
+    }
+  }, []);
+
+  const openLibrary = useCallback(async (library) => {
     setActiveLibraryID(library.id);
     const source = library.sources?.find((item) => item.entryId);
     if (source) {
-      openEntry(source.entryId, { libraryID: library.id });
+      await openEntry(source.entryId, { libraryID: library.id });
+      await loadMediaLibrary(library);
     } else {
       setEntry(null);
       setItems([]);
@@ -248,7 +277,7 @@ function App() {
       setError('资料库尚未完成首次扫描，请稍后刷新。');
       setNavOpen(false);
     }
-  }, [openEntry]);
+  }, [loadMediaLibrary, openEntry]);
 
   useEffect(() => {
     let cancelled = false;
@@ -262,6 +291,7 @@ function App() {
         if (first) {
           setActiveLibraryID(first.id);
           await openEntry(first.sources.find((source) => source.entryId).entryId, { history: false, libraryID: first.id, libraryList });
+          await loadMediaLibrary(first);
         } else {
           setLoading(false);
           setError('正在建立文件索引，请稍后刷新。');
@@ -330,6 +360,7 @@ function App() {
       setCursor(null);
       setSearchQuery(query);
       setSearchTerm(query);
+      setBrowseMode('files');
     } catch (reason) {
       setError(reason.message || '搜索失败');
     } finally {
@@ -365,6 +396,17 @@ function App() {
       setPreviewError(reason.message || '无法读取文本');
     } finally {
       setPreviewLoading(false);
+    }
+  };
+
+  const openMediaItem = async (item) => {
+    try {
+      const detailed = await request(`${API}/media/${encodeURIComponent(item.id)}`);
+      const file = detailed.files?.[0];
+      if (!file) return;
+      openFile(await request(`${API}/entries/${encodeURIComponent(file.entryId)}`));
+    } catch (reason) {
+      setError(reason.message || '无法打开媒体');
     }
   };
 
@@ -508,7 +550,11 @@ function App() {
     try {
       const libraryList = await loadNavigation();
       if (searchTerm) await performSearch(searchTerm);
-      else if (entry) await openEntry(entry.id, { history: false, libraryID: activeLibraryID });
+      else if (entry) {
+        const restoreMedia = browseMode === 'media';
+        await openEntry(entry.id, { history: false, libraryID: activeLibraryID });
+        if (restoreMedia && activeLibrary) await loadMediaLibrary(activeLibrary);
+      }
       else {
         const library = libraryList.find((item) => item.id === activeLibraryID) || libraryList[0];
         if (library) openLibrary(library);
@@ -579,6 +625,7 @@ function App() {
         <div class="top-actions">
           <button class="icon-button" onClick=${toggleTheme} aria-label=${theme === 'dark' ? '切换到亮色模式' : '切换到暗色模式'} title=${theme === 'dark' ? '亮色模式' : '暗色模式'}><${Icon} name=${theme === 'dark' ? 'sun' : 'moon'}/></button>
           <button class="icon-button" onClick=${refresh} aria-label="刷新"><${Icon} name="refresh"/></button>
+          ${mediaItems.length > 0 && html`<div class="view-switch mode-switch" role="group" aria-label="浏览模式"><button class=${browseMode === 'media' ? 'active' : ''} onClick=${() => setBrowseMode('media')} aria-label="媒体库"><${Icon} name=${iconForLibrary(activeLibrary?.type)} size=${18}/></button><button class=${browseMode === 'files' ? 'active' : ''} onClick=${() => setBrowseMode('files')} aria-label="文件"><${Icon} name="files" size=${18}/></button></div>`}
           <div class="view-switch" role="group" aria-label="显示方式">
             <button class=${view === 'list' ? 'active' : ''} onClick=${() => setViewMode('list')} aria-label="列表"><${Icon} name="list" size=${18}/></button>
             <button class=${view === 'grid' ? 'active' : ''} onClick=${() => setViewMode('grid')} aria-label="网格"><${Icon} name="grid" size=${18}/></button>
@@ -587,14 +634,14 @@ function App() {
       </header>
 
       <section class="content-head">
-        <div><p>${searchTerm ? `在 ${activeLibrary?.name || '所有文件'} 中搜索` : (activeLibrary?.type || 'files')}</p><h1>${searchTerm ? `“${searchTerm}”` : (entry?.name || activeLibrary?.name || '文件')}</h1></div>
-        <div class="head-meta"><span>${items.length}${cursor ? '+' : ''} 个项目</span>${entry && !searchTerm && html`<label class=${`scan-button upload-button ${uploading ? 'disabled' : ''}`}><${Icon} name="upload" size=${16}/>${uploading ? '正在上传…' : '上传'}<input type="file" multiple disabled=${uploading} onChange=${uploadFiles}/></label><button class="scan-button" onClick=${() => { setFolderName(''); setActionError(''); setCreateFolderOpen(true); }}><${Icon} name="plus" size=${16}/>新建文件夹</button>`}<button class="scan-button" onClick=${rescan}><${Icon} name="refresh" size=${16}/>重新扫描</button></div>
+        <div><p>${searchTerm ? `在 ${activeLibrary?.name || '所有文件'} 中搜索` : (browseMode === 'media' ? 'media catalog' : (activeLibrary?.type || 'files'))}</p><h1>${searchTerm ? `“${searchTerm}”` : (browseMode === 'media' ? activeLibrary?.name : (entry?.name || activeLibrary?.name || '文件'))}</h1></div>
+        <div class="head-meta"><span>${browseMode === 'media' ? mediaItems.length : `${items.length}${cursor ? '+' : ''}`} 个项目</span>${browseMode === 'files' && entry && !searchTerm && html`<label class=${`scan-button upload-button ${uploading ? 'disabled' : ''}`}><${Icon} name="upload" size=${16}/>${uploading ? '正在上传…' : '上传'}<input type="file" multiple disabled=${uploading} onChange=${uploadFiles}/></label><button class="scan-button" onClick=${() => { setFolderName(''); setActionError(''); setCreateFolderOpen(true); }}><${Icon} name="plus" size=${16}/>新建文件夹</button>`}<button class="scan-button" onClick=${rescan}><${Icon} name="refresh" size=${16}/>重新扫描</button></div>
       </section>
 
       ${error && html`<div class="error-banner" role="alert"><span>${error}</span><button onClick=${refresh}>重试</button></div>`}
 
       <section class="browser" aria-live="polite">
-        ${loading ? html`<${Skeleton}/>` : items.length === 0 ? html`<${EmptyState} searchTerm=${searchTerm}/>` : view === 'list' ? html`
+        ${loading ? html`<${Skeleton}/>` : browseMode === 'media' ? html`<${MediaGallery} items=${mediaItems} onOpen=${openMediaItem}/>` : items.length === 0 ? html`<${EmptyState} searchTerm=${searchTerm}/>` : view === 'list' ? html`
           <div class="file-table" role="table" aria-label="文件">
             <div class="table-head" role="row"><span>名称</span><span>大小</span><span>修改时间</span><span></span></div>
             ${items.map((item) => html`<div key=${item.id} class="file-row" role="row">
@@ -615,7 +662,7 @@ function App() {
               <button class="card-action" onClick=${() => openManage(item)} aria-label=${`管理 ${item.name}`}><${Icon} name="more" size=${18}/></button>
             </article>`)}
           </div>`}
-        ${cursor && html`<div class="load-more"><button onClick=${loadMore} disabled=${moreLoading}><${Icon} name="more"/>${moreLoading ? '正在加载…' : '加载更多'}</button></div>`}
+        ${browseMode === 'files' && cursor && html`<div class="load-more"><button onClick=${loadMore} disabled=${moreLoading}><${Icon} name="more"/>${moreLoading ? '正在加载…' : '加载更多'}</button></div>`}
       </section>
     </main>
     <${Preview} item=${preview} text=${previewText} loading=${previewLoading} error=${previewError} onClose=${() => setPreview(null)}/>

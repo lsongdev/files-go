@@ -16,6 +16,7 @@ import (
 	"github.com/lsongdev/files-go/database"
 	"github.com/lsongdev/files-go/indexer"
 	"github.com/lsongdev/files-go/jobs"
+	mediaengine "github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/model"
 	"github.com/lsongdev/files-go/processor"
 	"github.com/lsongdev/files-go/storage"
@@ -66,13 +67,21 @@ func main() {
 	}
 	idx := indexer.New(catalogDB, registry)
 	jobQueue := jobs.New(db, 2*time.Minute)
-	processing := processor.New(catalogDB, jobQueue,
+	processors := []processor.Processor{
 		processor.NewImageMetadata(catalogDB, registry),
 		processor.NewFFProbe(catalogDB, registry, cfg.Processing.FFProbe, 30*time.Second),
 		processor.NewEPUBMetadata(catalogDB, registry),
 		processor.NewPDFMetadata(catalogDB, registry, cfg.Processing.PDFInfo, 30*time.Second),
 		processor.NewThumbnail(catalogDB, registry, cfg.CacheDir),
-	)
+		mediaengine.NewCataloger(catalogDB),
+	}
+	if cfg.Media.TMDB.Token != "" {
+		processors = append(processors,
+			mediaengine.NewMatcher(catalogDB, mediaengine.NewTMDB(cfg.Media.TMDB.Token, nil), cfg.Media.TMDB.Language),
+			mediaengine.NewPoster(catalogDB, cfg.CacheDir, nil),
+		)
+	}
+	processing := processor.New(catalogDB, jobQueue, processors...)
 	idx.SetEntrySink(processing)
 	workerPool := jobs.NewPool(jobQueue, cfg.Processing.Workers)
 	workerPool.Handle(processor.JobProcessEntry, processing.Handle)
