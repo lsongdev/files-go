@@ -50,6 +50,34 @@ func TestSystemStatusReportsProcessingQueue(t *testing.T) {
 	}
 }
 
+func TestThumbnailPendingDoesNotProduceNoisyNotFound(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := cat.BeginScan(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{{StorageID: "disk", Name: "photo.jpg", Path: "photo.jpg", Type: model.EntryFile, Extension: "jpg"}}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := storage.NewRegistry()
+	server := New(ctx, cat, registry, indexer.New(cat, registry), log.Default(), t.TempDir())
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+entries[0].ID+"/thumbnail?size=medium", nil))
+	if response.Code != http.StatusNoContent || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("pending thumbnail = %d, headers = %#v", response.Code, response.Header())
+	}
+}
+
 func TestDecodeText(t *testing.T) {
 	utf16LE := []byte{0xff, 0xfe, 0, 0, 0, 0}
 	binary.LittleEndian.PutUint16(utf16LE[2:], 'A')

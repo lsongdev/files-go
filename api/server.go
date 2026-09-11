@@ -418,8 +418,7 @@ func (s *Server) thumbnail(w http.ResponseWriter, r *http.Request) {
 		if entry, entryErr := s.catalog.Entry(r.Context(), r.PathValue("id")); entryErr == nil {
 			s.reprocess(*entry)
 		}
-		w.Header().Set("Retry-After", "2")
-		writeError(w, http.StatusNotFound, "thumbnail_not_ready", "thumbnail is not available yet")
+		writeThumbnailPending(w)
 		return
 	}
 	if err != nil {
@@ -436,8 +435,7 @@ func (s *Server) thumbnail(w http.ResponseWriter, r *http.Request) {
 		if entry, entryErr := s.catalog.Entry(r.Context(), r.PathValue("id")); entryErr == nil {
 			s.reprocess(*entry)
 		}
-		w.Header().Set("Retry-After", "2")
-		writeError(w, http.StatusNotFound, "thumbnail_not_ready", "thumbnail cache is being rebuilt")
+		writeThumbnailPending(w)
 		return
 	}
 	if err != nil {
@@ -456,6 +454,12 @@ func (s *Server) thumbnail(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, artifact.ID+".jpg", info.ModTime(), file)
 	go func() { _ = s.catalog.TouchArtifact(s.ctx, artifact.ID) }()
+}
+
+func writeThumbnailPending(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "2")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) reprocess(entry model.Entry) {
