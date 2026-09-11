@@ -230,6 +230,17 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 		t.Fatalf("binary preview = %d %s", res.Code, res.Body.String())
 	}
 
+	for _, target := range []string{
+		"/api/v1/entries/" + notes.ID + "/media?optional=1",
+		"/api/v1/entries/" + notes.ID + "/media-item?optional=1",
+	} {
+		res = httptest.NewRecorder()
+		handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, target, nil))
+		if res.Code != http.StatusNoContent {
+			t.Fatalf("optional media lookup %s = %d %s", target, res.Code, res.Body.String())
+		}
+	}
+
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+photo.ID+"/media", nil)
 	res = httptest.NewRecorder()
 	handler.ServeHTTP(res, req)

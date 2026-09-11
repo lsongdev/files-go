@@ -37,10 +37,11 @@ func (p *Cataloger) Process(ctx context.Context, entry model.Entry) error {
 	if err != nil {
 		return err
 	}
+	if technical.Kind == "audio" {
+		return p.catalogAudio(ctx, entry, *technical)
+	}
 	itemType, role := "", ""
 	switch technical.Kind {
-	case "audio":
-		itemType, role = "track", "audio"
 	case "photo":
 		itemType, role = "photo", "photo"
 	case "book":
@@ -86,6 +87,99 @@ func (p *Cataloger) Process(ctx context.Context, entry model.Entry) error {
 		return err
 	}
 	return p.catalog.AssociateMediaFile(ctx, item.ID, entry.ID, role)
+}
+
+func (p *Cataloger) catalogAudio(ctx context.Context, entry model.Entry, technical model.MediaFile) error {
+	var document struct {
+		Music struct {
+			Title       string `json:"title"`
+			Artist      string `json:"artist"`
+			AlbumArtist string `json:"album_artist"`
+			Album       string `json:"album"`
+			Track       string `json:"track"`
+		} `json:"music"`
+	}
+	_ = json.Unmarshal(technical.Metadata, &document)
+	title := strings.TrimSpace(document.Music.Title)
+	if title == "" {
+		title = strings.TrimSuffix(entry.Name, filepath.Ext(entry.Name))
+	}
+	artistName := strings.TrimSpace(document.Music.AlbumArtist)
+	if artistName == "" {
+		artistName = strings.TrimSpace(document.Music.Artist)
+	}
+	albumName := strings.TrimSpace(document.Music.Album)
+
+	parentID := ""
+	var artist, album *model.MediaItem
+	var err error
+	if artistName != "" {
+		artist, err = p.ensureEmbeddedMediaItem(ctx, "artist", artistName, "embedded:artist:"+normalizedTitle(artistName), "", nil, nil)
+		if err != nil {
+			return err
+		}
+		parentID = artist.ID
+	}
+	if albumName != "" {
+		albumKey := "embedded:album:" + normalizedTitle(artistName) + ":" + normalizedTitle(albumName)
+		album, err = p.ensureEmbeddedMediaItem(ctx, "album", albumName, albumKey, parentID, nil, technical.Metadata)
+		if err != nil {
+			return err
+		}
+		parentID = album.ID
+	}
+	trackNumber := leadingNumber(document.Music.Track)
+	track, err := p.catalog.MediaItemForEntry(ctx, entry.ID, "audio")
+	if errors.Is(err, catalog.ErrNotFound) {
+		track, err = p.catalog.UpsertMediaItem(ctx, model.MediaItem{Type: "track", Title: title, SortTitle: sortTitle(title), ParentID: parentID,
+			IndexNumber: trackNumber, ExternalID: "entry:" + entry.ID, MatchSource: "embedded", MatchConfidence: 1, Metadata: technical.Metadata})
+	} else if err == nil && (track.ParentID != parentID || track.IndexNumber == nil && trackNumber != nil) {
+		track.ParentID = parentID
+		track.IndexNumber = trackNumber
+		track.Metadata = technical.Metadata
+		track, err = p.catalog.UpsertMediaItem(ctx, *track)
+	}
+	if err != nil {
+		return err
+	}
+	for _, association := range []struct {
+		item *model.MediaItem
+		role string
+	}{{artist, "artist"}, {album, "album"}, {track, "audio"}} {
+		if association.item != nil {
+			if err := p.catalog.AssociateMediaFile(ctx, association.item.ID, entry.ID, association.role); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (p *Cataloger) ensureEmbeddedMediaItem(ctx context.Context, itemType, title, externalID, parentID string, indexNumber *int, metadata []byte) (*model.MediaItem, error) {
+	item, err := p.catalog.MediaItemByExternalID(ctx, itemType, externalID)
+	if errors.Is(err, catalog.ErrNotFound) {
+		item, err = p.catalog.UpsertMediaItem(ctx, model.MediaItem{Type: itemType, Title: title, SortTitle: sortTitle(title), ParentID: parentID,
+			IndexNumber: indexNumber, ExternalID: externalID, MatchSource: "embedded", MatchConfidence: 1, Metadata: metadata})
+	}
+	return item, err
+}
+
+func leadingNumber(value string) *int {
+	value = strings.TrimSpace(strings.SplitN(value, "/", 2)[0])
+	if value == "" {
+		return nil
+	}
+	number := 0
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			break
+		}
+		number = number*10 + int(char-'0')
+	}
+	if number <= 0 {
+		return nil
+	}
+	return &number
 }
 
 func (p *Cataloger) catalogVideo(ctx context.Context, entry model.Entry, technical model.MediaFile) error {

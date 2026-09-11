@@ -723,6 +723,35 @@ func (c *Catalog) MediaFile(ctx context.Context, entryID string) (*model.MediaFi
 	return &item, nil
 }
 
+// EntriesMissingMediaAssociation pages through files whose extracted metadata
+// can support a hierarchy but which have not yet received the requested role.
+// It is used for small, versioned startup backfills without rescanning storage.
+func (c *Catalog) EntriesMissingMediaAssociation(ctx context.Context, kind, role, afterID string, limit int) ([]model.Entry, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := c.reader.QueryContext(ctx, `SELECT `+qualifiedEntryColumns+`
+		FROM entries e JOIN media_files technical ON technical.entry_id=e.id
+		WHERE technical.kind=? AND e.available=1 AND e.id>? AND
+			(?!='album' OR trim(COALESCE(json_extract(technical.metadata, '$.music.album'), ''))!='') AND
+			NOT EXISTS (SELECT 1 FROM media_item_files association
+				WHERE association.entry_id=e.id AND association.role=?)
+		ORDER BY e.id LIMIT ?`, kind, afterID, role, role, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.Entry, 0, limit)
+	for rows.Next() {
+		entry, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, entry)
+	}
+	return items, rows.Err()
+}
+
 func (c *Catalog) UpsertArtifact(ctx context.Context, item model.Artifact) (*model.Artifact, error) {
 	if item.ID == "" {
 		item.ID = uuid.Must(uuid.NewV7()).String()

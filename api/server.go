@@ -307,8 +307,26 @@ func (s *Server) getMediaItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getEntryMediaItem(w http.ResponseWriter, r *http.Request) {
-	item, err := s.catalog.MediaItemForEntry(r.Context(), r.PathValue("id"), r.URL.Query().Get("role"))
+	entry, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
 	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	var item *model.MediaItem
+	if entry.Type == model.EntryDirectory {
+		item, err = s.catalog.MediaItemForDirectory(r.Context(), *entry)
+	} else {
+		item, err = s.catalog.MediaItemForEntry(r.Context(), entry.ID, r.URL.Query().Get("role"))
+	}
+	if errors.Is(err, catalog.ErrNotFound) {
+		if r.URL.Query().Get("optional") == "1" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		writeError(w, http.StatusNotFound, "media_not_matched", "entry is not matched to a media item")
 		return
 	}
@@ -393,6 +411,10 @@ func (s *Server) getMediaFile(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, catalog.ErrNotFound) {
 		if entry, entryErr := s.catalog.Entry(r.Context(), r.PathValue("id")); entryErr == nil {
 			s.reprocess(*entry)
+		}
+		if r.URL.Query().Get("optional") == "1" {
+			w.WriteHeader(http.StatusNoContent)
+			return
 		}
 		writeError(w, http.StatusNotFound, "metadata_not_ready", "media metadata is not available yet")
 		return

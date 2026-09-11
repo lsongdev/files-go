@@ -64,11 +64,27 @@ func TestSearchAssetsIncludeSearchAPIAndAccessibleControl(t *testing.T) {
 	}
 }
 
-func TestPreviewAssetsIncludeNativeAndTextPreviews(t *testing.T) {
+func TestFileDetailAssetsIncludeNativeAndTextPreviews(t *testing.T) {
 	response := httptest.NewRecorder()
 	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	body := response.Body.String()
-	for _, expected := range []string{"/text`", "aria-modal", "<video", "<audio", "<iframe", "关闭预览"} {
+	for _, expected := range []string{"/text`", "FileDetail", "file-detail", "detail-preview", "<video", "<audio", "<iframe"} {
+		if response.Code != http.StatusOK || !strings.Contains(body, expected) {
+			t.Fatalf("app.js does not contain %q", expected)
+		}
+	}
+	for _, removed := range []string{"function Preview", "preview-dialog", "关闭预览"} {
+		if strings.Contains(body, removed) {
+			t.Fatalf("app.js still contains modal preview marker %q", removed)
+		}
+	}
+}
+
+func TestMediaDetailAssetsIncludeFileAndDirectoryEnhancement(t *testing.T) {
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	body := response.Body.String()
+	for _, expected := range []string{"MediaHeader", "media-header", "/media-item", "current.type === 'directory'", "entry?.type === 'file'"} {
 		if response.Code != http.StatusOK || !strings.Contains(body, expected) {
 			t.Fatalf("app.js does not contain %q", expected)
 		}
