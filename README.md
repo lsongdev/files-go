@@ -6,7 +6,8 @@ rebuildable SQLite catalog so directory browsing and metadata requests never
 need to wake or enumerate disks.
 
 The current implementation provides the Phase 1 core, the Phase 2 file manager,
-and Phase 3 background processing described in [`docs/design.md`](docs/design.md):
+Phase 3 background processing, and the Phase 4 media catalog described in
+[`docs/design.md`](docs/design.md):
 
 - local storage isolation with traversal and symlink-escape protection;
 - an opaque-ID filesystem catalog and SQLite migrations;
@@ -22,6 +23,9 @@ and Phase 3 background processing described in [`docs/design.md`](docs/design.md
 - image dimensions and cached small/medium/large thumbnails;
 - ffprobe-backed video, audio, and normalized music metadata;
 - bounded EPUB package parsing and pdfinfo-backed PDF metadata.
+- separate movie, series/season/episode, track, photo, and book catalog items;
+- optional TMDB movie/TV matching with confidence scoring and manual override APIs;
+- cached TMDB posters and library-scoped media galleries.
 
 ## Configuration
 
@@ -35,6 +39,11 @@ processing:
   workers: 2
   ffprobe: ffprobe
   pdfinfo: pdfinfo
+
+media:
+  tmdb:
+    token: "${TMDB_TOKEN}"
+    language: zh-CN
 
 storages:
   - id: data
@@ -76,6 +85,13 @@ HEAD /api/v1/entries/{id}/content
 GET  /api/v1/entries/{id}/text
 GET  /api/v1/entries/{id}/media
 GET  /api/v1/entries/{id}/thumbnail?size=medium
+GET  /api/v1/media?type=movie&library=movies
+GET  /api/v1/media/{id}
+GET  /api/v1/media/{id}/poster
+GET  /api/v1/entries/{id}/media-item
+PUT  /api/v1/entries/{id}/media-item
+DELETE /api/v1/entries/{id}/media-item
+POST /api/v1/entries/{id}/media-item/rematch
 ```
 
 ## Development

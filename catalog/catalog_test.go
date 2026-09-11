@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/lsongdev/files-go/database"
@@ -103,5 +104,48 @@ func TestMediaFilesAndArtifactsRemainSeparateFromEntries(t *testing.T) {
 	updated, err := cat.UpsertArtifact(ctx, *artifact)
 	if err != nil || updated.ID != artifact.ID || updated.Size != 84 || !updated.CreatedAt.Equal(previousCreated) {
 		t.Fatalf("updated artifact = %#v, %v", updated, err)
+	}
+}
+
+func TestMediaItemsAssociateFilesAndSupportManualUnmatch(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := cat.BeginScan(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{{StorageID: "disk", Name: "Interstellar.mkv", Path: "Interstellar.mkv", Type: model.EntryFile}}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	year := 2014
+	item, err := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "movie", Title: "Interstellar", SortTitle: "interstellar", Year: &year, ExternalID: "tmdb:157336", MatchSource: "manual", MatchConfidence: 1, MatchLocked: true, Metadata: json.RawMessage(`{"overview":"Space"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.AssociateMediaFile(ctx, item.ID, entries[0].ID, "video"); err != nil {
+		t.Fatal(err)
+	}
+	found, err := cat.MediaItemForEntry(ctx, entries[0].ID, "video")
+	if err != nil || found.ID != item.ID || !found.MatchLocked || found.Year == nil || *found.Year != year {
+		t.Fatalf("associated media item = %#v, %v", found, err)
+	}
+	loaded, err := cat.MediaItem(ctx, item.ID)
+	if err != nil || len(loaded.Files) != 1 || loaded.Files[0].EntryID != entries[0].ID {
+		t.Fatalf("media files = %#v, %v", loaded, err)
+	}
+	if err := cat.UnmatchEntry(ctx, entries[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.MediaItemForEntry(ctx, entries[0].ID, ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unmatch result = %v", err)
 	}
 }

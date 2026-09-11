@@ -21,6 +21,7 @@ import (
 
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/indexer"
+	mediaengine "github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/model"
 	"github.com/lsongdev/files-go/processor"
 	"github.com/lsongdev/files-go/storage"
@@ -62,6 +63,168 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/text", s.text)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/media", s.getMediaFile)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/thumbnail", s.thumbnail)
+	s.mux.HandleFunc("GET /api/v1/media", s.listMediaItems)
+	s.mux.HandleFunc("GET /api/v1/media/{id}", s.getMediaItem)
+	s.mux.HandleFunc("GET /api/v1/media/{id}/poster", s.mediaPoster)
+	s.mux.HandleFunc("GET /api/v1/entries/{id}/media-item", s.getEntryMediaItem)
+	s.mux.HandleFunc("PUT /api/v1/entries/{id}/media-item", s.setEntryMediaItem)
+	s.mux.HandleFunc("DELETE /api/v1/entries/{id}/media-item", s.unmatchEntryMediaItem)
+	s.mux.HandleFunc("POST /api/v1/entries/{id}/media-item/rematch", s.rematchEntryMediaItem)
+}
+
+func (s *Server) mediaPoster(w http.ResponseWriter, r *http.Request) {
+	artifact, err := s.catalog.ArtifactForMedia(r.Context(), r.PathValue("id"), "poster", "w500")
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "poster_not_ready", "poster is not available")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	parts := strings.Split(artifact.Key, ".")
+	if len(parts) != 2 {
+		s.internalError(w, errors.New("invalid poster artifact key"))
+		return
+	}
+	filename, err := mediaengine.ArtifactPath(s.cacheDir, "posters", parts[0], parts[1])
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	file, err := os.Open(filename)
+	if errors.Is(err, os.ErrNotExist) {
+		writeError(w, http.StatusNotFound, "poster_not_ready", "poster cache is not available")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", artifact.MIME)
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("ETag", `"`+parts[0]+`"`)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, artifact.ID+"."+parts[1], info.ModTime(), file)
+}
+
+func (s *Server) listMediaItems(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > 500 {
+			writeError(w, http.StatusBadRequest, "invalid_request", "limit must be between 1 and 500")
+			return
+		}
+		limit = value
+	}
+	items, err := s.catalog.MediaItems(r.Context(), r.URL.Query().Get("type"), r.URL.Query().Get("library"), limit)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) getMediaItem(w http.ResponseWriter, r *http.Request) {
+	item, err := s.catalog.MediaItem(r.Context(), r.PathValue("id"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "media_not_found", "media item not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) getEntryMediaItem(w http.ResponseWriter, r *http.Request) {
+	item, err := s.catalog.MediaItemForEntry(r.Context(), r.PathValue("id"), r.URL.Query().Get("role"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "media_not_matched", "entry is not matched to a media item")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) setEntryMediaItem(w http.ResponseWriter, r *http.Request) {
+	entry, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	var input struct {
+		MediaID string `json:"mediaId"`
+		Role    string `json:"role"`
+	}
+	if err := decodeJSONBody(w, r, &input); err != nil {
+		return
+	}
+	if input.Role == "" {
+		input.Role = "video"
+	}
+	item, err := s.catalog.MediaItem(r.Context(), input.MediaID)
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "media_not_found", "media item not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if err := s.catalog.UnmatchEntry(r.Context(), entry.ID); err == nil {
+		err = s.catalog.AssociateMediaFile(r.Context(), item.ID, entry.ID, input.Role)
+	}
+	if err == nil {
+		err = s.catalog.SetMediaMatchLocked(r.Context(), item.ID, true)
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	item.MatchLocked = true
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) unmatchEntryMediaItem(w http.ResponseWriter, r *http.Request) {
+	if err := s.catalog.UnmatchEntry(r.Context(), r.PathValue("id")); err != nil {
+		s.internalError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) rematchEntryMediaItem(w http.ResponseWriter, r *http.Request) {
+	entry, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if err := s.catalog.UnmatchEntry(r.Context(), entry.ID); err != nil {
+		s.internalError(w, err)
+		return
+	}
+	s.reprocess(*entry)
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "matching"})
 }
 
 func (s *Server) getMediaFile(w http.ResponseWriter, r *http.Request) {
@@ -617,7 +780,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) system(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"version": "0.2.0", "features": map[string]bool{"media": true, "thumbnail": true, "transcode": false}})
+	writeJSON(w, http.StatusOK, map[string]any{"version": "0.3.0", "features": map[string]bool{"media": true, "mediaCatalog": true, "thumbnail": true, "poster": true, "transcode": false}})
 }
 
 func (s *Server) listStorages(w http.ResponseWriter, r *http.Request) {

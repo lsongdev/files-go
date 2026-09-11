@@ -19,10 +19,20 @@ type Config struct {
 	Storages   []Storage  `yaml:"storages"`
 	Libraries  []Library  `yaml:"libraries"`
 	Processing Processing `yaml:"processing"`
+	Media      Media      `yaml:"media"`
 
 	TMDB struct {
 		APIKey string `yaml:"api_key"`
 	} `yaml:"tmdb"`
+}
+
+type Media struct {
+	TMDB TMDB `yaml:"tmdb"`
+}
+type TMDB struct {
+	Token    string `yaml:"token"`
+	APIKey   string `yaml:"api_key"`
+	Language string `yaml:"language"`
 }
 
 type Processing struct {
@@ -118,6 +128,16 @@ func LoadConfig() (cfg *Config, err error) {
 	}
 	if cfg.Processing.PDFInfo == "" {
 		cfg.Processing.PDFInfo = "pdfinfo"
+	}
+	if cfg.Media.TMDB.Token == "" {
+		cfg.Media.TMDB.Token = cfg.Media.TMDB.APIKey
+	}
+	if cfg.Media.TMDB.Token == "" {
+		cfg.Media.TMDB.Token = cfg.TMDB.APIKey
+	}
+	cfg.Media.TMDB.Token = os.ExpandEnv(cfg.Media.TMDB.Token)
+	if cfg.Media.TMDB.Language == "" {
+		cfg.Media.TMDB.Language = "zh-CN"
 	}
 	if err := cfg.normalize(); err != nil {
 		return nil, err

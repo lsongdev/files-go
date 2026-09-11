@@ -85,3 +85,29 @@ type Artifact struct {
 	CreatedAt      time.Time `json:"createdAt"`
 	LastAccessedAt time.Time `json:"lastAccessedAt"`
 }
+
+type MediaItem struct {
+	ID              string          `json:"id"`
+	Type            string          `json:"type"`
+	Title           string          `json:"title"`
+	SortTitle       string          `json:"sortTitle,omitempty"`
+	Year            *int            `json:"year,omitempty"`
+	ParentID        string          `json:"parentId,omitempty"`
+	IndexNumber     *int            `json:"indexNumber,omitempty"`
+	ExternalID      string          `json:"externalId,omitempty"`
+	MatchSource     string          `json:"matchSource,omitempty"`
+	MatchConfidence float64         `json:"matchConfidence,omitempty"`
+	MatchLocked     bool            `json:"matchLocked"`
+	Metadata        json.RawMessage `json:"metadata"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	UpdatedAt       time.Time       `json:"updatedAt"`
+	PrimaryEntryID  string          `json:"primaryEntryId,omitempty"`
+	Files           []MediaItemFile `json:"files,omitempty"`
+}
+
+type MediaItemFile struct {
+	MediaID   string    `json:"mediaId"`
+	EntryID   string    `json:"entryId"`
+	Role      string    `json:"role"`
+	CreatedAt time.Time `json:"createdAt"`
+}

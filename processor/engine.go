@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +15,7 @@ import (
 )
 
 const JobProcessEntry = "process_entry"
-const pipelineVersion = 2
+const pipelineVersion = 3
 
 type Processor interface {
 	Name() string
@@ -23,13 +24,19 @@ type Processor interface {
 }
 
 type Engine struct {
-	catalog    *catalog.Catalog
-	queue      *jobs.Queue
-	processors []Processor
+	catalog     *catalog.Catalog
+	queue       *jobs.Queue
+	processors  []Processor
+	fingerprint string
 }
 
 func New(catalog *catalog.Catalog, queue *jobs.Queue, processors ...Processor) *Engine {
-	return &Engine{catalog: catalog, queue: queue, processors: append([]Processor(nil), processors...)}
+	names := make([]string, 0, len(processors))
+	for _, item := range processors {
+		names = append(names, item.Name())
+	}
+	sum := sha256.Sum256([]byte(strings.Join(names, ",")))
+	return &Engine{catalog: catalog, queue: queue, processors: append([]Processor(nil), processors...), fingerprint: fmt.Sprintf("v%d-%x", pipelineVersion, sum[:4])}
 }
 
 type entryPayload struct {
@@ -39,17 +46,26 @@ type entryPayload struct {
 func (e *Engine) EnqueueEntries(ctx context.Context, entries []model.Entry) error {
 	requests := make([]jobs.Request, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Type != model.EntryFile {
+		if entry.Type != model.EntryFile || !e.matches(entry) {
 			continue
 		}
-		key := processEntryKey(entry)
+		key := e.processEntryKey(entry)
 		requests = append(requests, jobs.Request{Type: JobProcessEntry, Payload: entryPayload{EntryID: entry.ID}, Options: jobs.EnqueueOptions{Key: key}})
 	}
 	return e.queue.EnqueueMany(ctx, requests)
 }
 
+func (e *Engine) matches(entry model.Entry) bool {
+	for _, item := range e.processors {
+		if item.Match(entry) {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *Engine) ReprocessEntry(ctx context.Context, entry model.Entry) error {
-	key := processEntryKey(entry)
+	key := e.processEntryKey(entry)
 	if err := e.queue.Requeue(ctx, JobProcessEntry, key, 100); err == nil {
 		return nil
 	} else if !errors.Is(err, jobs.ErrNotFound) {
@@ -61,8 +77,8 @@ func (e *Engine) ReprocessEntry(ctx context.Context, entry model.Entry) error {
 	}})
 }
 
-func processEntryKey(entry model.Entry) string {
-	return fmt.Sprintf("v%d:%s:%d:%d", pipelineVersion, entry.ID, entry.ModifiedAt.UnixNano(), entry.Size)
+func (e *Engine) processEntryKey(entry model.Entry) string {
+	return fmt.Sprintf("%s:%s:%d:%d", e.fingerprint, entry.ID, entry.ModifiedAt.UnixNano(), entry.Size)
 }
 
 func isMetadataSidecar(entry model.Entry) bool {

@@ -647,6 +647,19 @@ func (c *Catalog) ArtifactForEntry(ctx context.Context, entryID, artifactType, v
 	return &item, err
 }
 
+func (c *Catalog) ArtifactForMedia(ctx context.Context, mediaID, artifactType, variant string) (*model.Artifact, error) {
+	var item model.Artifact
+	err := c.reader.QueryRowContext(ctx, `SELECT id, COALESCE(entry_id, ''), COALESCE(media_id, ''), type,
+		variant, key, COALESCE(mime, ''), size, created_at, last_accessed_at
+		FROM artifacts WHERE media_id=? AND type=? AND variant=? ORDER BY created_at DESC LIMIT 1`,
+		mediaID, artifactType, variant).Scan(&item.ID, &item.EntryID, &item.MediaID, &item.Type,
+		&item.Variant, &item.Key, &item.MIME, &item.Size, &item.CreatedAt, &item.LastAccessedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return &item, err
+}
+
 func (c *Catalog) TouchArtifact(ctx context.Context, id string) error {
 	result, err := c.db.ExecContext(ctx, `UPDATE artifacts SET last_accessed_at=? WHERE id=?`, time.Now().UTC(), id)
 	if err != nil {
