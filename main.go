@@ -57,6 +57,9 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+	if err := catalogDB.RecoverInterruptedScans(ctx); err != nil {
+		log.Fatal(err)
+	}
 	for _, item := range cfg.Libraries {
 		library := model.Library{ID: item.ID, Name: item.Name, Type: item.Type}
 		for _, source := range item.Sources {
@@ -100,6 +103,13 @@ func main() {
 	}
 	for _, item := range cfg.Storages {
 		storageID := item.ID
+		needsScan, err := catalogDB.NeedsInitialScan(ctx, storageID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if !needsScan {
+			continue
+		}
 		go func() {
 			if err := idx.Scan(ctx, storageID); err != nil && ctx.Err() == nil {
 				log.Printf("initial scan %s: %v", storageID, err)
@@ -108,6 +118,7 @@ func main() {
 	}
 	playbackManager := playback.NewManager(ctx, catalogDB, registry, cfg.Processing.FFmpeg, cfg.CacheDir, 2)
 	apiServer := api.New(ctx, catalogDB, registry, idx, log.Default(), cfg.CacheDir, playbackManager)
+	apiServer.SetJobQueue(jobQueue)
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiServer.Handler())
 	mux.Handle("/", web.Handler())

@@ -45,7 +45,6 @@ function Icon({ name, size = 20 }) {
 }
 
 const iconForLibrary = (type) => ({ movies: 'movies', tv: 'tv', music: 'music', photos: 'photos', books: 'files', files: 'files' }[type] || 'files');
-const mediaTypeForLibrary = (type) => ({ movies: 'movie', tv: 'series', music: 'track', photos: 'photo', books: 'book' }[type]);
 
 function formatSize(bytes) {
   if (!bytes) return '—';
@@ -57,6 +56,37 @@ function formatSize(bytes) {
 function formatDate(value) {
   if (!value) return '—';
   return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
+}
+
+function formatCount(value) {
+  return new Intl.NumberFormat('zh-CN').format(value || 0);
+}
+
+function storageSubtitle(storage) {
+  if (!storage) return '等待存储状态';
+  if (storage.state === 'scanning') return `正在扫描 ${formatCount(storage.scanEntries)} 项 · ${formatCount(storage.scanDirectories)} 文件夹 · ${formatCount(storage.scanFiles)} 文件…`;
+  if (storage.state === 'interrupted') return '上次扫描已中断';
+  if (storage.state === 'offline') return '存储离线';
+  if (storage.state === 'error') return '扫描失败';
+  return '文件资料库';
+}
+
+function scanPercent(storage) {
+  if (!storage?.scanEstimate) return null;
+  return Math.min(99, Math.round((storage.scanEntries || 0) * 100 / storage.scanEstimate));
+}
+
+function ActivityPanel({ storages, processing }) {
+  const scanning = storages.find((item) => item.state === 'scanning');
+  const interrupted = storages.find((item) => item.state === 'interrupted');
+  const activeJobs = (processing.pending || 0) + (processing.running || 0);
+  if (!scanning && !interrupted && !activeJobs && !(processing.failed || 0)) return null;
+  return html`<section class="activity-panel" aria-live="polite">
+    <strong>后台活动</strong>
+    ${scanning && html`<div class="activity-row"><span class="activity-pulse"></span><p><b>正在扫描文件</b><small>${formatCount(scanning.scanEntries)} 个条目 · ${formatCount(scanning.scanDirectories)} 个文件夹 · ${formatCount(scanning.scanFiles)} 个文件</small></p></div>`}
+    ${!scanning && interrupted && html`<div class="activity-row interrupted"><span>!</span><p><b>上次扫描已中断</b><small>已保留 ${formatCount(interrupted.scanEntries)} 个条目，可手动重新扫描</small></p></div>`}
+    ${(activeJobs > 0 || processing.failed > 0) && html`<div class="activity-row"><span class=${processing.running ? 'activity-pulse' : ''}></span><p><b>媒体增强</b><small>${formatCount(processing.running)} 个处理中 · ${formatCount(processing.pending)} 个等待${processing.failed ? ` · ${formatCount(processing.failed)} 个失败` : ''}</small></p></div>`}
+  </section>`;
 }
 
 const textExtensions = new Set(['txt', 'md', 'nfo', 'srt', 'vtt', 'json', 'yaml', 'yml', 'toml', 'ini', 'conf', 'log', 'csv', 'xml', 'html', 'css', 'js', 'ts', 'jsx', 'tsx', 'go', 'py', 'sh']);
@@ -137,25 +167,14 @@ function EmptyState({ searchTerm }) {
   return html`<div class="empty-state"><div class="empty-icon"><${Icon} name=${searchTerm ? 'search' : 'folder'} size=${30}/></div><h2>${searchTerm ? '没有找到匹配文件' : '这个目录是空的'}</h2><p>${searchTerm ? `尝试更换关键词，或在其他资料库中搜索。` : '扫描到的文件会显示在这里。'}</p></div>`;
 }
 
-function MediaGallery({ items, onOpen }) {
-  return html`<div class="media-grid">${items.map((item) => {
-    const detail = item.metadata || {};
-    const subtitle = item.type === 'track' ? (detail.music?.artist || detail.music?.album || '音乐') : item.type === 'photo' ? '照片' : item.type === 'book' ? (detail.authors?.join('、') || '图书') : (item.year || item.type);
-    const artwork = ['movie', 'series', 'season', 'episode'].includes(item.type) ? `${API}/media/${encodeURIComponent(item.id)}/poster` : item.type === 'photo' && item.primaryEntryId ? `${API}/entries/${encodeURIComponent(item.primaryEntryId)}/thumbnail?size=medium` : '';
-    return html`<button key=${item.id} class=${`media-card ${item.type}`} onClick=${() => onOpen(item)}><span class="media-art">${artwork ? html`<img src=${artwork} alt="" loading="lazy" onError=${(event) => event.currentTarget.classList.add('failed')}/>` : html`<i><${Icon} name=${item.type === 'track' ? 'music' : item.type === 'photo' ? 'photos' : 'files'} size=${38}/></i>`}</span><strong title=${item.title}>${item.title}</strong><small>${subtitle}</small></button>`;
-  })}</div>`;
-}
-
 function App() {
   const [libraries, setLibraries] = useState([]);
   const [storages, setStorages] = useState([]);
+  const [processingStatus, setProcessingStatus] = useState({ pending: 0, running: 0, done: 0, failed: 0 });
   const [activeLibraryID, setActiveLibraryID] = useState(null);
   const [entry, setEntry] = useState(null);
   const [trail, setTrail] = useState([]);
   const [items, setItems] = useState([]);
-  const [mediaItems, setMediaItems] = useState([]);
-  const [continueItems, setContinueItems] = useState([]);
-  const [browseMode, setBrowseMode] = useState('files');
   const [cursor, setCursor] = useState(null);
   const [loading, setLoading] = useState(true);
   const [moreLoading, setMoreLoading] = useState(false);
@@ -224,11 +243,17 @@ function App() {
   }, [createFolderOpen, manageItem, movingItem, actionSaving]);
 
   const loadNavigation = useCallback(async () => {
-    const [libraryData, storageData, continueData] = await Promise.all([request(`${API}/libraries`), request(`${API}/storages`), request(`${API}/playback/continue`).catch(() => ({ items: [] }))]);
+    const [libraryData, storageData, statusData] = await Promise.all([request(`${API}/libraries`), request(`${API}/storages`), request(`${API}/system/status`).catch(() => ({ processing: {} }))]);
     setLibraries(libraryData.items || []);
     setStorages(storageData.items || []);
-    setContinueItems(continueData.items || []);
+    setProcessingStatus(statusData.processing || {});
     return libraryData.items || [];
+  }, []);
+
+  const loadOperationalStatus = useCallback(async () => {
+    const [storageData, statusData] = await Promise.all([request(`${API}/storages`), request(`${API}/system/status`).catch(() => ({ processing: {} }))]);
+    setStorages(storageData.items || []);
+    setProcessingStatus(statusData.processing || {});
   }, []);
 
   const buildTrail = useCallback(async (current, libraryList, preferredLibraryID) => {
@@ -257,8 +282,6 @@ function App() {
     setError('');
     setSearchQuery('');
     setSearchTerm('');
-    setBrowseMode('files');
-    setMediaItems([]);
     setNavOpen(false);
     try {
       const [current, children] = await Promise.all([
@@ -277,26 +300,11 @@ function App() {
     }
   }, [activeLibraryID, buildTrail, libraries]);
 
-  const loadMediaLibrary = useCallback(async (library) => {
-    const mediaType = mediaTypeForLibrary(library?.type);
-    if (!mediaType) return;
-    try {
-      const parameters = new URLSearchParams({ type: mediaType, library: library.id, limit: '500' });
-      const data = await request(`${API}/media?${parameters}`);
-      const enhanced = data.items || [];
-      setMediaItems(enhanced);
-      if (enhanced.length) setBrowseMode('media');
-    } catch (_) {
-      // Media enhancement is optional; file browsing remains available.
-    }
-  }, []);
-
   const openLibrary = useCallback(async (library) => {
     setActiveLibraryID(library.id);
     const source = library.sources?.find((item) => item.entryId);
     if (source) {
       await openEntry(source.entryId, { libraryID: library.id });
-      await loadMediaLibrary(library);
     } else {
       setEntry(null);
       setItems([]);
@@ -304,7 +312,7 @@ function App() {
       setError('资料库尚未完成首次扫描，请稍后刷新。');
       setNavOpen(false);
     }
-  }, [loadMediaLibrary, openEntry]);
+  }, [openEntry]);
 
   useEffect(() => {
     let cancelled = false;
@@ -318,7 +326,6 @@ function App() {
         if (first) {
           setActiveLibraryID(first.id);
           await openEntry(first.sources.find((source) => source.entryId).entryId, { history: false, libraryID: first.id, libraryList });
-          await loadMediaLibrary(first);
         } else {
           setLoading(false);
           setError('正在建立文件索引，请稍后刷新。');
@@ -341,21 +348,27 @@ function App() {
   }, [openEntry]);
 
   useEffect(() => {
-    if (!storages.some((storage) => storage.state === 'scanning')) return undefined;
+    const scanActive = storages.some((storage) => storage.state === 'scanning');
+    const processingActive = (processingStatus.pending || 0) + (processingStatus.running || 0) > 0;
+    if (!scanActive && !processingActive) return undefined;
     const timer = window.setInterval(async () => {
       try {
-        const libraryList = await loadNavigation();
-        const first = libraryList.find((library) => library.sources?.some((source) => source.entryId));
-        if (first && !entry) {
-          setActiveLibraryID(first.id);
-          await openEntry(first.sources.find((source) => source.entryId).entryId, { history: false, libraryID: first.id, libraryList });
+        if (scanActive) {
+          const libraryList = await loadNavigation();
+          const first = libraryList.find((library) => library.sources?.some((source) => source.entryId));
+          if (first && !entry) {
+            setActiveLibraryID(first.id);
+            await openEntry(first.sources.find((source) => source.entryId).entryId, { history: false, libraryID: first.id, libraryList });
+          }
+        } else {
+          await loadOperationalStatus();
         }
       } catch (_) {
         // The visible connection error and manual retry remain available.
       }
     }, 2500);
     return () => window.clearInterval(timer);
-  }, [entry, libraries, loadNavigation, openEntry, storages]);
+  }, [entry, loadNavigation, loadOperationalStatus, openEntry, processingStatus.pending, processingStatus.running, storages]);
 
   const loadMore = async () => {
     if (!cursor || !entry) return;
@@ -387,7 +400,6 @@ function App() {
       setCursor(null);
       setSearchQuery(query);
       setSearchTerm(query);
-      setBrowseMode('files');
     } catch (reason) {
       setError(reason.message || '搜索失败');
     } finally {
@@ -452,24 +464,13 @@ function App() {
     fetch(`${API}/media/${encodeURIComponent(item.mediaID)}/playback-state`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, keepalive: true,
       body: JSON.stringify({ positionMs: Math.round(video.currentTime * 1000), played }),
-    }).then(() => request(`${API}/playback/continue`)).then((data) => setContinueItems(data.items || [])).catch(() => {});
+    }).catch(() => {});
   };
 
   const closePreview = () => {
     const match = preview?.playbackURL?.match(/\/playback\/sessions\/([^/]+)\//);
     if (match) fetch(`${API}/playback/sessions/${encodeURIComponent(match[1])}`, { method: 'DELETE', keepalive: true }).catch(() => {});
     setPreview(null);
-  };
-
-  const openMediaItem = async (item) => {
-    try {
-      const detailed = await request(`${API}/media/${encodeURIComponent(item.id)}`);
-      const file = detailed.files?.[0];
-      if (!file) return;
-      openFile(await request(`${API}/entries/${encodeURIComponent(file.entryId)}`));
-    } catch (reason) {
-      setError(reason.message || '无法打开媒体');
-    }
   };
 
   const createFolder = async (event) => {
@@ -613,9 +614,7 @@ function App() {
       const libraryList = await loadNavigation();
       if (searchTerm) await performSearch(searchTerm);
       else if (entry) {
-        const restoreMedia = browseMode === 'media';
         await openEntry(entry.id, { history: false, libraryID: activeLibraryID });
-        if (restoreMedia && activeLibrary) await loadMediaLibrary(activeLibrary);
       }
       else {
         const library = libraryList.find((item) => item.id === activeLibraryID) || libraryList[0];
@@ -629,6 +628,7 @@ function App() {
   const rescan = async () => {
     const source = activeLibrary?.sources?.[0];
     if (!source) return;
+    if (storageByID[source.storageId]?.state === 'scanning') return;
     try {
       await request(`${API}/storages/${encodeURIComponent(source.storageId)}/scan`, { method: 'POST' });
       await loadNavigation();
@@ -648,6 +648,9 @@ function App() {
     localStorage.setItem('files-go-theme', next);
   };
 
+  const activeStorage = activeLibrary?.sources?.[0] ? storageByID[activeLibrary.sources[0].storageId] : null;
+  const scanActive = activeStorage?.state === 'scanning';
+
   return html`<div class="app-shell">
     <div class=${`nav-scrim ${navOpen ? 'visible' : ''}`} onClick=${() => setNavOpen(false)}></div>
     <aside class=${`sidebar ${navOpen ? 'open' : ''}`}>
@@ -656,14 +659,17 @@ function App() {
       <nav class="library-nav" aria-label="资料库">
         ${libraries.map((library) => {
           const source = library.sources?.[0];
-          const storageState = source ? storageByID[source.storageId]?.state : 'unknown';
-          return html`<button key=${library.id} class=${`library-link ${library.id === activeLibraryID ? 'active' : ''}`} onClick=${() => openLibrary(library)}>
+          const libraryStorage = source ? storageByID[source.storageId] : null;
+          const storageState = libraryStorage?.state || 'unknown';
+          const percent = scanPercent(libraryStorage);
+          return html`<div key=${library.id} class="library-item"><button class=${`library-link ${library.id === activeLibraryID ? 'active' : ''}`} onClick=${() => openLibrary(library)}>
             <span class="library-icon"><${Icon} name=${iconForLibrary(library.type)}/></span>
-            <span class="library-copy"><strong>${library.name}</strong><small>${storageState === 'scanning' ? '正在扫描' : storageState === 'offline' ? '存储离线' : '文件资料库'}</small></span>
+            <span class="library-copy"><strong>${library.name}</strong><small>${storageSubtitle(libraryStorage)}</small></span>
             <span class=${`status-dot ${storageState}`} title=${storageState}></span>
-          </button>`;
+          </button>${storageState === 'scanning' && html`<div class=${`library-progress ${percent == null ? 'indeterminate' : ''}`} role="progressbar" aria-label=${`${library.name} 扫描进度`} aria-valuemin="0" aria-valuemax="100" aria-valuenow=${percent == null ? undefined : percent}><span style=${percent == null ? undefined : { width: `${percent}%` }}></span></div>`}</div>`;
         })}
       </nav>
+      <${ActivityPanel} storages=${storages} processing=${processingStatus}/>
       <div class="storage-summary">
         <span class="summary-icon"><${Icon} name="drive"/></span>
         <div><strong>${storages.length || '—'} 个存储</strong><span>${storages.filter((item) => item.state === 'online').length} 个在线</span></div>
@@ -687,7 +693,6 @@ function App() {
         <div class="top-actions">
           <button class="icon-button" onClick=${toggleTheme} aria-label=${theme === 'dark' ? '切换到亮色模式' : '切换到暗色模式'} title=${theme === 'dark' ? '亮色模式' : '暗色模式'}><${Icon} name=${theme === 'dark' ? 'sun' : 'moon'}/></button>
           <button class="icon-button" onClick=${refresh} aria-label="刷新"><${Icon} name="refresh"/></button>
-          ${mediaItems.length > 0 && html`<div class="view-switch mode-switch" role="group" aria-label="浏览模式"><button class=${browseMode === 'media' ? 'active' : ''} onClick=${() => setBrowseMode('media')} aria-label="媒体库"><${Icon} name=${iconForLibrary(activeLibrary?.type)} size=${18}/></button><button class=${browseMode === 'files' ? 'active' : ''} onClick=${() => setBrowseMode('files')} aria-label="文件"><${Icon} name="files" size=${18}/></button></div>`}
           <div class="view-switch" role="group" aria-label="显示方式">
             <button class=${view === 'list' ? 'active' : ''} onClick=${() => setViewMode('list')} aria-label="列表"><${Icon} name="list" size=${18}/></button>
             <button class=${view === 'grid' ? 'active' : ''} onClick=${() => setViewMode('grid')} aria-label="网格"><${Icon} name="grid" size=${18}/></button>
@@ -696,14 +701,14 @@ function App() {
       </header>
 
       <section class="content-head">
-        <div><p>${searchTerm ? `在 ${activeLibrary?.name || '所有文件'} 中搜索` : (browseMode === 'media' ? 'media catalog' : (activeLibrary?.type || 'files'))}</p><h1>${searchTerm ? `“${searchTerm}”` : (browseMode === 'media' ? activeLibrary?.name : (entry?.name || activeLibrary?.name || '文件'))}</h1></div>
-        <div class="head-meta"><span>${browseMode === 'media' ? mediaItems.length : `${items.length}${cursor ? '+' : ''}`} 个项目</span>${browseMode === 'files' && entry && !searchTerm && html`<label class=${`scan-button upload-button ${uploading ? 'disabled' : ''}`}><${Icon} name="upload" size=${16}/>${uploading ? '正在上传…' : '上传'}<input type="file" multiple disabled=${uploading} onChange=${uploadFiles}/></label><button class="scan-button" onClick=${() => { setFolderName(''); setActionError(''); setCreateFolderOpen(true); }}><${Icon} name="plus" size=${16}/>新建文件夹</button>`}<button class="scan-button" onClick=${rescan}><${Icon} name="refresh" size=${16}/>重新扫描</button></div>
+        <div><p>${searchTerm ? `在 ${activeLibrary?.name || '所有文件'} 中搜索` : (activeLibrary?.type || 'files')}</p><h1>${searchTerm ? `“${searchTerm}”` : (entry?.name || activeLibrary?.name || '文件')}</h1></div>
+        <div class="head-meta"><span>${`${items.length}${cursor ? '+' : ''}`} 个项目</span>${entry && !searchTerm && html`<label class=${`scan-button upload-button ${uploading ? 'disabled' : ''}`}><${Icon} name="upload" size=${16}/>${uploading ? '正在上传…' : '上传'}<input type="file" multiple disabled=${uploading} onChange=${uploadFiles}/></label><button class="scan-button" onClick=${() => { setFolderName(''); setActionError(''); setCreateFolderOpen(true); }}><${Icon} name="plus" size=${16}/>新建文件夹</button>`}<button class="scan-button" disabled=${scanActive} onClick=${rescan}><${Icon} name="refresh" size=${16}/>${scanActive ? '正在扫描…' : '重新扫描'}</button></div>
       </section>
 
       ${error && html`<div class="error-banner" role="alert"><span>${error}</span><button onClick=${refresh}>重试</button></div>`}
 
       <section class="browser" aria-live="polite">
-        ${loading ? html`<${Skeleton}/>` : browseMode === 'media' ? html`${['movies', 'tv'].includes(activeLibrary?.type) && continueItems.length > 0 && html`<section class="continue-section"><h2>继续观看</h2><${MediaGallery} items=${continueItems.map((state) => state.media).filter(Boolean)} onOpen=${openMediaItem}/></section>`}<${MediaGallery} items=${mediaItems} onOpen=${openMediaItem}/>` : items.length === 0 ? html`<${EmptyState} searchTerm=${searchTerm}/>` : view === 'list' ? html`
+        ${loading ? html`<${Skeleton}/>` : items.length === 0 ? html`<${EmptyState} searchTerm=${searchTerm}/>` : view === 'list' ? html`
           <div class="file-table" role="table" aria-label="文件">
             <div class="table-head" role="row"><span>名称</span><span>大小</span><span>修改时间</span><span></span></div>
             ${items.map((item) => html`<div key=${item.id} class="file-row" role="row">
@@ -724,7 +729,7 @@ function App() {
               <button class="card-action" onClick=${() => openManage(item)} aria-label=${`管理 ${item.name}`}><${Icon} name="more" size=${18}/></button>
             </article>`)}
           </div>`}
-        ${browseMode === 'files' && cursor && html`<div class="load-more"><button onClick=${loadMore} disabled=${moreLoading}><${Icon} name="more"/>${moreLoading ? '正在加载…' : '加载更多'}</button></div>`}
+        ${cursor && html`<div class="load-more"><button onClick=${loadMore} disabled=${moreLoading}><${Icon} name="more"/>${moreLoading ? '正在加载…' : '加载更多'}</button></div>`}
       </section>
     </main>
     <${Preview} item=${preview} text=${previewText} loading=${previewLoading} error=${previewError} onPlaybackProgress=${updatePlaybackProgress} onClose=${closePreview}/>

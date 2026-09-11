@@ -324,7 +324,11 @@ func (c *Catalog) EnsureRoot(ctx context.Context, storageID string, generation i
 
 func (c *Catalog) BeginScan(ctx context.Context, storageID string) (int64, error) {
 	var generation int64
-	err := c.db.QueryRowContext(ctx, `UPDATE storages SET state='scanning', updated_at=? WHERE id=? RETURNING scan_generation + 1`, time.Now().UTC(), storageID).Scan(&generation)
+	now := time.Now().UTC()
+	err := c.db.QueryRowContext(ctx, `UPDATE storages SET state='scanning', scan_started_at=?, scan_updated_at=?,
+		scan_entries=0, scan_files=0, scan_directories=0,
+		scan_estimate=(SELECT COUNT(*) FROM entries WHERE storage_id=?), scan_error=NULL, updated_at=? WHERE id=?
+		RETURNING scan_generation + 1`, now, now, storageID, now, storageID).Scan(&generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("storage %q is not registered", storageID)
 	}
@@ -432,13 +436,13 @@ func (c *Catalog) CompleteScan(ctx context.Context, storageID string, generation
 	if _, err := tx.ExecContext(ctx, `UPDATE entries SET available=0, updated_at=? WHERE storage_id=? AND scan_generation<?`, now, storageID, generation); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE storages SET state='online', last_seen_at=?, last_scan_at=?, scan_generation=?, updated_at=? WHERE id=?`, now, now, generation, now, storageID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE storages SET state='online', last_seen_at=?, last_scan_at=?, scan_updated_at=?, scan_generation=?, scan_error=NULL, updated_at=? WHERE id=?`, now, now, now, generation, now, storageID); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (c *Catalog) FailScan(ctx context.Context, storageID, state string) error {
+func (c *Catalog) FailScan(ctx context.Context, storageID, state, message string) error {
 	if state != "offline" {
 		state = "error"
 	}
@@ -448,7 +452,7 @@ func (c *Catalog) FailScan(ctx context.Context, storageID, state string) error {
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC()
-	if _, err := tx.ExecContext(ctx, `UPDATE storages SET state=?, updated_at=? WHERE id=?`, state, now, storageID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE storages SET state=?, scan_updated_at=?, scan_error=?, updated_at=? WHERE id=?`, state, now, message, now, storageID); err != nil {
 		return err
 	}
 	if state == "offline" {
@@ -460,7 +464,8 @@ func (c *Catalog) FailScan(ctx context.Context, storageID, state string) error {
 }
 
 func (c *Catalog) Storages(ctx context.Context) ([]model.Storage, error) {
-	rows, err := c.reader.QueryContext(ctx, `SELECT id, name, type, state, last_seen_at, last_scan_at, scan_generation FROM storages ORDER BY name, id`)
+	rows, err := c.reader.QueryContext(ctx, `SELECT id, name, type, state, last_seen_at, last_scan_at, scan_started_at, scan_updated_at,
+		scan_generation, scan_entries, scan_files, scan_directories, scan_estimate, COALESCE(scan_error, '') FROM storages ORDER BY name, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -468,8 +473,9 @@ func (c *Catalog) Storages(ctx context.Context) ([]model.Storage, error) {
 	var items []model.Storage
 	for rows.Next() {
 		var item model.Storage
-		var seen, scan sql.NullTime
-		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.State, &seen, &scan, &item.ScanGeneration); err != nil {
+		var seen, scan, started, updated sql.NullTime
+		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.State, &seen, &scan, &started, &updated,
+			&item.ScanGeneration, &item.ScanEntries, &item.ScanFiles, &item.ScanDirectories, &item.ScanEstimate, &item.ScanError); err != nil {
 			return nil, err
 		}
 		if seen.Valid {
@@ -478,6 +484,12 @@ func (c *Catalog) Storages(ctx context.Context) ([]model.Storage, error) {
 		if scan.Valid {
 			item.LastScanAt = &scan.Time
 		}
+		if started.Valid {
+			item.ScanStartedAt = &started.Time
+		}
+		if updated.Valid {
+			item.ScanUpdatedAt = &updated.Time
+		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -485,9 +497,11 @@ func (c *Catalog) Storages(ctx context.Context) ([]model.Storage, error) {
 
 func (c *Catalog) Storage(ctx context.Context, id string) (*model.Storage, error) {
 	var item model.Storage
-	var seen, scan sql.NullTime
-	err := c.reader.QueryRowContext(ctx, `SELECT id, name, type, state, last_seen_at, last_scan_at, scan_generation FROM storages WHERE id=?`, id).
-		Scan(&item.ID, &item.Name, &item.Type, &item.State, &seen, &scan, &item.ScanGeneration)
+	var seen, scan, started, updated sql.NullTime
+	err := c.reader.QueryRowContext(ctx, `SELECT id, name, type, state, last_seen_at, last_scan_at, scan_started_at, scan_updated_at,
+		scan_generation, scan_entries, scan_files, scan_directories, scan_estimate, COALESCE(scan_error, '') FROM storages WHERE id=?`, id).
+		Scan(&item.ID, &item.Name, &item.Type, &item.State, &seen, &scan, &started, &updated,
+			&item.ScanGeneration, &item.ScanEntries, &item.ScanFiles, &item.ScanDirectories, &item.ScanEstimate, &item.ScanError)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -500,7 +514,33 @@ func (c *Catalog) Storage(ctx context.Context, id string) (*model.Storage, error
 	if scan.Valid {
 		item.LastScanAt = &scan.Time
 	}
+	if started.Valid {
+		item.ScanStartedAt = &started.Time
+	}
+	if updated.Valid {
+		item.ScanUpdatedAt = &updated.Time
+	}
 	return &item, nil
+}
+
+func (c *Catalog) UpdateScanProgress(ctx context.Context, storageID string, entries, files, directories int64) error {
+	now := time.Now().UTC()
+	_, err := c.db.ExecContext(ctx, `UPDATE storages SET scan_entries=?, scan_files=?, scan_directories=?, scan_updated_at=?, updated_at=?
+		WHERE id=? AND state='scanning'`, entries, files, directories, now, now, storageID)
+	return err
+}
+
+func (c *Catalog) RecoverInterruptedScans(ctx context.Context) error {
+	now := time.Now().UTC()
+	_, err := c.db.ExecContext(ctx, `UPDATE storages SET state='interrupted', scan_updated_at=?,
+		scan_error='service stopped before scan completed', updated_at=? WHERE state='scanning'`, now, now)
+	return err
+}
+
+func (c *Catalog) NeedsInitialScan(ctx context.Context, storageID string) (bool, error) {
+	var count int64
+	err := c.reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM entries WHERE storage_id=?`, storageID).Scan(&count)
+	return count == 0, err
 }
 
 func (c *Catalog) Libraries(ctx context.Context) ([]model.Library, error) {

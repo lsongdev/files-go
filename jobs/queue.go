@@ -57,6 +57,13 @@ type Request struct {
 	Options EnqueueOptions
 }
 
+type Stats struct {
+	Pending int64 `json:"pending"`
+	Running int64 `json:"running"`
+	Done    int64 `json:"done"`
+	Failed  int64 `json:"failed"`
+}
+
 type Queue struct {
 	db          *sql.DB
 	lease       time.Duration
@@ -71,6 +78,33 @@ func New(db *sql.DB, lease time.Duration) *Queue {
 		lease = 2 * time.Minute
 	}
 	return &Queue{db: db, lease: lease, notify: make(chan struct{}, 1), now: func() time.Time { return time.Now().UTC() }}
+}
+
+func (q *Queue) Stats(ctx context.Context, jobType string) (Stats, error) {
+	rows, err := q.db.QueryContext(ctx, `SELECT state, COUNT(*) FROM jobs WHERE type=? GROUP BY state`, jobType)
+	if err != nil {
+		return Stats{}, err
+	}
+	defer rows.Close()
+	var stats Stats
+	for rows.Next() {
+		var state State
+		var count int64
+		if err := rows.Scan(&state, &count); err != nil {
+			return Stats{}, err
+		}
+		switch state {
+		case StatePending:
+			stats.Pending = count
+		case StateRunning:
+			stats.Running = count
+		case StateDone:
+			stats.Done = count
+		case StateFailed:
+			stats.Failed = count
+		}
+	}
+	return stats, rows.Err()
 }
 
 func (q *Queue) Enqueue(ctx context.Context, jobType string, payload any, opts EnqueueOptions) (*Job, bool, error) {

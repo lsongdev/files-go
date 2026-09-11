@@ -79,13 +79,25 @@ func TestPlaybackAssetsUseCSPCompatibleAbsoluteModules(t *testing.T) {
 	response := httptest.NewRecorder()
 	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	body := response.Body.String()
-	for _, expected := range []string{"https://unpkg.com/hls.js@1.6.13/dist/hls.mjs", "/playback/", "continueItems", "继续观看"} {
+	for _, expected := range []string{"https://unpkg.com/hls.js@1.6.13/dist/hls.mjs", "/playback/", "updatePlaybackProgress"} {
 		if response.Code != http.StatusOK || !strings.Contains(body, expected) {
 			t.Fatalf("app.js does not contain %q", expected)
 		}
 	}
 	if strings.Contains(body, `from 'preact'`) {
 		t.Fatal("app.js contains a bare Preact module specifier")
+	}
+}
+
+func TestScanStatusUsesDetailedProgressAndPhysicalDirectoryBrowsing(t *testing.T) {
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	body := response.Body.String()
+	for _, expected := range []string{"/system/status", "正在扫描 ${formatCount(storage.scanEntries)} 项", "library-progress", "媒体增强"} {
+		if !strings.Contains(body, expected) { t.Fatalf("app.js does not contain %q", expected) }
+	}
+	for _, removed := range []string{"media catalog", "loadMediaLibrary", "browseMode === 'media'"} {
+		if strings.Contains(body, removed) { t.Fatalf("app.js still contains separate media catalog marker %q", removed) }
 	}
 }
 

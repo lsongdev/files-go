@@ -17,14 +17,38 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/database"
 	"github.com/lsongdev/files-go/indexer"
+	"github.com/lsongdev/files-go/jobs"
 	"github.com/lsongdev/files-go/model"
 	"github.com/lsongdev/files-go/processor"
 	"github.com/lsongdev/files-go/storage"
 )
+
+func TestSystemStatusReportsProcessingQueue(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	queue := jobs.New(db, time.Minute)
+	if _, _, err := queue.Enqueue(ctx, processor.JobProcessEntry, map[string]string{"entryId": "one"}, jobs.EnqueueOptions{Key: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	cat := catalog.New(db)
+	registry := storage.NewRegistry()
+	server := New(ctx, cat, registry, indexer.New(cat, registry), log.Default(), t.TempDir())
+	server.SetJobQueue(queue)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/system/status", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"pending":1`) {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
 
 func TestDecodeText(t *testing.T) {
 	utf16LE := []byte{0xff, 0xfe, 0, 0, 0, 0}

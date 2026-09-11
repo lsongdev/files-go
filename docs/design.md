@@ -132,7 +132,7 @@ Movies
 
 ---
 
-### 2.4 文件系统结构与媒体结构分离
+### 2.4 物理目录是唯一浏览结构，媒体是增强层
 
 文件世界：
 
@@ -143,7 +143,7 @@ Movies/
   poster.jpg
 ```
 
-媒体世界：
+媒体增强：
 
 ```text
 Movie
@@ -167,12 +167,14 @@ episode
 
 全部塞进 `File`。
 
-因此系统必须明确存在两个模型：
+媒体信息可以使用独立表做规范化、匹配和缓存，但它不是第二套可浏览的资料库，也不能改变文件的归属或目录结构。系统只有一个用户可见的内容树：
 
 ```text
-Filesystem Catalog
-Media Catalog
+Filesystem Catalog (source projection)
+  └── Media Metadata / Artwork / Playback State (derived annotations)
 ```
+
+电影、剧集、音乐和图片的海报、简介、演职员、专辑等数据，只能附着在对应的 `Entry` 上展示。扫描失败、第三方 API 不可用或媒体匹配错误，都不能影响物理目录浏览。
 
 ---
 
@@ -3068,9 +3070,9 @@ available=false
 
 ---
 
-# 83. File Views 与 Media Views
+# 83. File Views 与媒体增强
 
-API 必须提供两个正交入口：
+API 的用户浏览入口始终来自物理目录：
 
 ```text
 Filesystem Browser
@@ -3079,32 +3081,23 @@ Filesystem Browser
 /api/v1/entries/:id/children
 ```
 
-以及：
+媒体 API 用于读取或修正某个文件条目的增强信息：
 
 ```text
-Media Browser
-
-/api/v1/media/movies
-/api/v1/media/shows
-/api/v1/media/music
-/api/v1/media/photos
+/api/v1/entries/:id/media-item
+/api/v1/entries/:id/media-item/rematch
 ```
 
-因此同一份文件可以：
+界面可以在原目录中的文件卡片、详情和预览上展示海报、简介或播放状态，但不能据此生成另一套与目录并列的海报墙或导航层级：
 
 ```text
-Files
-  /Movies/Dune.mkv
+/Movies/Dune.mkv
+  ├── poster (derived)
+  ├── overview (derived)
+  └── playback state (derived)
 ```
 
-同时出现在：
-
-```text
-Movies
-  Dune
-```
-
-这是两个不同 projection。
+物理路径和目录关系始终是唯一事实；媒体信息是可删除、可重建的派生数据。
 
 ---
 
@@ -3146,9 +3139,6 @@ fetch('/api/v1/libraries')
 
 ```text
 /files/:entry
-/movies/:media
-/photos
-/music
 /search
 ```
 
@@ -3869,7 +3859,7 @@ PDF metadata
 
 ---
 
-## Phase 4 — Media Catalog
+## Phase 4 — Media Enhancement
 
 完成：
 
@@ -3880,11 +3870,12 @@ TMDB
 movie matching
 TV matching
 posters
-movie UI
-TV UI
-music UI
-photo UI
+file card metadata
+file detail metadata
+preview and playback enhancement
 ```
+
+这一阶段不新增独立媒体资料库或海报墙；所有结果都通过 `Entry` 关联回原物理目录。
 
 ---
 

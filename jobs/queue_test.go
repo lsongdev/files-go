@@ -92,6 +92,34 @@ func TestQueueFailsPermanentlyAtAttemptLimit(t *testing.T) {
 	}
 }
 
+func TestQueueStatsCountsStatesByType(t *testing.T) {
+	ctx := context.Background()
+	queue := testQueue(t)
+	if _, _, err := queue.Enqueue(ctx, "process", nil, EnqueueOptions{Key: "pending"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := queue.Enqueue(ctx, "other", nil, EnqueueOptions{Key: "ignored"}); err != nil {
+		t.Fatal(err)
+	}
+	job, err := queue.Claim(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Type == "other" {
+		if err := queue.Complete(ctx, job.ID); err != nil {
+			t.Fatal(err)
+		}
+		job, err = queue.Claim(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats, err := queue.Stats(ctx, "process")
+	if err != nil || stats.Running != 1 || stats.Pending != 0 || stats.Done != 0 || stats.Failed != 0 {
+		t.Fatalf("stats = %#v, %v", stats, err)
+	}
+}
+
 func TestRequeuePromotesPendingJob(t *testing.T) {
 	ctx := context.Background()
 	queue := testQueue(t)

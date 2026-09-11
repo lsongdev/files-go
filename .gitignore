@@ -5,3 +5,6 @@
 
 # Local build output
 /bin/
+
+# Generated thumbnails, posters, and transcodes
+/cache/
