@@ -8,3 +8,6 @@
 
 # Generated thumbnails, posters, and transcodes
 /cache/
+
+# Local secrets referenced by config.yaml
+/.tmdb-token

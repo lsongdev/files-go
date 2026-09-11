@@ -12,6 +12,7 @@ processing:
 media:
   tmdb:
     token: "${TMDB_TOKEN}"
+    token_file: ".tmdb-token"
     language: zh-CN
 
 storages:

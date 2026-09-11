@@ -30,9 +30,10 @@ type Media struct {
 	TMDB TMDB `yaml:"tmdb"`
 }
 type TMDB struct {
-	Token    string `yaml:"token"`
-	APIKey   string `yaml:"api_key"`
-	Language string `yaml:"language"`
+	Token     string `yaml:"token"`
+	TokenFile string `yaml:"token_file"`
+	APIKey    string `yaml:"api_key"`
+	Language  string `yaml:"language"`
 }
 
 type Processing struct {
@@ -133,13 +134,25 @@ func LoadConfig() (cfg *Config, err error) {
 	if cfg.Processing.PDFInfo == "" {
 		cfg.Processing.PDFInfo = "pdfinfo"
 	}
-	if cfg.Media.TMDB.Token == "" {
-		cfg.Media.TMDB.Token = cfg.Media.TMDB.APIKey
+	token := cfg.Media.TMDB.Token
+	if token == "" {
+		token = cfg.Media.TMDB.APIKey
 	}
-	if cfg.Media.TMDB.Token == "" {
-		cfg.Media.TMDB.Token = cfg.TMDB.APIKey
+	if token == "" {
+		token = cfg.TMDB.APIKey
 	}
-	cfg.Media.TMDB.Token = os.ExpandEnv(cfg.Media.TMDB.Token)
+	cfg.Media.TMDB.Token = strings.TrimSpace(os.ExpandEnv(token))
+	if cfg.Media.TMDB.Token == "" && cfg.Media.TMDB.TokenFile != "" {
+		tokenPath := cfg.Media.TMDB.TokenFile
+		if !filepath.IsAbs(tokenPath) {
+			tokenPath = filepath.Join(ConfigDir, tokenPath)
+		}
+		value, readErr := os.ReadFile(tokenPath)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return nil, fmt.Errorf("read TMDB token file: %w", readErr)
+		}
+		cfg.Media.TMDB.Token = strings.TrimSpace(string(value))
+	}
 	if cfg.Media.TMDB.Language == "" {
 		cfg.Media.TMDB.Language = "zh-CN"
 	}
