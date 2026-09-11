@@ -23,3 +23,25 @@ func TestLoadConfigExpandsTMDBTokenAndDefaults(t *testing.T) {
 		t.Fatalf("config = %#v", cfg)
 	}
 }
+
+func TestLoadConfigReadsTMDBTokenFileWhenEnvironmentIsEmpty(t *testing.T) {
+	configDir := t.TempDir()
+	previous := ConfigDir
+	ConfigDir = configDir
+	t.Cleanup(func() { ConfigDir = previous })
+	t.Setenv("FILES_GO_EMPTY_TMDB_TOKEN", "")
+	if err := os.WriteFile(filepath.Join(configDir, ".tmdb-token"), []byte("local-secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("data: " + configDir + "\nmedia:\n  tmdb:\n    token: ${FILES_GO_EMPTY_TMDB_TOKEN}\n    token_file: .tmdb-token\nstorages: []\nlibraries: []\n")
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Media.TMDB.Token != "local-secret" {
+		t.Fatalf("TMDB token = %q", cfg.Media.TMDB.Token)
+	}
+}
