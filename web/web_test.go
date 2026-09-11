@@ -101,6 +101,15 @@ func TestScanStatusUsesDetailedProgressAndPhysicalDirectoryBrowsing(t *testing.T
 	}
 }
 
+func TestFileListAutomaticallyLoadsMoreWithButtonFallback(t *testing.T) {
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	body := response.Body.String()
+	for _, expected := range []string{"IntersectionObserver", "loadMoreSentinelRef", "加载更多"} {
+		if !strings.Contains(body, expected) { t.Fatalf("app.js does not contain %q", expected) }
+	}
+}
+
 func TestFileManagementAssetsIncludeCreateRenameAndDelete(t *testing.T) {
 	response := httptest.NewRecorder()
 	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))

@@ -203,6 +203,8 @@ function App() {
   const [destinationTrail, setDestinationTrail] = useState([]);
   const [destinationFolders, setDestinationFolders] = useState([]);
   const [destinationLoading, setDestinationLoading] = useState(false);
+  const loadMoreSentinelRef = useRef(null);
+  const loadingMoreRef = useRef(false);
 
   const activeLibrary = useMemo(() => libraries.find((item) => item.id === activeLibraryID), [libraries, activeLibraryID]);
   const storageByID = useMemo(() => Object.fromEntries(storages.map((item) => [item.id, item])), [storages]);
@@ -379,8 +381,9 @@ function App() {
     return () => window.clearInterval(timer);
   }, [entry, loadNavigation, loadOperationalStatus, openEntry, processingStatus.pending, processingStatus.running, storages]);
 
-  const loadMore = async () => {
-    if (!cursor || !entry) return;
+  const loadMore = useCallback(async () => {
+    if (!cursor || !entry || loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
     setMoreLoading(true);
     try {
       const data = await request(`${API}/entries/${encodeURIComponent(entry.id)}/children?limit=100&after=${encodeURIComponent(cursor)}`);
@@ -389,9 +392,20 @@ function App() {
     } catch (reason) {
       setError(reason.message || '无法加载更多文件');
     } finally {
+      loadingMoreRef.current = false;
       setMoreLoading(false);
     }
-  };
+  }, [cursor, entry]);
+
+  useEffect(() => {
+    const target = loadMoreSentinelRef.current;
+    if (!target || !cursor || !entry || typeof IntersectionObserver === 'undefined') return undefined;
+    const observer = new IntersectionObserver((records) => {
+      if (records.some((record) => record.isIntersecting)) loadMore();
+    }, { rootMargin: '320px 0px' });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [cursor, entry, loadMore]);
 
   const performSearch = async (value = searchQuery) => {
     const query = value.trim();
@@ -738,7 +752,7 @@ function App() {
               <button class="card-action" onClick=${() => openManage(item)} aria-label=${`管理 ${item.name}`}><${Icon} name="more" size=${18}/></button>
             </article>`)}
           </div>`}
-        ${cursor && html`<div class="load-more"><button onClick=${loadMore} disabled=${moreLoading}><${Icon} name="more"/>${moreLoading ? '正在加载…' : '加载更多'}</button></div>`}
+        ${cursor && html`<div class="load-more" ref=${loadMoreSentinelRef}><button onClick=${loadMore} disabled=${moreLoading}><${Icon} name="more"/>${moreLoading ? '正在加载…' : '加载更多'}</button></div>`}
       </section>
     </main>
     <${Preview} item=${preview} text=${previewText} loading=${previewLoading} error=${previewError} onPlaybackProgress=${updatePlaybackProgress} onClose=${closePreview}/>
