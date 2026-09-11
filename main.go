@@ -107,12 +107,17 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		if !needsScan {
+		storageState, err := catalogDB.Storage(ctx, storageID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		resumeScan := storageState.State == "interrupted"
+		if !needsScan && !resumeScan {
 			continue
 		}
 		go func() {
 			if err := idx.Scan(ctx, storageID); err != nil && ctx.Err() == nil {
-				log.Printf("initial scan %s: %v", storageID, err)
+				log.Printf("startup scan %s: %v", storageID, err)
 			}
 		}()
 	}
