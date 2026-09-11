@@ -277,7 +277,7 @@ function App() {
   }, []);
 
   const openEntry = useCallback(async (id, { history = true, libraryID = activeLibraryID, libraryList = libraries } = {}) => {
-    if (!id) return;
+    if (!id) return false;
     setLoading(true);
     setError('');
     setSearchQuery('');
@@ -293,8 +293,10 @@ function App() {
       setCursor(children.cursor || null);
       setTrail(await buildTrail(current, libraryList, libraryID));
       if (history) window.history.pushState({ entryID: id, libraryID }, '', `/files/${encodeURIComponent(id)}`);
+      return true;
     } catch (reason) {
       setError(reason.message || '无法打开目录');
+      return false;
     } finally {
       setLoading(false);
     }
@@ -320,7 +322,14 @@ function App() {
       if (cancelled) return;
       const routeID = routeEntryID();
       if (routeID) {
-        await openEntry(routeID, { history: false, libraryList });
+        const opened = await openEntry(routeID, { history: false, libraryList });
+        if (!opened) {
+          const first = libraryList.find((library) => library.sources?.some((source) => source.entryId));
+          if (first) {
+            setActiveLibraryID(first.id);
+            await openEntry(first.sources.find((source) => source.entryId).entryId, { history: true, libraryID: first.id, libraryList });
+          }
+        }
       } else {
         const first = libraryList.find((library) => library.sources?.some((source) => source.entryId));
         if (first) {

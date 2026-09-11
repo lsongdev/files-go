@@ -51,6 +51,40 @@ func TestScanProgressPersistsAndInterruptedScanDoesNotNeedInitialScan(t *testing
 	}
 }
 
+func TestCanceledScanIsRecoveredAsInterrupted(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.BeginScan(ctx, "disk"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.FailScan(ctx, "disk", "interrupted", context.Canceled.Error()); err != nil {
+		t.Fatal(err)
+	}
+	storage, err := cat.Storage(ctx, "disk")
+	if err != nil || storage.State != "interrupted" {
+		t.Fatalf("storage = %#v, %v", storage, err)
+	}
+
+	if _, err := db.ExecContext(ctx, `UPDATE storages SET state='error', scan_error='context canceled' WHERE id='disk'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.RecoverInterruptedScans(ctx); err != nil {
+		t.Fatal(err)
+	}
+	storage, err = cat.Storage(ctx, "disk")
+	if err != nil || storage.State != "interrupted" {
+		t.Fatalf("recovered storage = %#v, %v", storage, err)
+	}
+}
+
 func TestRescanUsesExistingEntryCountAsProgressEstimate(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(ctx, t.TempDir())

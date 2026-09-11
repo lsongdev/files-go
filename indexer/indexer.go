@@ -136,7 +136,9 @@ func (i *Indexer) Scan(ctx context.Context, storageID string) error {
 	}
 	if err != nil {
 		state := "error"
-		if errors.Is(err, storage.ErrOffline) || errors.Is(err, storage.ErrNotFound) {
+		if errors.Is(err, context.Canceled) {
+			state = "interrupted"
+		} else if errors.Is(err, storage.ErrOffline) || errors.Is(err, storage.ErrNotFound) {
 			state = "offline"
 		}
 		if failErr := i.catalog.FailScan(context.WithoutCancel(ctx), storageID, state, err.Error()); failErr != nil {

@@ -443,7 +443,7 @@ func (c *Catalog) CompleteScan(ctx context.Context, storageID string, generation
 }
 
 func (c *Catalog) FailScan(ctx context.Context, storageID, state, message string) error {
-	if state != "offline" {
+	if state != "offline" && state != "interrupted" {
 		state = "error"
 	}
 	tx, err := c.db.BeginTx(ctx, nil)
@@ -533,7 +533,8 @@ func (c *Catalog) UpdateScanProgress(ctx context.Context, storageID string, entr
 func (c *Catalog) RecoverInterruptedScans(ctx context.Context) error {
 	now := time.Now().UTC()
 	_, err := c.db.ExecContext(ctx, `UPDATE storages SET state='interrupted', scan_updated_at=?,
-		scan_error='service stopped before scan completed', updated_at=? WHERE state='scanning'`, now, now)
+		scan_error='service stopped before scan completed', updated_at=?
+		WHERE state='scanning' OR (state='error' AND scan_error='context canceled')`, now, now)
 	return err
 }
 
