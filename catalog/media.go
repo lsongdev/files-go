@@ -188,6 +188,47 @@ func (c *Catalog) MediaItemForEntry(ctx context.Context, entryID, role string) (
 	return &item, err
 }
 
+// MediaItemForDirectory returns a single coherent media identity represented by
+// files below a physical directory. Library roots and mixed collections do not
+// resolve because they contain more than one candidate.
+func (c *Catalog) MediaItemForDirectory(ctx context.Context, entry model.Entry) (*model.MediaItem, error) {
+	if entry.Type != model.EntryDirectory {
+		return nil, ErrNotFound
+	}
+	rows, err := c.reader.QueryContext(ctx, `SELECT m.id, m.type, m.title, m.sort_title,
+		m.year, m.parent_id, m.index_number, m.external_id, m.match_source, m.match_confidence,
+		m.match_locked, m.metadata, m.created_at, m.updated_at
+		FROM media_items m JOIN media_item_files mf ON mf.media_id=m.id
+		JOIN entries e ON e.id=mf.entry_id
+		WHERE e.storage_id=? AND (?='' OR substr(e.path,1,length(?)+1)=? || '/') AND (
+			(m.type='series' AND mf.role='series') OR
+			(m.type='movie' AND mf.role='video') OR
+			(m.type='album' AND mf.role='album')
+		)
+		GROUP BY m.id
+		ORDER BY CASE m.type WHEN 'series' THEN 0 WHEN 'movie' THEN 1 ELSE 2 END, m.id
+		LIMIT 2`, entry.StorageID, entry.Path, entry.Path, entry.Path)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.MediaItem, 0, 2)
+	for rows.Next() {
+		item, err := scanMediaItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(items) != 1 {
+		return nil, ErrNotFound
+	}
+	return &items[0], nil
+}
+
 func (c *Catalog) MediaItemFiles(ctx context.Context, mediaID string) ([]model.MediaItemFile, error) {
 	rows, err := c.reader.QueryContext(ctx, `SELECT media_id, entry_id, role, created_at
 		FROM media_item_files WHERE media_id=? ORDER BY role, entry_id`, mediaID)

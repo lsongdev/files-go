@@ -15,7 +15,7 @@ import (
 )
 
 const JobProcessEntry = "process_entry"
-const pipelineVersion = 4
+const pipelineVersion = 5
 
 type Processor interface {
 	Name() string

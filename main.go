@@ -87,6 +87,20 @@ func main() {
 	}
 	processing := processor.New(catalogDB, jobQueue, processors...)
 	idx.SetEntrySink(processing)
+	afterID := ""
+	for {
+		entries, err := catalogDB.EntriesMissingMediaAssociation(ctx, "audio", "album", afterID, 500)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if len(entries) == 0 {
+			break
+		}
+		if err := processing.EnqueueEntries(ctx, entries); err != nil {
+			log.Fatal(err)
+		}
+		afterID = entries[len(entries)-1].ID
+	}
 	workerPool := jobs.NewPool(jobQueue, cfg.Processing.Workers)
 	workerPool.Handle(processor.JobProcessEntry, processing.Handle)
 	workerPool.Start(ctx)

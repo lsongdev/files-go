@@ -254,3 +254,54 @@ func TestMediaItemsAssociateFilesAndSupportManualUnmatch(t *testing.T) {
 		t.Fatalf("unmatch result = %v", err)
 	}
 }
+
+func TestDirectoryMediaContextRequiresOneCoherentIdentity(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := cat.BeginScan(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := cat.EnsureRoot(ctx, "disk", generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directories, err := cat.UpsertEntries(ctx, []model.Entry{
+		{StorageID: "disk", ParentID: &root.ID, Name: "Movie A", Path: "Movie A", Type: model.EntryDirectory},
+		{StorageID: "disk", ParentID: &root.ID, Name: "Movie B", Path: "Movie B", Type: model.EntryDirectory},
+	}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := cat.UpsertEntries(ctx, []model.Entry{
+		{StorageID: "disk", ParentID: &directories[0].ID, Name: "a.mkv", Path: "Movie A/a.mkv", Type: model.EntryFile},
+		{StorageID: "disk", ParentID: &directories[1].ID, Name: "b.mkv", Path: "Movie B/b.mkv", Type: model.EntryFile},
+	}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, title := range []string{"Movie A", "Movie B"} {
+		item, err := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "movie", Title: title, MatchSource: "filename"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cat.AssociateMediaFile(ctx, item.ID, files[index].ID, "video"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	item, err := cat.MediaItemForDirectory(ctx, directories[0])
+	if err != nil || item.Title != "Movie A" {
+		t.Fatalf("directory media = %#v, %v", item, err)
+	}
+	if _, err := cat.MediaItemForDirectory(ctx, *root); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("mixed root media error = %v, want not found", err)
+	}
+}
