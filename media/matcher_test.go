@@ -18,6 +18,14 @@ func TestBestCandidateUsesTitleAndYear(t *testing.T) {
 	}
 }
 
+func TestBestCandidateMatchesLocalizedResultByOriginalTitle(t *testing.T) {
+	year := 2014
+	candidate, confidence, ok := bestCandidate(ParsedName{Title: "Interstellar", Year: &year}, []Candidate{{ID: "157336", Title: "星际穿越", OriginalTitle: "Interstellar", Year: &year}})
+	if !ok || candidate.ID != "157336" || confidence < .9 {
+		t.Fatalf("candidate = %#v, %f, %v", candidate, confidence, ok)
+	}
+}
+
 type fakeProvider struct{}
 
 func (fakeProvider) Search(_ context.Context, query Query) ([]Candidate, error) {

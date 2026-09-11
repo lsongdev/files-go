@@ -5,8 +5,8 @@
 rebuildable SQLite catalog so directory browsing and metadata requests never
 need to wake or enumerate disks.
 
-The current implementation provides the Phase 1 core, the Phase 2 file manager,
-Phase 3 background processing, and the Phase 4 media catalog described in
+The current implementation provides the Phase 1 core through the Phase 5
+playback experience described in
 [`docs/design.md`](docs/design.md):
 
 - local storage isolation with traversal and symlink-escape protection;
@@ -26,6 +26,8 @@ Phase 3 background processing, and the Phase 4 media catalog described in
 - separate movie, series/season/episode, track, photo, and book catalog items;
 - optional TMDB movie/TV matching with confidence scoring and manual override APIs;
 - cached TMDB posters and library-scoped media galleries.
+- capability-based direct play, remux, and single-profile HLS transcoding;
+- per-user resume state and a Continue Watching media shelf.
 
 ## Configuration
 
@@ -38,6 +40,7 @@ data: "/var/lib/files-go"
 processing:
   workers: 2
   ffprobe: ffprobe
+  ffmpeg: ffmpeg
   pdfinfo: pdfinfo
 
 media:
@@ -92,6 +95,12 @@ GET  /api/v1/entries/{id}/media-item
 PUT  /api/v1/entries/{id}/media-item
 DELETE /api/v1/entries/{id}/media-item
 POST /api/v1/entries/{id}/media-item/rematch
+POST /api/v1/playback/{id}
+GET  /api/v1/playback/sessions/{session}/{file}
+DELETE /api/v1/playback/sessions/{session}
+GET  /api/v1/media/{id}/playback-state
+PUT  /api/v1/media/{id}/playback-state
+GET  /api/v1/playback/continue
 ```
 
 ## Development

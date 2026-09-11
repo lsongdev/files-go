@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -20,7 +21,8 @@ func (p *Cataloger) Match(entry model.Entry) bool {
 		return false
 	}
 	switch strings.ToLower(entry.Extension) {
-	case "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "wma", "aiff", "ape", "jpg", "jpeg", "png", "gif", "epub", "pdf":
+	case "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "wma", "aiff", "ape", "jpg", "jpeg", "png", "gif", "epub", "pdf",
+		"mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "wmv":
 		return true
 	default:
 		return false
@@ -43,6 +45,8 @@ func (p *Cataloger) Process(ctx context.Context, entry model.Entry) error {
 		itemType, role = "photo", "photo"
 	case "book":
 		itemType, role = "book", "book"
+	case "video":
+		return p.catalogVideo(ctx, entry, *technical)
 	default:
 		return nil
 	}
@@ -82,4 +86,67 @@ func (p *Cataloger) Process(ctx context.Context, entry model.Entry) error {
 		return err
 	}
 	return p.catalog.AssociateMediaFile(ctx, item.ID, entry.ID, role)
+}
+
+func (p *Cataloger) catalogVideo(ctx context.Context, entry model.Entry, technical model.MediaFile) error {
+	libraryTypes, err := p.catalog.LibraryTypesForEntry(ctx, entry)
+	if err != nil {
+		return err
+	}
+	parsed := ParseName(entry.Name)
+	if parsed.Title == "" {
+		parsed.Title = strings.TrimSuffix(entry.Name, filepath.Ext(entry.Name))
+	}
+	if contains(libraryTypes, "tv") && parsed.Season != nil && parsed.Episode != nil {
+		return p.catalogEpisode(ctx, entry, technical, parsed)
+	}
+	if !contains(libraryTypes, "movies") {
+		return nil
+	}
+	externalID := "entry:" + entry.ID
+	item, err := p.catalog.MediaItemByExternalID(ctx, "movie", externalID)
+	if errors.Is(err, catalog.ErrNotFound) {
+		item, err = p.catalog.UpsertMediaItem(ctx, model.MediaItem{Type: "movie", Title: parsed.Title, SortTitle: sortTitle(parsed.Title), Year: parsed.Year,
+			ExternalID: externalID, MatchSource: "filename", MatchConfidence: .6, Metadata: technical.Metadata})
+	}
+	if err != nil {
+		return err
+	}
+	return p.catalog.AssociateMediaFile(ctx, item.ID, entry.ID, "video")
+}
+
+func (p *Cataloger) catalogEpisode(ctx context.Context, entry model.Entry, technical model.MediaFile, parsed ParsedName) error {
+	seriesID := "filename:" + normalizedTitle(parsed.Title)
+	series, err := p.catalog.MediaItemByExternalID(ctx, "series", seriesID)
+	if errors.Is(err, catalog.ErrNotFound) {
+		series, err = p.catalog.UpsertMediaItem(ctx, model.MediaItem{Type: "series", Title: parsed.Title, SortTitle: sortTitle(parsed.Title), Year: parsed.Year,
+			ExternalID: seriesID, MatchSource: "filename", MatchConfidence: .6})
+	}
+	if err != nil {
+		return err
+	}
+	season, err := p.catalog.MediaChild(ctx, series.ID, "season", *parsed.Season)
+	if errors.Is(err, catalog.ErrNotFound) {
+		title := fmt.Sprintf("%s — Season %d", series.Title, *parsed.Season)
+		season, err = p.catalog.UpsertMediaItem(ctx, model.MediaItem{Type: "season", Title: title, SortTitle: fmt.Sprintf("%04d", *parsed.Season), ParentID: series.ID,
+			IndexNumber: parsed.Season, MatchSource: "filename", MatchConfidence: .6})
+	}
+	if err != nil {
+		return err
+	}
+	episode, err := p.catalog.MediaChild(ctx, season.ID, "episode", *parsed.Episode)
+	if errors.Is(err, catalog.ErrNotFound) {
+		title := fmt.Sprintf("Episode %d", *parsed.Episode)
+		episode, err = p.catalog.UpsertMediaItem(ctx, model.MediaItem{Type: "episode", Title: title, SortTitle: fmt.Sprintf("%04d", *parsed.Episode), ParentID: season.ID,
+			IndexNumber: parsed.Episode, MatchSource: "filename", MatchConfidence: .6, Metadata: technical.Metadata})
+	}
+	if err != nil {
+		return err
+	}
+	for _, association := range []struct{ id, role string }{{series.ID, "series"}, {season.ID, "season"}, {episode.ID, "video"}} {
+		if err := p.catalog.AssociateMediaFile(ctx, association.id, entry.ID, association.role); err != nil {
+			return err
+		}
+	}
+	return nil
 }

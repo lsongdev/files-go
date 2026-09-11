@@ -39,8 +39,10 @@ func (m *Matcher) Match(entry model.Entry) bool {
 }
 
 func (m *Matcher) Process(ctx context.Context, entry model.Entry) error {
-	if _, err := m.catalog.MediaItemForEntry(ctx, entry.ID, "video"); err == nil {
-		return nil
+	if existing, err := m.catalog.MediaItemForEntry(ctx, entry.ID, "video"); err == nil {
+		if existing.MatchLocked || existing.MatchSource == "tmdb" {
+			return nil
+		}
 	} else if !errors.Is(err, catalog.ErrNotFound) {
 		return err
 	}
@@ -76,7 +78,13 @@ func (m *Matcher) Process(ctx context.Context, entry model.Entry) error {
 		return err
 	}
 	if itemType == "movie" {
+		if err := m.catalog.UnmatchEntry(ctx, entry.ID); err != nil {
+			return err
+		}
 		return m.matchMovie(ctx, entry, candidate, confidence, metadata)
+	}
+	if err := m.catalog.UnmatchEntry(ctx, entry.ID); err != nil {
+		return err
 	}
 	return m.matchEpisode(ctx, entry, parsed, candidate, confidence, metadata)
 }
@@ -124,7 +132,12 @@ func (m *Matcher) matchEpisode(ctx context.Context, entry model.Entry, parsed Pa
 	if err != nil {
 		return err
 	}
-	return m.catalog.AssociateMediaFile(ctx, episode.ID, entry.ID, "video")
+	for _, association := range []struct{ id, role string }{{series.ID, "series"}, {season.ID, "season"}, {episode.ID, "video"}} {
+		if err := m.catalog.AssociateMediaFile(ctx, association.id, entry.ID, association.role); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func bestCandidate(parsed ParsedName, candidates []Candidate) (Candidate, float64, bool) {
@@ -135,6 +148,9 @@ func bestCandidate(parsed ParsedName, candidates []Candidate) (Candidate, float6
 	items := make([]scored, 0, len(candidates))
 	for _, candidate := range candidates {
 		score := titleScore(parsed.Title, candidate.Title)
+		if originalScore := titleScore(parsed.Title, candidate.OriginalTitle); originalScore > score {
+			score = originalScore
+		}
 		if parsed.Year != nil && candidate.Year != nil {
 			if *parsed.Year == *candidate.Year {
 				score += .2

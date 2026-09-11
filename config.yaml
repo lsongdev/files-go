@@ -6,6 +6,7 @@ data: ""
 processing:
   workers: 2
   ffprobe: ffprobe
+  ffmpeg: ffmpeg
   pdfinfo: pdfinfo
 
 media:

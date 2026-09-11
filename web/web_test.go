@@ -75,6 +75,20 @@ func TestPreviewAssetsIncludeNativeAndTextPreviews(t *testing.T) {
 	}
 }
 
+func TestPlaybackAssetsUseCSPCompatibleAbsoluteModules(t *testing.T) {
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	body := response.Body.String()
+	for _, expected := range []string{"https://unpkg.com/hls.js@1.6.13/dist/hls.mjs", "/playback/", "continueItems", "继续观看"} {
+		if response.Code != http.StatusOK || !strings.Contains(body, expected) {
+			t.Fatalf("app.js does not contain %q", expected)
+		}
+	}
+	if strings.Contains(body, `from 'preact'`) {
+		t.Fatal("app.js contains a bare Preact module specifier")
+	}
+}
+
 func TestFileManagementAssetsIncludeCreateRenameAndDelete(t *testing.T) {
 	response := httptest.NewRecorder()
 	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))

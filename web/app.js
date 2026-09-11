@@ -1,4 +1,5 @@
-import { html, render, useCallback, useEffect, useMemo, useState } from 'https://unpkg.com/htm@3.1.1/preact/standalone.module.js';
+import { html, render, useCallback, useEffect, useMemo, useRef, useState } from 'https://unpkg.com/htm@3.1.1/preact/standalone.module.js';
+import Hls from 'https://unpkg.com/hls.js@1.6.13/dist/hls.mjs';
 
 const API = '/api/v1';
 
@@ -77,7 +78,31 @@ function copyNameFor(item) {
   return dot > 0 ? `${item.name.slice(0, dot)} copy${item.name.slice(dot)}` : `${item.name} copy`;
 }
 
-function Preview({ item, text, loading, error, onClose }) {
+function VideoPlayer({ url, startPositionMS = 0, onProgress }) {
+  const videoRef = useRef(null);
+  const [playerStatus, setPlayerStatus] = useState('正在缓冲视频…');
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !url) return undefined;
+    let hls;
+    if (url.includes('.m3u8') && Hls.isSupported()) {
+      hls = new Hls({ enableWorker: false, manifestLoadingMaxRetry: 12, manifestLoadingRetryDelay: 750, manifestLoadingMaxRetryTimeout: 3000 });
+      hls.loadSource(url);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => { setPlayerStatus(''); video.play().catch(() => {}); });
+      hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) setPlayerStatus(`暂时无法播放：${data.details}`); });
+    } else {
+      video.src = url;
+      setPlayerStatus('');
+    }
+    const resume = () => { if (startPositionMS > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(startPositionMS / 1000, Math.max(0, video.duration - 2)); };
+    video.addEventListener('loadedmetadata', resume, { once: true });
+    return () => { hls?.destroy(); video.removeAttribute('src'); video.load(); };
+  }, [url, startPositionMS]);
+  return html`<div class="video-player"><video ref=${videoRef} controls autoplay preload="metadata" onTimeUpdate=${(event) => onProgress?.(event.currentTarget, false)} onEnded=${(event) => onProgress?.(event.currentTarget, true)}></video>${playerStatus && html`<span class="video-status">${playerStatus}</span>`}</div>`;
+}
+
+function Preview({ item, text, loading, error, onClose, onPlaybackProgress }) {
   if (!item) return null;
   const kind = previewKind(item);
   const contentURL = item.links.content;
@@ -91,7 +116,7 @@ function Preview({ item, text, loading, error, onClose }) {
         </nav>
       </header>
       <div class=${`preview-body ${kind}`}>
-        ${!item.available ? html`<div class="preview-message"><h2>文件当前不可用</h2><p>重新连接存储并扫描后即可预览。</p></div>` : kind === 'image' ? html`<img src=${contentURL} alt=${item.name}/>` : kind === 'audio' ? html`<audio src=${contentURL} controls preload="metadata"></audio>` : kind === 'video' ? html`<video src=${contentURL} controls preload="metadata"></video>` : kind === 'pdf' ? html`<iframe src=${contentURL} title=${item.name}></iframe>` : kind === 'text' ? (loading ? html`<div class="preview-message">正在读取文本…</div>` : error ? html`<div class="preview-message"><h2>无法预览文本</h2><p>${error}</p></div>` : html`<pre>${text}</pre>`) : html`<div class="preview-message"><div class="empty-icon"><${Icon} name="file" size=${30}/></div><h2>此格式没有内置预览</h2><p>${item.mime || '未知文件类型'}</p><a href=${contentURL} download=${item.name}>下载文件</a></div>`}
+        ${!item.available ? html`<div class="preview-message"><h2>文件当前不可用</h2><p>重新连接存储并扫描后即可预览。</p></div>` : kind === 'image' ? html`<img src=${contentURL} alt=${item.name}/>` : kind === 'audio' ? html`<audio src=${contentURL} controls preload="metadata"></audio>` : kind === 'video' ? (item.playbackURL ? html`<${VideoPlayer} url=${item.playbackURL} startPositionMS=${item.startPositionMS} onProgress=${(video, played) => onPlaybackProgress?.(item, video, played)}/>` : html`<div class="preview-message">${error || '正在准备播放…'}</div>`) : kind === 'pdf' ? html`<iframe src=${contentURL} title=${item.name}></iframe>` : kind === 'text' ? (loading ? html`<div class="preview-message">正在读取文本…</div>` : error ? html`<div class="preview-message"><h2>无法预览文本</h2><p>${error}</p></div>` : html`<pre>${text}</pre>`) : html`<div class="preview-message"><div class="empty-icon"><${Icon} name="file" size=${30}/></div><h2>此格式没有内置预览</h2><p>${item.mime || '未知文件类型'}</p><a href=${contentURL} download=${item.name}>下载文件</a></div>`}
       </div>
     </section>
   </div>`;
@@ -129,6 +154,7 @@ function App() {
   const [trail, setTrail] = useState([]);
   const [items, setItems] = useState([]);
   const [mediaItems, setMediaItems] = useState([]);
+  const [continueItems, setContinueItems] = useState([]);
   const [browseMode, setBrowseMode] = useState('files');
   const [cursor, setCursor] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -198,9 +224,10 @@ function App() {
   }, [createFolderOpen, manageItem, movingItem, actionSaving]);
 
   const loadNavigation = useCallback(async () => {
-    const [libraryData, storageData] = await Promise.all([request(`${API}/libraries`), request(`${API}/storages`)]);
+    const [libraryData, storageData, continueData] = await Promise.all([request(`${API}/libraries`), request(`${API}/storages`), request(`${API}/playback/continue`).catch(() => ({ items: [] }))]);
     setLibraries(libraryData.items || []);
     setStorages(storageData.items || []);
+    setContinueItems(continueData.items || []);
     return libraryData.items || [];
   }, []);
 
@@ -383,7 +410,25 @@ function App() {
     setPreview(item);
     setPreviewText('');
     setPreviewError('');
-    if (previewKind(item) !== 'text' || !item.available) return;
+    if (!item.available) return;
+    if (previewKind(item) === 'video') {
+      try {
+        const [playbackResult, mediaItem] = await Promise.all([
+          request(`${API}/playback/${encodeURIComponent(item.id)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ containers: ['mp4', 'webm', 'ogg'], videoCodecs: ['h264', 'vp8', 'vp9', 'av1'], audioCodecs: ['aac', 'mp3', 'opus', 'vorbis'], hls: true }) }),
+          request(`${API}/entries/${encodeURIComponent(item.id)}/media-item?role=video`).catch(() => null),
+        ]);
+        let startPositionMS = 0;
+        if (mediaItem) {
+          const state = await request(`${API}/media/${encodeURIComponent(mediaItem.id)}/playback-state`).catch(() => null);
+          startPositionMS = state?.positionMs || 0;
+        }
+        setPreview((current) => current?.id === item.id ? { ...current, playbackURL: playbackResult.url, playbackMode: playbackResult.mode, mediaID: mediaItem?.id, startPositionMS } : current);
+      } catch (reason) {
+        setPreviewError(reason.message || '无法开始播放');
+      }
+      return;
+    }
+    if (previewKind(item) !== 'text') return;
     setPreviewLoading(true);
     try {
       const response = await fetch(`${API}/entries/${encodeURIComponent(item.id)}/text`);
@@ -397,6 +442,23 @@ function App() {
     } finally {
       setPreviewLoading(false);
     }
+  };
+
+  const updatePlaybackProgress = (item, video, played) => {
+    if (!item.mediaID || !Number.isFinite(video.currentTime)) return;
+    const now = Date.now();
+    if (!played && now - Number(video.dataset.savedAt || 0) < 5000) return;
+    video.dataset.savedAt = String(now);
+    fetch(`${API}/media/${encodeURIComponent(item.mediaID)}/playback-state`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+      body: JSON.stringify({ positionMs: Math.round(video.currentTime * 1000), played }),
+    }).then(() => request(`${API}/playback/continue`)).then((data) => setContinueItems(data.items || [])).catch(() => {});
+  };
+
+  const closePreview = () => {
+    const match = preview?.playbackURL?.match(/\/playback\/sessions\/([^/]+)\//);
+    if (match) fetch(`${API}/playback/sessions/${encodeURIComponent(match[1])}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+    setPreview(null);
   };
 
   const openMediaItem = async (item) => {
@@ -641,7 +703,7 @@ function App() {
       ${error && html`<div class="error-banner" role="alert"><span>${error}</span><button onClick=${refresh}>重试</button></div>`}
 
       <section class="browser" aria-live="polite">
-        ${loading ? html`<${Skeleton}/>` : browseMode === 'media' ? html`<${MediaGallery} items=${mediaItems} onOpen=${openMediaItem}/>` : items.length === 0 ? html`<${EmptyState} searchTerm=${searchTerm}/>` : view === 'list' ? html`
+        ${loading ? html`<${Skeleton}/>` : browseMode === 'media' ? html`${['movies', 'tv'].includes(activeLibrary?.type) && continueItems.length > 0 && html`<section class="continue-section"><h2>继续观看</h2><${MediaGallery} items=${continueItems.map((state) => state.media).filter(Boolean)} onOpen=${openMediaItem}/></section>`}<${MediaGallery} items=${mediaItems} onOpen=${openMediaItem}/>` : items.length === 0 ? html`<${EmptyState} searchTerm=${searchTerm}/>` : view === 'list' ? html`
           <div class="file-table" role="table" aria-label="文件">
             <div class="table-head" role="row"><span>名称</span><span>大小</span><span>修改时间</span><span></span></div>
             ${items.map((item) => html`<div key=${item.id} class="file-row" role="row">
@@ -665,7 +727,7 @@ function App() {
         ${browseMode === 'files' && cursor && html`<div class="load-more"><button onClick=${loadMore} disabled=${moreLoading}><${Icon} name="more"/>${moreLoading ? '正在加载…' : '加载更多'}</button></div>`}
       </section>
     </main>
-    <${Preview} item=${preview} text=${previewText} loading=${previewLoading} error=${previewError} onClose=${() => setPreview(null)}/>
+    <${Preview} item=${preview} text=${previewText} loading=${previewLoading} error=${previewError} onPlaybackProgress=${updatePlaybackProgress} onClose=${closePreview}/>
     ${createFolderOpen && html`<div class="preview-scrim" onClick=${() => !actionSaving && setCreateFolderOpen(false)}><form class="action-dialog" role="dialog" aria-modal="true" aria-labelledby="create-folder-title" onSubmit=${createFolder} onClick=${(event) => event.stopPropagation()}><header><div><strong id="create-folder-title">新建文件夹</strong><span>在 ${entry?.name || activeLibrary?.name || '当前目录'} 中创建</span></div><button type="button" class="icon-button" onClick=${() => setCreateFolderOpen(false)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header><label>名称<input value=${folderName} onInput=${(event) => setFolderName(event.currentTarget.value)} maxlength="255" required/></label>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}<footer><button type="button" onClick=${() => setCreateFolderOpen(false)}>取消</button><button class="primary" disabled=${actionSaving}>${actionSaving ? '正在创建…' : '创建'}</button></footer></form></div>`}
     ${manageItem && html`<div class="preview-scrim" onClick=${() => !actionSaving && setManageItem(null)}><form class="action-dialog" role="dialog" aria-modal="true" aria-labelledby="manage-entry-title" onSubmit=${renameEntry} onClick=${(event) => event.stopPropagation()}><header><div><strong id="manage-entry-title">管理条目</strong><span>${manageItem.type === 'directory' ? '文件夹' : formatSize(manageItem.size)}</span></div><button type="button" class="icon-button" onClick=${() => setManageItem(null)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header><label>名称<input value=${renameValue} onInput=${(event) => { setRenameValue(event.currentTarget.value); setDeleteArmed(false); }} maxlength="255" required/></label>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}${deleteArmed && html`<p class="delete-warning" role="alert">此操作无法撤销。再次点击删除以确认。</p>`}<footer class="manage-footer"><button type="button" class="danger" onClick=${() => deleteArmed ? deleteManagedEntry() : setDeleteArmed(true)} disabled=${actionSaving}><${Icon} name="trash" size=${16}/>${deleteArmed ? '确认删除' : '删除'}</button><button type="button" onClick=${() => openTransfer('copy')}><${Icon} name="copy" size=${16}/>复制</button><button type="button" onClick=${() => openTransfer('move')}><${Icon} name="move" size=${16}/>移动</button><span></span><button type="button" onClick=${() => setManageItem(null)}>取消</button><button class="primary" disabled=${actionSaving || renameValue.trim() === manageItem.name}>${actionSaving ? '正在保存…' : '重命名'}</button></footer></form></div>`}
     ${movingItem && html`<div class="preview-scrim" onClick=${() => !actionSaving && setMovingItem(null)}><section class=${`action-dialog destination-dialog ${transferMode}`} role="dialog" aria-modal="true" aria-labelledby="transfer-entry-title" onClick=${(event) => event.stopPropagation()}><header><div><strong id="transfer-entry-title">${transferMode === 'copy' ? '复制' : '移动'}“${movingItem.name}”</strong><span>选择${transferMode === 'copy' ? '目标名称和' : ''}目标文件夹</span></div><button type="button" class="icon-button" onClick=${() => setMovingItem(null)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header>${transferMode === 'copy' && html`<label class="copy-name">副本名称<input value=${copyName} onInput=${(event) => setCopyName(event.currentTarget.value)} maxlength="255" required/></label>`}<nav class="destination-trail" aria-label="目标位置">${destinationTrail.map((item, index) => html`<span key=${item.id || index}>${index > 0 && html`<${Icon} name="chevron" size=${14}/>`}<button onClick=${() => item.id && loadDestination(item.id)}>${item.label}</button></span>`)}</nav><div class="destination-list">${destinationLoading ? html`<p>正在读取文件夹…</p>` : destinationFolders.length ? destinationFolders.map((folder) => html`<button key=${folder.id} onClick=${() => loadDestination(folder.id)}><span class="folder"><${Icon} name="folder" size=${18}/></span>${folder.name}<${Icon} name="chevron" size=${15}/></button>`) : html`<p>这里没有子文件夹</p>`}</div>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}<footer><button type="button" onClick=${() => setMovingItem(null)}>取消</button><button class="primary" onClick=${confirmTransfer} disabled=${actionSaving || destinationLoading || !destination || !copyName.trim() || (transferMode === 'move' && destination.id === movingItem.parentId) || (transferMode === 'copy' && destination.id === movingItem.parentId && copyName.trim() === movingItem.name)}>${actionSaving ? (transferMode === 'copy' ? '正在复制…' : '正在移动…') : transferMode === 'move' && destination?.id === movingItem.parentId ? '已在此位置' : transferMode === 'copy' ? '复制到这里' : '移动到这里'}</button></footer></section></div>`}

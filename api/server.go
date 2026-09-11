@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -23,6 +24,7 @@ import (
 	"github.com/lsongdev/files-go/indexer"
 	mediaengine "github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/model"
+	"github.com/lsongdev/files-go/playback"
 	"github.com/lsongdev/files-go/processor"
 	"github.com/lsongdev/files-go/storage"
 )
@@ -35,10 +37,14 @@ type Server struct {
 	logger   *log.Logger
 	mux      *http.ServeMux
 	cacheDir string
+	playback *playback.Manager
 }
 
-func New(ctx context.Context, catalog *catalog.Catalog, storages *storage.Registry, indexer *indexer.Indexer, logger *log.Logger, cacheDir string) *Server {
+func New(ctx context.Context, catalog *catalog.Catalog, storages *storage.Registry, indexer *indexer.Indexer, logger *log.Logger, cacheDir string, managers ...*playback.Manager) *Server {
 	server := &Server{ctx: ctx, catalog: catalog, storages: storages, indexer: indexer, logger: logger, mux: http.NewServeMux(), cacheDir: cacheDir}
+	if len(managers) > 0 {
+		server.playback = managers[0]
+	}
 	server.routes()
 	return server
 }
@@ -70,6 +76,156 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/v1/entries/{id}/media-item", s.setEntryMediaItem)
 	s.mux.HandleFunc("DELETE /api/v1/entries/{id}/media-item", s.unmatchEntryMediaItem)
 	s.mux.HandleFunc("POST /api/v1/entries/{id}/media-item/rematch", s.rematchEntryMediaItem)
+	s.mux.HandleFunc("POST /api/v1/playback/{id}", s.startPlayback)
+	s.mux.HandleFunc("GET /api/v1/playback/sessions/{session}/{file}", s.playbackFile)
+	s.mux.HandleFunc("DELETE /api/v1/playback/sessions/{session}", s.stopPlayback)
+	s.mux.HandleFunc("GET /api/v1/media/{id}/playback-state", s.getPlaybackState)
+	s.mux.HandleFunc("PUT /api/v1/media/{id}/playback-state", s.setPlaybackState)
+	s.mux.HandleFunc("GET /api/v1/playback/continue", s.continueWatching)
+}
+
+func (s *Server) startPlayback(w http.ResponseWriter, r *http.Request) {
+	if s.playback == nil {
+		writeError(w, http.StatusServiceUnavailable, "playback_unavailable", "playback service is unavailable")
+		return
+	}
+	var capabilities playback.Capabilities
+	if err := decodeJSONBody(w, r, &capabilities); err != nil {
+		return
+	}
+	result, err := s.playback.Start(r.Context(), r.PathValue("id"), capabilities)
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "media_not_found", "entry or media metadata not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) playbackFile(w http.ResponseWriter, r *http.Request) {
+	if s.playback == nil {
+		writeError(w, http.StatusNotFound, "session_not_found", "playback session not found")
+		return
+	}
+	filename, err := s.playback.File(r.PathValue("session"), r.PathValue("file"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "segment_not_ready", "playback output is not ready")
+		return
+	}
+	file, err := os.Open(filename)
+	if errors.Is(err, os.ErrNotExist) {
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusNotFound, "segment_not_ready", "playback output is not ready")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if strings.HasSuffix(filename, ".m3u8") {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		w.Header().Set("Cache-Control", "no-store")
+	} else {
+		w.Header().Set("Content-Type", "video/mp2t")
+		w.Header().Set("Cache-Control", "private, max-age=300")
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, filepath.Base(filename), info.ModTime(), file)
+}
+
+func (s *Server) stopPlayback(w http.ResponseWriter, r *http.Request) {
+	if s.playback == nil || !s.playback.Stop(r.PathValue("session")) {
+		writeError(w, http.StatusNotFound, "session_not_found", "playback session not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type playbackStateInput struct {
+	PositionMS int64 `json:"positionMs"`
+	Played     bool  `json:"played"`
+}
+
+func playbackUser(r *http.Request) (string, error) {
+	user := strings.TrimSpace(r.Header.Get("X-Files-Go-User"))
+	if user == "" {
+		return "local", nil
+	}
+	if len(user) > 128 {
+		return "", errors.New("user ID is too long")
+	}
+	for _, char := range user {
+		if !(char == '-' || char == '_' || char == '.' || char >= '0' && char <= '9' || char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z') {
+			return "", errors.New("user ID contains unsupported characters")
+		}
+	}
+	return user, nil
+}
+
+func (s *Server) getPlaybackState(w http.ResponseWriter, r *http.Request) {
+	user, err := playbackUser(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	state, err := s.catalog.PlaybackState(r.Context(), user, r.PathValue("id"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "playback_state_not_found", "playback state not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
+func (s *Server) setPlaybackState(w http.ResponseWriter, r *http.Request) {
+	user, err := playbackUser(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if _, err := s.catalog.MediaItem(r.Context(), r.PathValue("id")); errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "media_not_found", "media item not found")
+		return
+	} else if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	var input playbackStateInput
+	if err := decodeJSONBody(w, r, &input); err != nil {
+		return
+	}
+	state, err := s.catalog.UpsertPlaybackState(r.Context(), model.PlaybackState{UserID: user, MediaID: r.PathValue("id"), PositionMS: input.PositionMS, Played: input.Played})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
+func (s *Server) continueWatching(w http.ResponseWriter, r *http.Request) {
+	user, err := playbackUser(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	items, err := s.catalog.ContinueWatching(r.Context(), user, 20)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) mediaPoster(w http.ResponseWriter, r *http.Request) {
@@ -780,7 +936,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) system(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"version": "0.3.0", "features": map[string]bool{"media": true, "mediaCatalog": true, "thumbnail": true, "poster": true, "transcode": false}})
+	writeJSON(w, http.StatusOK, map[string]any{"version": "0.4.0", "features": map[string]bool{"media": true, "mediaCatalog": true, "thumbnail": true, "poster": true, "directPlay": true, "remux": true, "hls": true, "transcode": true, "continueWatching": true}})
 }
 
 func (s *Server) listStorages(w http.ResponseWriter, r *http.Request) {

@@ -38,6 +38,7 @@ type TMDB struct {
 type Processing struct {
 	Workers int    `yaml:"workers"`
 	FFProbe string `yaml:"ffprobe"`
+	FFmpeg  string `yaml:"ffmpeg"`
 	PDFInfo string `yaml:"pdfinfo"`
 }
 
@@ -125,6 +126,9 @@ func LoadConfig() (cfg *Config, err error) {
 	}
 	if cfg.Processing.FFProbe == "" {
 		cfg.Processing.FFProbe = "ffprobe"
+	}
+	if cfg.Processing.FFmpeg == "" {
+		cfg.Processing.FFmpeg = "ffmpeg"
 	}
 	if cfg.Processing.PDFInfo == "" {
 		cfg.Processing.PDFInfo = "pdfinfo"
