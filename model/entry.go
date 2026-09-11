@@ -37,13 +37,20 @@ type Entry struct {
 }
 
 type Storage struct {
-	ID             string     `json:"id"`
-	Name           string     `json:"name"`
-	Type           string     `json:"type"`
-	State          string     `json:"state"`
-	LastSeenAt     *time.Time `json:"lastSeenAt,omitempty"`
-	LastScanAt     *time.Time `json:"lastScanAt,omitempty"`
-	ScanGeneration int64      `json:"scanGeneration"`
+	ID              string     `json:"id"`
+	Name            string     `json:"name"`
+	Type            string     `json:"type"`
+	State           string     `json:"state"`
+	LastSeenAt      *time.Time `json:"lastSeenAt,omitempty"`
+	LastScanAt      *time.Time `json:"lastScanAt,omitempty"`
+	ScanStartedAt   *time.Time `json:"scanStartedAt,omitempty"`
+	ScanUpdatedAt   *time.Time `json:"scanUpdatedAt,omitempty"`
+	ScanGeneration  int64      `json:"scanGeneration"`
+	ScanEntries     int64      `json:"scanEntries"`
+	ScanFiles       int64      `json:"scanFiles"`
+	ScanDirectories int64      `json:"scanDirectories"`
+	ScanEstimate    int64      `json:"scanEstimate"`
+	ScanError       string     `json:"scanError,omitempty"`
 }
 
 type Library struct {

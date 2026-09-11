@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/lsongdev/files-go/catalog"
@@ -36,6 +37,12 @@ type entryReprocessor interface {
 }
 
 var ErrScanInProgress = errors.New("storage scan already in progress")
+
+type scanProgress struct {
+	entries, files, directories int64
+	pending                     int64
+	lastFlush                   time.Time
+}
 
 func New(catalog *catalog.Catalog, storages *storage.Registry) *Indexer {
 	return &Indexer{catalog: catalog, storages: storages, scanning: make(map[string]bool), priority: make(map[string][]string)}
@@ -114,14 +121,25 @@ func (i *Indexer) Scan(ctx context.Context, storageID string) error {
 	}
 	root, err := i.catalog.EnsureRoot(ctx, storageID, generation)
 	if err == nil {
-		err = i.scanDirectory(ctx, backend, storageID, root, generation)
+		progress := &scanProgress{entries: 1, directories: 1}
+		err = i.flushProgress(ctx, storageID, progress, true)
+		if err == nil {
+			err = i.scanDirectory(ctx, backend, storageID, root, generation, progress)
+		}
+		flushCtx := ctx
+		if err != nil {
+			flushCtx = context.WithoutCancel(ctx)
+		}
+		if flushErr := i.flushProgress(flushCtx, storageID, progress, true); err == nil {
+			err = flushErr
+		}
 	}
 	if err != nil {
 		state := "error"
 		if errors.Is(err, storage.ErrOffline) || errors.Is(err, storage.ErrNotFound) {
 			state = "offline"
 		}
-		if failErr := i.catalog.FailScan(context.WithoutCancel(ctx), storageID, state); failErr != nil {
+		if failErr := i.catalog.FailScan(context.WithoutCancel(ctx), storageID, state, err.Error()); failErr != nil {
 			return fmt.Errorf("scan failed: %v; update storage state: %w", err, failErr)
 		}
 		return err
@@ -129,7 +147,7 @@ func (i *Indexer) Scan(ctx context.Context, storageID string) error {
 	return i.catalog.CompleteScan(ctx, storageID, generation)
 }
 
-func (i *Indexer) scanDirectory(ctx context.Context, backend storage.Storage, storageID string, parent *model.Entry, generation int64) error {
+func (i *Indexer) scanDirectory(ctx context.Context, backend storage.Storage, storageID string, parent *model.Entry, generation int64, progress *scanProgress) error {
 	infos, err := backend.ReadDir(ctx, parent.Path)
 	if err != nil {
 		return err
@@ -150,6 +168,16 @@ func (i *Indexer) scanDirectory(ctx context.Context, backend storage.Storage, st
 			MIME: mimeType, Extension: ext, ModifiedAt: info.ModifiedAt,
 			Inode: info.Inode, Device: info.Device, Available: true,
 		})
+		progress.entries++
+		progress.pending++
+		if info.Type == model.EntryDirectory {
+			progress.directories++
+		} else {
+			progress.files++
+		}
+	}
+	if err := i.flushProgress(ctx, storageID, progress, false); err != nil {
+		return err
 	}
 	for start := 0; start < len(entries); start += batchSize {
 		end := start + batchSize
@@ -167,11 +195,24 @@ func (i *Indexer) scanDirectory(ctx context.Context, backend storage.Storage, st
 	}
 	for index := range entries {
 		if entries[index].Type == model.EntryDirectory {
-			if err := i.scanDirectory(ctx, backend, storageID, &entries[index], generation); err != nil {
+			if err := i.scanDirectory(ctx, backend, storageID, &entries[index], generation, progress); err != nil {
 				return err
 			}
 		}
 	}
+	return nil
+}
+
+func (i *Indexer) flushProgress(ctx context.Context, storageID string, progress *scanProgress, force bool) error {
+	now := time.Now()
+	if !force && progress.pending < 1000 && !progress.lastFlush.IsZero() && now.Sub(progress.lastFlush) < time.Second {
+		return nil
+	}
+	if err := i.catalog.UpdateScanProgress(ctx, storageID, progress.entries, progress.files, progress.directories); err != nil {
+		return err
+	}
+	progress.pending = 0
+	progress.lastFlush = now
 	return nil
 }
 

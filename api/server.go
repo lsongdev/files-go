@@ -22,6 +22,7 @@ import (
 
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/indexer"
+	"github.com/lsongdev/files-go/jobs"
 	mediaengine "github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/model"
 	"github.com/lsongdev/files-go/playback"
@@ -38,6 +39,7 @@ type Server struct {
 	mux      *http.ServeMux
 	cacheDir string
 	playback *playback.Manager
+	jobQueue *jobs.Queue
 }
 
 func New(ctx context.Context, catalog *catalog.Catalog, storages *storage.Registry, indexer *indexer.Indexer, logger *log.Logger, cacheDir string, managers ...*playback.Manager) *Server {
@@ -51,8 +53,11 @@ func New(ctx context.Context, catalog *catalog.Catalog, storages *storage.Regist
 
 func (s *Server) Handler() http.Handler { return s.mux }
 
+func (s *Server) SetJobQueue(queue *jobs.Queue) { s.jobQueue = queue }
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/system", s.system)
+	s.mux.HandleFunc("GET /api/v1/system/status", s.systemStatus)
 	s.mux.HandleFunc("GET /api/v1/storages", s.listStorages)
 	s.mux.HandleFunc("GET /api/v1/storages/{id}", s.getStorage)
 	s.mux.HandleFunc("POST /api/v1/storages/{id}/scan", s.scanStorage)
@@ -936,7 +941,20 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) system(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"version": "0.4.0", "features": map[string]bool{"media": true, "mediaCatalog": true, "thumbnail": true, "poster": true, "directPlay": true, "remux": true, "hls": true, "transcode": true, "continueWatching": true}})
+	writeJSON(w, http.StatusOK, map[string]any{"version": "0.4.0", "features": map[string]bool{"media": true, "mediaEnhancement": true, "thumbnail": true, "poster": true, "directPlay": true, "remux": true, "hls": true, "transcode": true, "continueWatching": true, "scanProgress": true}})
+}
+
+func (s *Server) systemStatus(w http.ResponseWriter, r *http.Request) {
+	stats := jobs.Stats{}
+	var err error
+	if s.jobQueue != nil {
+		stats, err = s.jobQueue.Stats(r.Context(), processor.JobProcessEntry)
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"processing": stats})
 }
 
 func (s *Server) listStorages(w http.ResponseWriter, r *http.Request) {

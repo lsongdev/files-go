@@ -10,6 +10,77 @@ import (
 	"github.com/lsongdev/files-go/model"
 )
 
+func TestScanProgressPersistsAndInterruptedScanDoesNotNeedInitialScan(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	needsScan, err := cat.NeedsInitialScan(ctx, "disk")
+	if err != nil || !needsScan {
+		t.Fatalf("empty storage needs scan = %v, %v", needsScan, err)
+	}
+	generation, err := cat.BeginScan(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.EnsureRoot(ctx, "disk", generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.UpdateScanProgress(ctx, "disk", 42, 35, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.RecoverInterruptedScans(ctx); err != nil {
+		t.Fatal(err)
+	}
+	storage, err := cat.Storage(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storage.State != "interrupted" || storage.ScanEntries != 42 || storage.ScanFiles != 35 || storage.ScanDirectories != 7 || storage.ScanStartedAt == nil || storage.ScanUpdatedAt == nil {
+		t.Fatalf("recovered storage = %#v", storage)
+	}
+	needsScan, err = cat.NeedsInitialScan(ctx, "disk")
+	if err != nil || needsScan {
+		t.Fatalf("partial catalog needs initial scan = %v, %v", needsScan, err)
+	}
+}
+
+func TestRescanUsesExistingEntryCountAsProgressEstimate(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	generation, _ := cat.BeginScan(ctx, "disk")
+	if _, err := cat.EnsureRoot(ctx, "disk", generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.UpsertEntries(ctx, []model.Entry{{StorageID: "disk", Name: "one", Path: "one", Type: model.EntryFile}}, generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.CompleteScan(ctx, "disk", generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.BeginScan(ctx, "disk"); err != nil {
+		t.Fatal(err)
+	}
+	storage, err := cat.Storage(ctx, "disk")
+	if err != nil || storage.ScanEstimate != 2 {
+		t.Fatalf("scan estimate = %#v, %v", storage, err)
+	}
+}
+
 func TestSearchTracksEntriesAndFiltersLibraries(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(ctx, t.TempDir())
