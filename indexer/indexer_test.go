@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -144,5 +145,74 @@ func TestScanEnqueuesOnlyFilesForBackgroundProcessing(t *testing.T) {
 	}
 	if len(sink.entries) != 1 || sink.entries[0].Name != "one.txt" || sink.entries[0].Type != model.EntryFile {
 		t.Fatalf("enqueued entries = %#v", sink.entries)
+	}
+}
+
+type interruptingStorage struct {
+	storage.Storage
+	failPath string
+	failed   bool
+	calls    map[string]int
+}
+
+func (s *interruptingStorage) ReadDir(ctx context.Context, path string) ([]storage.FileInfo, error) {
+	s.calls[path]++
+	if path == s.failPath && !s.failed {
+		s.failed = true
+		return nil, context.Canceled
+	}
+	return s.Storage.ReadDir(ctx, path)
+}
+
+func TestInterruptedScanResumesCompletedSubtrees(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	for _, directory := range []string{"a-complete", "z-interrupted"} {
+		if err := os.Mkdir(filepath.Join(root, directory), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, directory, "file.txt"), []byte(directory), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	local, err := storage.NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &interruptingStorage{Storage: local, failPath: "z-interrupted", calls: make(map[string]int)}
+	registry := storage.NewRegistry()
+	if err := registry.Add("disk", backend); err != nil {
+		t.Fatal(err)
+	}
+	idx := New(cat, registry)
+	if err := idx.Scan(ctx, "disk"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("first scan error = %v, want context canceled", err)
+	}
+	interrupted, err := cat.Storage(ctx, "disk")
+	if err != nil || interrupted.State != "interrupted" || interrupted.ScanEntries == 0 {
+		t.Fatalf("interrupted storage = %#v, %v", interrupted, err)
+	}
+	firstEntries := interrupted.ScanEntries
+	if err := idx.Scan(ctx, "disk"); err != nil {
+		t.Fatal(err)
+	}
+	if backend.calls["a-complete"] != 1 {
+		t.Fatalf("completed subtree read %d times, want once", backend.calls["a-complete"])
+	}
+	completed, err := cat.Storage(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.State != "online" || completed.ScanEntries != 5 || completed.ScanEntries < firstEntries {
+		t.Fatalf("completed storage = %#v; interrupted entries = %d", completed, firstEntries)
 	}
 }

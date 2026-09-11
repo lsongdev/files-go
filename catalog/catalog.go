@@ -48,6 +48,19 @@ type SearchOptions struct {
 	Limit     int
 }
 
+type ScanSession struct {
+	Generation  int64
+	Entries     int64
+	Files       int64
+	Directories int64
+	Resumed     bool
+}
+
+type ScanDirectoryCheckpoint struct {
+	Listed   bool
+	Complete bool
+}
+
 const entryColumns = `id, storage_id, parent_id, name, path, type, size, mtime,
 	inode, device, mime, extension, available, scan_generation, created_at, updated_at`
 
@@ -323,16 +336,73 @@ func (c *Catalog) EnsureRoot(ctx context.Context, storageID string, generation i
 }
 
 func (c *Catalog) BeginScan(ctx context.Context, storageID string) (int64, error) {
-	var generation int64
-	now := time.Now().UTC()
-	err := c.db.QueryRowContext(ctx, `UPDATE storages SET state='scanning', scan_started_at=?, scan_updated_at=?,
-		scan_entries=0, scan_files=0, scan_directories=0,
-		scan_estimate=(SELECT COUNT(*) FROM entries WHERE storage_id=?), scan_error=NULL, updated_at=? WHERE id=?
-		RETURNING scan_generation + 1`, now, now, storageID, now, storageID).Scan(&generation)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, fmt.Errorf("storage %q is not registered", storageID)
+	session, err := c.BeginScanSession(ctx, storageID)
+	return session.Generation, err
+}
+
+func (c *Catalog) BeginScanSession(ctx context.Context, storageID string) (ScanSession, error) {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ScanSession{}, err
 	}
-	return generation, err
+	defer tx.Rollback()
+	var currentGeneration, entries, files, directories int64
+	var state string
+	if err := tx.QueryRowContext(ctx, `SELECT scan_generation, state, scan_entries, scan_files, scan_directories
+		FROM storages WHERE id=?`, storageID).Scan(&currentGeneration, &state, &entries, &files, &directories); errors.Is(err, sql.ErrNoRows) {
+		return ScanSession{}, fmt.Errorf("storage %q is not registered", storageID)
+	} else if err != nil {
+		return ScanSession{}, err
+	}
+	generation := currentGeneration + 1
+	var checkpointCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM scan_checkpoints WHERE storage_id=? AND generation=?`, storageID, generation).Scan(&checkpointCount); err != nil {
+		return ScanSession{}, err
+	}
+	resumed := state == "interrupted" && checkpointCount > 0
+	now := time.Now().UTC()
+	if resumed {
+		if _, err := tx.ExecContext(ctx, `UPDATE storages SET state='scanning', scan_updated_at=?, scan_error=NULL, updated_at=? WHERE id=?`, now, now, storageID); err != nil {
+			return ScanSession{}, err
+		}
+	} else {
+		entries, files, directories = 0, 0, 0
+		if _, err := tx.ExecContext(ctx, `DELETE FROM scan_checkpoints WHERE storage_id=?`, storageID); err != nil {
+			return ScanSession{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE storages SET state='scanning', scan_started_at=?, scan_updated_at=?,
+			scan_entries=0, scan_files=0, scan_directories=0,
+			scan_estimate=(SELECT COUNT(*) FROM entries WHERE storage_id=?), scan_error=NULL, updated_at=? WHERE id=?`, now, now, storageID, now, storageID); err != nil {
+			return ScanSession{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return ScanSession{}, err
+	}
+	return ScanSession{Generation: generation, Entries: entries, Files: files, Directories: directories, Resumed: resumed}, nil
+}
+
+func (c *Catalog) ScanCheckpoint(ctx context.Context, storageID string, generation int64, path string) (ScanDirectoryCheckpoint, error) {
+	var listed, complete int
+	err := c.reader.QueryRowContext(ctx, `SELECT listed, complete FROM scan_checkpoints WHERE storage_id=? AND generation=? AND path=?`, storageID, generation, path).Scan(&listed, &complete)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ScanDirectoryCheckpoint{}, nil
+	}
+	return ScanDirectoryCheckpoint{Listed: listed != 0, Complete: complete != 0}, err
+}
+
+func (c *Catalog) MarkScanDirectoryListed(ctx context.Context, storageID string, generation int64, path string) error {
+	now := time.Now().UTC()
+	_, err := c.db.ExecContext(ctx, `INSERT INTO scan_checkpoints(storage_id, generation, path, listed, complete, updated_at)
+		VALUES (?, ?, ?, 1, 0, ?) ON CONFLICT(storage_id, generation, path) DO UPDATE SET listed=1, updated_at=excluded.updated_at`, storageID, generation, path, now)
+	return err
+}
+
+func (c *Catalog) MarkScanDirectoryComplete(ctx context.Context, storageID string, generation int64, path string) error {
+	now := time.Now().UTC()
+	_, err := c.db.ExecContext(ctx, `INSERT INTO scan_checkpoints(storage_id, generation, path, listed, complete, updated_at)
+		VALUES (?, ?, ?, 1, 1, ?) ON CONFLICT(storage_id, generation, path) DO UPDATE SET listed=1, complete=1, updated_at=excluded.updated_at`, storageID, generation, path, now)
+	return err
 }
 
 func (c *Catalog) UpsertEntries(ctx context.Context, entries []model.Entry, generation int64) ([]model.Entry, error) {
@@ -436,7 +506,14 @@ func (c *Catalog) CompleteScan(ctx context.Context, storageID string, generation
 	if _, err := tx.ExecContext(ctx, `UPDATE entries SET available=0, updated_at=? WHERE storage_id=? AND scan_generation<?`, now, storageID, generation); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE storages SET state='online', last_seen_at=?, last_scan_at=?, scan_updated_at=?, scan_generation=?, scan_error=NULL, updated_at=? WHERE id=?`, now, now, now, generation, now, storageID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE storages SET state='online', last_seen_at=?, last_scan_at=?, scan_updated_at=?, scan_generation=?,
+		scan_entries=(SELECT COUNT(*) FROM entries WHERE storage_id=? AND scan_generation=?),
+		scan_files=(SELECT COUNT(*) FROM entries WHERE storage_id=? AND scan_generation=? AND type='file'),
+		scan_directories=(SELECT COUNT(*) FROM entries WHERE storage_id=? AND scan_generation=? AND type='directory'),
+		scan_error=NULL, updated_at=? WHERE id=?`, now, now, now, generation, storageID, generation, storageID, generation, storageID, generation, now, storageID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM scan_checkpoints WHERE storage_id=? AND generation<=?`, storageID, generation); err != nil {
 		return err
 	}
 	return tx.Commit()
