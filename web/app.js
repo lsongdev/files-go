@@ -167,7 +167,7 @@ function MediaPoster({ media, thumbnailURL }) {
   const missing = !hasPoster || failed;
   return html`<div class=${`media-poster ${missing ? 'missing' : ''} ${hasPoster && !ready && !failed ? 'pending' : ''}`}>
     ${hasPoster && !failed && html`<img src=${`${posterURL}${posterURL.includes('?') ? '&' : '?'}v=${attempt}`} alt="" onLoad=${() => setReady(true)} onError=${retry}/>`}
-    <span><${Icon} name=${media.type === 'album' || media.type === 'track' ? 'music' : 'movies'} size=${32}/></span>
+    <span><${Icon} name=${media.type === 'album' || media.type === 'track' || media.type === 'artist' ? 'music' : media.type === 'photo' ? 'photos' : media.type === 'book' ? 'files' : media.type === 'series' || media.type === 'season' || media.type === 'episode' ? 'tv' : 'movies'} size=${32}/></span>
   </div>`;
 }
 
@@ -197,8 +197,9 @@ function MediaHeader({ item, media, technical, actions }) {
   const metadata = mediaMetadata(media);
   const details = [mediaTypeLabel(media.type), media.year, metadata.voteAverage ? `TMDB ${metadata.voteAverage.toFixed(1)}` : '', durationLabel(technical?.durationMs)].filter(Boolean);
   const overview = metadata.overview || metadata.description;
+  const thumbnailURL = item?.links?.thumbnail || (media.primaryEntryId ? `${API}/entries/${encodeURIComponent(media.primaryEntryId)}/thumbnail?size=large` : '');
   return html`<section class="media-header">
-    <${MediaPoster} key=${`${media.id}:${metadata.posterPath || item?.links?.thumbnail || ''}`} media=${media} thumbnailURL=${item?.links?.thumbnail}/>
+    <${MediaPoster} key=${`${media.id}:${metadata.posterPath || thumbnailURL}`} media=${media} thumbnailURL=${thumbnailURL}/>
     <div class="media-copy"><p>${details.join(' · ')}</p><h1>${media.title || item.name}</h1>${metadata.originalTitle && metadata.originalTitle !== media.title && html`<small>${metadata.originalTitle}</small>`}${overview && html`<div class="media-overview">${overview}</div>`}<div class="media-match">${media.matchSource === 'tmdb' ? 'TMDB 已匹配' : media.matchSource === 'embedded' ? '来自文件标签' : '根据文件名识别'}${media.matchConfidence ? ` · ${Math.round(media.matchConfidence * 100)}%` : ''}</div></div>
     ${actions && html`<div class="media-actions">${actions}</div>`}
   </section>`;
@@ -242,7 +243,7 @@ function MatchDialog({ item, media, query, setQuery, candidates, loading, saving
 }
 
 function failureProcessorLabel(value) {
-  return ({ epub_metadata: 'EPUB 元数据', image_metadata: '图片元数据', pdf_metadata: 'PDF 元数据', thumbnail: '图片/书籍缩略图', video_thumbnail: '视频缩略图', pdf_thumbnail: 'PDF 首页缩略图', ffprobe: '音视频分析', media_match: 'TMDB 匹配', poster: '海报下载', media_catalog: '媒体整理', other: '其他处理' }[value] || value);
+  return ({ epub_metadata: 'EPUB 元数据', image_metadata: '图片元数据', pdf_metadata: 'PDF 元数据', thumbnail: '图片/书籍缩略图', video_thumbnail: '视频缩略图', pdf_thumbnail: 'PDF 首页缩略图', audio_artwork: '音乐封面', ffprobe: '音视频分析', media_match: 'TMDB 匹配', poster: '海报下载', media_catalog: '媒体整理', other: '其他处理' }[value] || value);
 }
 
 function FailureDialog({ groups, loading, error, onClose }) {

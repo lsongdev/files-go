@@ -191,12 +191,13 @@ func (p *Cataloger) catalogVideo(ctx context.Context, entry model.Entry, technic
 	if err != nil {
 		return err
 	}
-	parsed := ParseName(entry.Name)
+	isTV := contains(libraryTypes, "tv")
+	parsed := ParsedNameForEntry(entry, isTV)
+	if isTV && parsed.Season != nil && parsed.Episode != nil {
+		return p.catalogEpisode(ctx, entry, technical, parsed)
+	}
 	if parsed.Title == "" {
 		parsed.Title = strings.TrimSuffix(entry.Name, filepath.Ext(entry.Name))
-	}
-	if contains(libraryTypes, "tv") && parsed.Season != nil && parsed.Episode != nil {
-		return p.catalogEpisode(ctx, entry, technical, parsed)
 	}
 	if !contains(libraryTypes, "movies") {
 		return nil

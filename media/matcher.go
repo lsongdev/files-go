@@ -51,7 +51,7 @@ func (m *Matcher) Candidates(ctx context.Context, entry model.Entry, title strin
 	if err != nil {
 		return nil, err
 	}
-	parsed := ParseName(entry.Name)
+	parsed := ParsedNameForEntry(entry, contains(libraryTypes, "tv"))
 	if value := strings.TrimSpace(title); value != "" {
 		parsed.Title = value
 	}
@@ -84,7 +84,7 @@ func (m *Matcher) MatchCandidate(ctx context.Context, entry model.Entry, itemTyp
 	if (itemType == "movie" && !contains(libraryTypes, "movies")) || (itemType == "tv" && !contains(libraryTypes, "tv")) {
 		return nil, fmt.Errorf("%w: type does not belong to this library", ErrInvalidManualMatch)
 	}
-	parsed := ParseName(entry.Name)
+	parsed := ParsedNameForEntry(entry, contains(libraryTypes, "tv"))
 	if itemType == "tv" && (parsed.Season == nil || parsed.Episode == nil) {
 		return nil, fmt.Errorf("%w: TV episode number could not be parsed from filename", ErrInvalidManualMatch)
 	}
@@ -137,7 +137,7 @@ func (m *Matcher) Process(ctx context.Context, entry model.Entry) error {
 	if err != nil {
 		return err
 	}
-	parsed := ParseName(entry.Name)
+	parsed := ParsedNameForEntry(entry, contains(libraryTypes, "tv"))
 	itemType := ""
 	if parsed.Season != nil && parsed.Episode != nil && contains(libraryTypes, "tv") {
 		itemType = "tv"

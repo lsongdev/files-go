@@ -195,6 +195,44 @@ func TestVideoThumbnailGeneratesCachedVariants(t *testing.T) {
 	}
 }
 
+func TestAudioArtworkGeneratesCachedVariants(t *testing.T) {
+	ctx := context.Background()
+	cat, registry, entry := mediaFixture(t, "song.mp3", []byte("audio fixture"))
+	metadata := json.RawMessage(`{"music":{"hasAlbumArt":true,"title":"Roads"}}`)
+	if err := cat.UpsertMediaFile(ctx, model.MediaFile{EntryID: entry.ID, Kind: "audio", Metadata: metadata}); err != nil {
+		t.Fatal(err)
+	}
+	cover := image.NewRGBA(image.Rect(0, 0, 300, 300))
+	cover.Set(10, 10, color.RGBA{R: 160, G: 60, B: 180, A: 255})
+	fixtureDir := t.TempDir()
+	coverPath := filepath.Join(fixtureDir, "cover.png")
+	coverFile, err := os.Create(coverPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(coverFile, cover); err != nil {
+		t.Fatal(err)
+	}
+	if err := coverFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fakeFFmpeg := filepath.Join(fixtureDir, "ffmpeg")
+	if err := os.WriteFile(fakeFFmpeg, []byte("#!/bin/sh\ncat '"+coverPath+"'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	thumbnailer := NewThumbnail(cat, registry, t.TempDir())
+	processor := NewAudioArtwork(cat, registry, thumbnailer, fakeFFmpeg, time.Second)
+	if !processor.Match(entry) {
+		t.Fatal("MP3 did not match audio artwork processor")
+	}
+	if err := processor.Process(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.ArtifactForEntry(ctx, entry.ID, "thumbnail", "medium"); err != nil {
+		t.Fatalf("audio artwork thumbnail: %v", err)
+	}
+}
+
 func TestFFProbeNormalizesMusicTags(t *testing.T) {
 	parsed, err := parseFFProbe("entry", []byte(`{
 		"streams":[{"codec_type":"audio","codec_name":"flac","tags":{"artist":"Portishead"}}, {"codec_type":"video","codec_name":"mjpeg","disposition":{"attached_pic":1}}],

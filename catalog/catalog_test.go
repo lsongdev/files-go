@@ -263,6 +263,87 @@ func TestMediaItemsAssociateFilesAndSupportManualUnmatch(t *testing.T) {
 	}
 }
 
+func TestEntryMediaPrefersPlayableItemOverAudioParents(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := cat.BeginScan(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{{StorageID: "disk", Name: "Song.mp3", Path: "Song.mp3", Type: model.EntryFile}}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artist, _ := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "artist", Title: "Artist"})
+	album, _ := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "album", Title: "Album", ParentID: artist.ID})
+	track, _ := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "track", Title: "Song", ParentID: album.ID})
+	for _, association := range []struct {
+		item *model.MediaItem
+		role string
+	}{{track, "audio"}, {artist, "artist"}, {album, "album"}} {
+		if err := cat.AssociateMediaFile(ctx, association.item.ID, entries[0].ID, association.role); err != nil {
+			t.Fatal(err)
+		}
+	}
+	item, err := cat.MediaItemForEntry(ctx, entries[0].ID, "")
+	if err != nil || item.ID != track.ID {
+		t.Fatalf("default media item = %#v, %v; want track", item, err)
+	}
+	summaries, err := cat.MediaSummariesForEntries(ctx, []string{entries[0].ID})
+	if err != nil || summaries[entries[0].ID].ID != track.ID {
+		t.Fatalf("media summary = %#v, %v; want track", summaries, err)
+	}
+	item, err = cat.MediaItemForEntry(ctx, entries[0].ID, "album")
+	if err != nil || item.ID != album.ID {
+		t.Fatalf("explicit album item = %#v, %v", item, err)
+	}
+}
+
+func TestEntriesMissingAudioArtworkOnlyReturnsTaggedAudioWithoutThumbnail(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	generation, _ := cat.BeginScan(ctx, "disk")
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{
+		{StorageID: "disk", Name: "with-art.mp3", Path: "with-art.mp3", Type: model.EntryFile},
+		{StorageID: "disk", Name: "without-art.mp3", Path: "without-art.mp3", Type: model.EntryFile},
+	}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, metadata := range []string{`{"music":{"hasAlbumArt":true}}`, `{"music":{"hasAlbumArt":false}}`} {
+		if err := cat.UpsertMediaFile(ctx, model.MediaFile{EntryID: entries[index].ID, Kind: "audio", Metadata: json.RawMessage(metadata)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	missing, err := cat.EntriesMissingAudioArtwork(ctx, "", 100)
+	if err != nil || len(missing) != 1 || missing[0].ID != entries[0].ID {
+		t.Fatalf("missing audio artwork = %#v, %v", missing, err)
+	}
+	if _, err := cat.UpsertArtifact(ctx, model.Artifact{EntryID: entries[0].ID, Type: "thumbnail", Variant: "medium", Key: "cover", MIME: "image/jpeg"}); err != nil {
+		t.Fatal(err)
+	}
+	missing, err = cat.EntriesMissingAudioArtwork(ctx, "", 100)
+	if err != nil || len(missing) != 0 {
+		t.Fatalf("missing audio artwork after thumbnail = %#v, %v", missing, err)
+	}
+}
+
 func TestDirectoryMediaContextRequiresOneCoherentIdentity(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(ctx, t.TempDir())
@@ -306,7 +387,7 @@ func TestDirectoryMediaContextRequiresOneCoherentIdentity(t *testing.T) {
 		}
 	}
 	item, err := cat.MediaItemForDirectory(ctx, directories[0])
-	if err != nil || item.Title != "Movie A" {
+	if err != nil || item.Title != "Movie A" || item.PrimaryEntryID != files[0].ID {
 		t.Fatalf("directory media = %#v, %v", item, err)
 	}
 	if _, err := cat.MediaItemForDirectory(ctx, *root); !errors.Is(err, ErrNotFound) {

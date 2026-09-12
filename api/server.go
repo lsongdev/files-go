@@ -1173,7 +1173,7 @@ func responseFor(entry model.Entry) entryResponse {
 
 func hasThumbnailExtension(extension string) bool {
 	switch strings.ToLower(extension) {
-	case "jpg", "jpeg", "png", "gif", "epub", "pdf", "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "flv", "wmv":
+	case "jpg", "jpeg", "png", "gif", "epub", "pdf", "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "flv", "wmv", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "aiff", "ape":
 		return true
 	default:
 		return false

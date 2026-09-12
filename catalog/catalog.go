@@ -750,9 +750,43 @@ func (c *Catalog) EntriesMissingMediaAssociation(ctx context.Context, kind, role
 		FROM entries e JOIN media_files technical ON technical.entry_id=e.id
 		WHERE technical.kind=? AND e.available=1 AND e.id>? AND
 			(?!='album' OR trim(COALESCE(json_extract(technical.metadata, '$.music.album'), ''))!='') AND
+			(?!='video' OR EXISTS (
+				SELECT 1 FROM library_sources source JOIN libraries library ON library.id=source.library_id
+				WHERE source.storage_id=e.storage_id AND library.type IN ('movies','tv') AND
+					(source.path='' OR e.path=source.path OR substr(e.path,1,length(source.path)+1)=source.path || '/')
+			)) AND
 			NOT EXISTS (SELECT 1 FROM media_item_files association
 				WHERE association.entry_id=e.id AND association.role=?)
-		ORDER BY e.id LIMIT ?`, kind, afterID, role, role, limit)
+		ORDER BY e.id LIMIT ?`, kind, afterID, role, kind, role, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.Entry, 0, limit)
+	for rows.Next() {
+		entry, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, entry)
+	}
+	return items, rows.Err()
+}
+
+// EntriesMissingAudioArtwork finds tagged audio that advertises embedded cover
+// art but has no cached thumbnail yet. It lets a newly-added artwork processor
+// backfill an existing catalog without walking the storage again.
+func (c *Catalog) EntriesMissingAudioArtwork(ctx context.Context, afterID string, limit int) ([]model.Entry, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := c.reader.QueryContext(ctx, `SELECT `+qualifiedEntryColumns+`
+		FROM entries e JOIN media_files technical ON technical.entry_id=e.id
+		WHERE technical.kind='audio' AND e.available=1 AND e.id>? AND
+			json_extract(technical.metadata, '$.music.hasAlbumArt')=1 AND
+			NOT EXISTS (SELECT 1 FROM artifacts artifact
+				WHERE artifact.entry_id=e.id AND artifact.type='thumbnail')
+		ORDER BY e.id LIMIT ?`, afterID, limit)
 	if err != nil {
 		return nil, err
 	}
