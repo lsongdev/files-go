@@ -240,7 +240,7 @@ function MatchDialog({ item, media, query, setQuery, candidates, loading, saving
 }
 
 function failureProcessorLabel(value) {
-  return ({ epub_metadata: 'EPUB 元数据', image_metadata: '图片元数据', pdf_metadata: 'PDF 元数据', thumbnail: '图片/书籍缩略图', video_thumbnail: '视频缩略图', ffprobe: '音视频分析', media_match: 'TMDB 匹配', poster: '海报下载', media_catalog: '媒体整理', other: '其他处理' }[value] || value);
+  return ({ epub_metadata: 'EPUB 元数据', image_metadata: '图片元数据', pdf_metadata: 'PDF 元数据', thumbnail: '图片/书籍缩略图', video_thumbnail: '视频缩略图', pdf_thumbnail: 'PDF 首页缩略图', ffprobe: '音视频分析', media_match: 'TMDB 匹配', poster: '海报下载', media_catalog: '媒体整理', other: '其他处理' }[value] || value);
 }
 
 function FailureDialog({ groups, loading, error, onClose }) {

@@ -37,10 +37,11 @@ type TMDB struct {
 }
 
 type Processing struct {
-	Workers int    `yaml:"workers"`
-	FFProbe string `yaml:"ffprobe"`
-	FFmpeg  string `yaml:"ffmpeg"`
-	PDFInfo string `yaml:"pdfinfo"`
+	Workers  int    `yaml:"workers"`
+	FFProbe  string `yaml:"ffprobe"`
+	FFmpeg   string `yaml:"ffmpeg"`
+	PDFInfo  string `yaml:"pdfinfo"`
+	PDFToPPM string `yaml:"pdftoppm"`
 }
 
 type Library struct {
@@ -133,6 +134,9 @@ func LoadConfig() (cfg *Config, err error) {
 	}
 	if cfg.Processing.PDFInfo == "" {
 		cfg.Processing.PDFInfo = "pdfinfo"
+	}
+	if cfg.Processing.PDFToPPM == "" {
+		cfg.Processing.PDFToPPM = "pdftoppm"
 	}
 	token := cfg.Media.TMDB.Token
 	if token == "" {
