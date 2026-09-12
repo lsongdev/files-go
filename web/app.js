@@ -216,6 +216,8 @@ function FileDetail({ item, media, technical, text, loading, error, playbackURL,
     durationLabel(technical?.durationMs) && ['时长', durationLabel(technical.durationMs)], metadata.music?.artist && ['艺人', metadata.music.artist], metadata.music?.album && ['专辑', metadata.music.album],
     metadata.authors?.length && ['作者', metadata.authors.join('、')], metadata.author && ['作者', metadata.author], metadata.language && ['语言', metadata.language],
     metadata.publisher && ['出版社', metadata.publisher], Number.isFinite(metadata.pageCount) && ['页数', `${metadata.pageCount} 页`],
+    technical?.takenAt && ['拍摄时间', formatDate(technical.takenAt)], technical?.camera && ['相机', technical.camera],
+    Number.isFinite(technical?.latitude) && Number.isFinite(technical?.longitude) && ['位置', `${technical.latitude.toFixed(5)}, ${technical.longitude.toFixed(5)}`],
   ].filter(Boolean);
   const actions = html`${kind === 'video' && html`<button class="detail-button" onClick=${onMatch}><${Icon} name="refresh" size=${17}/>${media ? '纠正匹配' : '识别媒体'}</button>`}<a class="detail-button primary" href=${contentURL} download=${item.name}><${Icon} name="download" size=${17}/>下载</a><button class="detail-button" onClick=${onManage}><${Icon} name="more" size=${17}/>管理</button>`;
   return html`<article class="file-detail">

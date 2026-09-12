@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/lsongdev/files-go/database"
 	"github.com/lsongdev/files-go/model"
@@ -187,12 +188,14 @@ func TestMediaFilesAndArtifactsRemainSeparateFromEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	duration, width, height, bitrate := int64(123400), 1920, 1080, int64(8_000_000)
-	media := model.MediaFile{EntryID: entries[0].ID, Kind: "video", DurationMS: &duration, Container: "matroska", Width: &width, Height: &height, VideoCodec: "h264", AudioCodec: "aac", Bitrate: &bitrate, Metadata: json.RawMessage(`{"streams":2}`)}
+	takenAt := time.Date(2024, time.May, 6, 7, 8, 9, 0, time.UTC)
+	latitude, longitude := 31.2304, 121.4737
+	media := model.MediaFile{EntryID: entries[0].ID, Kind: "video", DurationMS: &duration, Container: "matroska", Width: &width, Height: &height, VideoCodec: "h264", AudioCodec: "aac", Bitrate: &bitrate, TakenAt: &takenAt, Camera: "Test Camera", Latitude: &latitude, Longitude: &longitude, Metadata: json.RawMessage(`{"streams":2}`)}
 	if err := cat.UpsertMediaFile(ctx, media); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := cat.MediaFile(ctx, entries[0].ID)
-	if err != nil || stored.Kind != "video" || stored.Width == nil || *stored.Width != width || string(stored.Metadata) != string(media.Metadata) {
+	if err != nil || stored.Kind != "video" || stored.Width == nil || *stored.Width != width || stored.TakenAt == nil || !stored.TakenAt.Equal(takenAt) || stored.Camera != "Test Camera" || stored.Latitude == nil || *stored.Latitude != latitude || stored.Longitude == nil || *stored.Longitude != longitude || string(stored.Metadata) != string(media.Metadata) {
 		t.Fatalf("media file = %#v, %v", stored, err)
 	}
 

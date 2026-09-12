@@ -15,13 +15,14 @@ import (
 type recordingProcessor struct {
 	matched bool
 	entries []string
+	err     error
 }
 
 func (p *recordingProcessor) Name() string           { return "recording" }
 func (p *recordingProcessor) Match(model.Entry) bool { return p.matched }
 func (p *recordingProcessor) Process(_ context.Context, entry model.Entry) error {
 	p.entries = append(p.entries, entry.ID)
-	return nil
+	return p.err
 }
 
 func TestEngineEnqueuesDeduplicatedFileJobsAndRunsMatchingProcessors(t *testing.T) {
@@ -71,5 +72,19 @@ func TestEngineEnqueuesDeduplicatedFileJobsAndRunsMatchingProcessors(t *testing.
 	}
 	if _, err := queue.Claim(ctx); !errors.Is(err, jobs.ErrNoJob) {
 		t.Fatalf("duplicate job remained claimable: %v", err)
+	}
+	failing := &recordingProcessor{matched: true, err: errors.New("thumbnail failed")}
+	after := &recordingProcessor{matched: true}
+	continued := New(cat, queue, failing, after)
+	if err := continued.ReprocessEntry(ctx, entries[0]); err != nil {
+		t.Fatal(err)
+	}
+	job, err = queue.Claim(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = continued.Handle(ctx, job)
+	if err == nil || len(failing.entries) != 1 || len(after.entries) != 1 {
+		t.Fatalf("processor isolation = failing %v, after %v, err %v", failing.entries, after.entries, err)
 	}
 }
