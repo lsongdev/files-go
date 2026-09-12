@@ -109,8 +109,10 @@ func main() {
 				if len(entries) == 0 {
 					break
 				}
-				if err := processing.EnqueueEntries(ctx, entries); err != nil {
-					return err
+				for _, entry := range entries {
+					if err := processing.ReprocessEntry(ctx, entry); err != nil {
+						return err
+					}
 				}
 				afterID = entries[len(entries)-1].ID
 			}
@@ -139,8 +141,10 @@ func main() {
 				if len(entries) == 0 {
 					break
 				}
-				if err := processing.EnqueueEntries(ctx, entries); err != nil {
-					return err
+				for _, entry := range entries {
+					if err := processing.ReprocessEntry(ctx, entry); err != nil {
+						return err
+					}
 				}
 				afterID = entries[len(entries)-1].ID
 			}
