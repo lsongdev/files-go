@@ -176,7 +176,7 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .media-copy > p, .plain-detail-head p { margin: 0 0 0.55rem; color: var(--blue); font: 700 0.75rem/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.08em; text-transform: uppercase; }
 .media-copy h1, .plain-detail-head h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 3.35rem); line-height: 1.02; letter-spacing: -0.05em; overflow-wrap: anywhere; }
 .media-copy > small { display: block; margin-top: 0.55rem; color: var(--muted); font-size: 0.88rem; }
-.media-overview { max-width: 50rem; margin-top: 1rem; color: var(--muted); font-size: 0.92rem; line-height: 1.65; }
+.media-overview { max-width: 50rem; margin-top: 1rem; display: -webkit-box; overflow: hidden; color: var(--muted); font-size: 0.92rem; line-height: 1.65; -webkit-box-orient: vertical; -webkit-line-clamp: 6; }
 .media-match { margin-top: 1rem; color: var(--muted-2); font-size: 0.75rem; }
 .media-actions { position: relative; z-index: 1; align-self: start; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.6rem; }
 .media-actions .head-meta { max-width: 32rem; }

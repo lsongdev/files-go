@@ -1148,7 +1148,7 @@ func responseFor(entry model.Entry) entryResponse {
 	if entry.Type == model.EntryFile {
 		links["content"] = "/api/v1/entries/" + entry.ID + "/content"
 		links["media"] = "/api/v1/entries/" + entry.ID + "/media"
-		if isImageExtension(entry.Extension) {
+		if hasThumbnailExtension(entry.Extension) {
 			links["thumbnail"] = "/api/v1/entries/" + entry.ID + "/thumbnail?size=medium"
 		}
 	}
@@ -1157,9 +1157,9 @@ func responseFor(entry model.Entry) entryResponse {
 		ModifiedAt: modified, CreatedAt: entry.CreatedAt, UpdatedAt: entry.UpdatedAt, Links: links}
 }
 
-func isImageExtension(extension string) bool {
+func hasThumbnailExtension(extension string) bool {
 	switch strings.ToLower(extension) {
-	case "jpg", "jpeg", "png", "gif":
+	case "jpg", "jpeg", "png", "gif", "epub":
 		return true
 	default:
 		return false
