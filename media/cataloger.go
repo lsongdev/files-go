@@ -17,7 +17,7 @@ type Cataloger struct{ catalog *catalog.Catalog }
 func NewCataloger(catalog *catalog.Catalog) *Cataloger { return &Cataloger{catalog: catalog} }
 func (p *Cataloger) Name() string                      { return "media_catalog" }
 func (p *Cataloger) Match(entry model.Entry) bool {
-	if entry.Type != model.EntryFile || strings.HasPrefix(entry.Name, "._") {
+	if entry.Type != model.EntryFile || strings.HasPrefix(entry.Name, "._") || strings.HasSuffix(strings.ToLower(entry.Name), ".d.ts") {
 		return false
 	}
 	switch strings.ToLower(entry.Extension) {
@@ -47,6 +47,10 @@ func (p *Cataloger) Process(ctx context.Context, entry model.Entry) error {
 	case "book":
 		itemType, role = "book", "book"
 	case "video":
+		suppressed, err := p.catalog.MediaMatchSuppressed(ctx, entry.ID)
+		if err != nil || suppressed {
+			return err
+		}
 		return p.catalogVideo(ctx, entry, *technical)
 	default:
 		return nil

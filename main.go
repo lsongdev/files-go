@@ -79,9 +79,11 @@ func main() {
 		processor.NewThumbnail(catalogDB, registry, cfg.CacheDir),
 		mediaengine.NewCataloger(catalogDB),
 	}
+	var mediaMatcher *mediaengine.Matcher
 	if cfg.Media.TMDB.Token != "" {
+		mediaMatcher = mediaengine.NewMatcher(catalogDB, mediaengine.NewTMDB(cfg.Media.TMDB.Token, nil), cfg.Media.TMDB.Language)
 		processors = append(processors,
-			mediaengine.NewMatcher(catalogDB, mediaengine.NewTMDB(cfg.Media.TMDB.Token, nil), cfg.Media.TMDB.Language),
+			mediaMatcher,
 			mediaengine.NewPoster(catalogDB, cfg.CacheDir, nil),
 		)
 	}
@@ -138,6 +140,7 @@ func main() {
 	playbackManager := playback.NewManager(ctx, catalogDB, registry, cfg.Processing.FFmpeg, cfg.CacheDir, 2)
 	apiServer := api.New(ctx, catalogDB, registry, idx, log.Default(), cfg.CacheDir, playbackManager)
 	apiServer.SetJobQueue(jobQueue)
+	apiServer.SetMediaMatcher(mediaMatcher)
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiServer.Handler())
 	mux.Handle("/", web.Handler())

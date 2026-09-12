@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/lsongdev/files-go/catalog"
@@ -60,6 +61,18 @@ func TestCatalogerCreatesLocalMovieAndTVFallbacks(t *testing.T) {
 	series, err := cat.MediaItems(ctx, "series", "tv", 10)
 	if err != nil || len(series) != 1 || series[0].Title != "The Bear" || series[0].PrimaryEntryID != entries[1].ID {
 		t.Fatalf("series = %#v, %v", series, err)
+	}
+	if err := cat.UnmatchEntry(ctx, entries[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SetMediaMatchSuppressed(ctx, entries[0].ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := processor.Process(ctx, entries[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.MediaItemForEntry(ctx, entries[0].ID, "video"); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("cataloger recreated suppressed movie: %v", err)
 	}
 }
 

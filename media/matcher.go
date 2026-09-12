@@ -21,6 +21,8 @@ type Matcher struct {
 	threshold float64
 }
 
+var ErrInvalidManualMatch = errors.New("invalid manual media match")
+
 func NewMatcher(catalog *catalog.Catalog, provider MetadataProvider, language string) *Matcher {
 	if language == "" {
 		language = "zh-CN"
@@ -30,6 +32,9 @@ func NewMatcher(catalog *catalog.Catalog, provider MetadataProvider, language st
 
 func (m *Matcher) Name() string { return "media_match" }
 func (m *Matcher) Match(entry model.Entry) bool {
+	if strings.HasSuffix(strings.ToLower(entry.Name), ".d.ts") {
+		return false
+	}
 	switch strings.ToLower(entry.Extension) {
 	case "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "wmv":
 		return !strings.HasPrefix(entry.Name, "._")
@@ -38,7 +43,89 @@ func (m *Matcher) Match(entry model.Entry) bool {
 	}
 }
 
+func (m *Matcher) Candidates(ctx context.Context, entry model.Entry, title string) ([]Candidate, error) {
+	if !m.Match(entry) {
+		return []Candidate{}, nil
+	}
+	libraryTypes, err := m.catalog.LibraryTypesForEntry(ctx, entry)
+	if err != nil {
+		return nil, err
+	}
+	parsed := ParseName(entry.Name)
+	if value := strings.TrimSpace(title); value != "" {
+		parsed.Title = value
+	}
+	itemType := ""
+	if parsed.Season != nil && parsed.Episode != nil && contains(libraryTypes, "tv") {
+		itemType = "tv"
+	} else if contains(libraryTypes, "movies") {
+		itemType = "movie"
+	}
+	if itemType == "" || parsed.Title == "" {
+		return []Candidate{}, nil
+	}
+	return m.provider.Search(ctx, Query{Type: itemType, Title: parsed.Title, Year: parsed.Year, Language: m.language})
+}
+
+func (m *Matcher) MatchCandidate(ctx context.Context, entry model.Entry, itemType, candidateID string) (*model.MediaItem, error) {
+	if !m.Match(entry) {
+		return nil, fmt.Errorf("%w: entry is not a supported video file", ErrInvalidManualMatch)
+	}
+	if itemType != "movie" && itemType != "tv" {
+		return nil, fmt.Errorf("%w: type must be movie or tv", ErrInvalidManualMatch)
+	}
+	if strings.TrimSpace(candidateID) == "" {
+		return nil, fmt.Errorf("%w: candidate ID is required", ErrInvalidManualMatch)
+	}
+	libraryTypes, err := m.catalog.LibraryTypesForEntry(ctx, entry)
+	if err != nil {
+		return nil, err
+	}
+	if (itemType == "movie" && !contains(libraryTypes, "movies")) || (itemType == "tv" && !contains(libraryTypes, "tv")) {
+		return nil, fmt.Errorf("%w: type does not belong to this library", ErrInvalidManualMatch)
+	}
+	parsed := ParseName(entry.Name)
+	if itemType == "tv" && (parsed.Season == nil || parsed.Episode == nil) {
+		return nil, fmt.Errorf("%w: TV episode number could not be parsed from filename", ErrInvalidManualMatch)
+	}
+	candidate, err := m.provider.Fetch(ctx, itemType, candidateID, m.language)
+	if err != nil {
+		return nil, err
+	}
+	metadata, err := json.Marshal(candidate)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.catalog.SetMediaMatchSuppressed(ctx, entry.ID, false); err != nil {
+		return nil, err
+	}
+	if err := m.catalog.UnmatchEntry(ctx, entry.ID); err != nil {
+		return nil, err
+	}
+	if itemType == "movie" {
+		err = m.matchMovie(ctx, entry, candidate, 1, metadata)
+	} else {
+		err = m.matchEpisode(ctx, entry, parsed, candidate, 1, metadata)
+	}
+	if err != nil {
+		return nil, err
+	}
+	item, err := m.catalog.MediaItemForEntry(ctx, entry.ID, "video")
+	if err != nil {
+		return nil, err
+	}
+	if err := m.catalog.SetMediaMatchLocked(ctx, item.ID, true); err != nil {
+		return nil, err
+	}
+	item.MatchLocked = true
+	return item, nil
+}
+
 func (m *Matcher) Process(ctx context.Context, entry model.Entry) error {
+	suppressed, err := m.catalog.MediaMatchSuppressed(ctx, entry.ID)
+	if err != nil || suppressed {
+		return err
+	}
 	if existing, err := m.catalog.MediaItemForEntry(ctx, entry.ID, "video"); err == nil {
 		if existing.MatchLocked || existing.MatchSource == "tmdb" {
 			return nil

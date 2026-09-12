@@ -119,6 +119,16 @@ type MediaItemFile struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
+type MediaSummary struct {
+	ID              string  `json:"id"`
+	Type            string  `json:"type"`
+	Title           string  `json:"title"`
+	Year            *int    `json:"year,omitempty"`
+	IndexNumber     *int    `json:"indexNumber,omitempty"`
+	MatchSource     string  `json:"matchSource,omitempty"`
+	MatchConfidence float64 `json:"matchConfidence,omitempty"`
+}
+
 type PlaybackState struct {
 	UserID     string     `json:"-"`
 	MediaID    string     `json:"mediaId"`

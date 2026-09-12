@@ -247,6 +247,11 @@ func TestMediaItemsAssociateFilesAndSupportManualUnmatch(t *testing.T) {
 	if err != nil || len(loaded.Files) != 1 || loaded.Files[0].EntryID != entries[0].ID {
 		t.Fatalf("media files = %#v, %v", loaded, err)
 	}
+	summaries, err := cat.MediaSummariesForEntries(ctx, []string{entries[0].ID, "missing"})
+	summary, exists := summaries[entries[0].ID]
+	if err != nil || !exists || summary.ID != item.ID || summary.Title != "Interstellar" || summary.Year == nil || *summary.Year != year {
+		t.Fatalf("media summaries = %#v, %v", summaries, err)
+	}
 	if err := cat.UnmatchEntry(ctx, entries[0].ID); err != nil {
 		t.Fatal(err)
 	}

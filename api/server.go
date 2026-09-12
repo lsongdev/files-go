@@ -40,6 +40,7 @@ type Server struct {
 	cacheDir string
 	playback *playback.Manager
 	jobQueue *jobs.Queue
+	matcher  *mediaengine.Matcher
 }
 
 func New(ctx context.Context, catalog *catalog.Catalog, storages *storage.Registry, indexer *indexer.Indexer, logger *log.Logger, cacheDir string, managers ...*playback.Manager) *Server {
@@ -53,7 +54,8 @@ func New(ctx context.Context, catalog *catalog.Catalog, storages *storage.Regist
 
 func (s *Server) Handler() http.Handler { return s.mux }
 
-func (s *Server) SetJobQueue(queue *jobs.Queue) { s.jobQueue = queue }
+func (s *Server) SetJobQueue(queue *jobs.Queue)                { s.jobQueue = queue }
+func (s *Server) SetMediaMatcher(matcher *mediaengine.Matcher) { s.matcher = matcher }
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/system", s.system)
@@ -78,6 +80,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/media/{id}", s.getMediaItem)
 	s.mux.HandleFunc("GET /api/v1/media/{id}/poster", s.mediaPoster)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/media-item", s.getEntryMediaItem)
+	s.mux.HandleFunc("GET /api/v1/entries/{id}/media-candidates", s.getEntryMediaCandidates)
 	s.mux.HandleFunc("PUT /api/v1/entries/{id}/media-item", s.setEntryMediaItem)
 	s.mux.HandleFunc("DELETE /api/v1/entries/{id}/media-item", s.unmatchEntryMediaItem)
 	s.mux.HandleFunc("POST /api/v1/entries/{id}/media-item/rematch", s.rematchEntryMediaItem)
@@ -87,6 +90,34 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/media/{id}/playback-state", s.getPlaybackState)
 	s.mux.HandleFunc("PUT /api/v1/media/{id}/playback-state", s.setPlaybackState)
 	s.mux.HandleFunc("GET /api/v1/playback/continue", s.continueWatching)
+}
+
+func (s *Server) getEntryMediaCandidates(w http.ResponseWriter, r *http.Request) {
+	if s.matcher == nil {
+		writeError(w, http.StatusServiceUnavailable, "media_provider_unavailable", "media metadata provider is not configured")
+		return
+	}
+	entry, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len([]rune(query)) > 200 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "q must not exceed 200 characters")
+		return
+	}
+	items, err := s.matcher.Candidates(r.Context(), *entry, query)
+	if err != nil {
+		s.logger.Printf("search media candidates for %s: %v", entry.ID, err)
+		writeError(w, http.StatusBadGateway, "media_provider_error", "media metadata provider request failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) startPlayback(w http.ResponseWriter, r *http.Request) {
@@ -236,7 +267,9 @@ func (s *Server) continueWatching(w http.ResponseWriter, r *http.Request) {
 func (s *Server) mediaPoster(w http.ResponseWriter, r *http.Request) {
 	artifact, err := s.catalog.ArtifactForMedia(r.Context(), r.PathValue("id"), "poster", "w500")
 	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "poster_not_ready", "poster is not available")
+		w.Header().Set("Retry-After", "2")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if err != nil {
@@ -348,14 +381,39 @@ func (s *Server) setEntryMediaItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		MediaID string `json:"mediaId"`
-		Role    string `json:"role"`
+		MediaID       string `json:"mediaId"`
+		Role          string `json:"role"`
+		CandidateID   string `json:"candidateId"`
+		CandidateType string `json:"candidateType"`
 	}
 	if err := decodeJSONBody(w, r, &input); err != nil {
 		return
 	}
 	if input.Role == "" {
 		input.Role = "video"
+	}
+	if input.MediaID == "" && input.CandidateID != "" {
+		if s.matcher == nil {
+			writeError(w, http.StatusServiceUnavailable, "media_provider_unavailable", "media metadata provider is not configured")
+			return
+		}
+		item, err := s.matcher.MatchCandidate(r.Context(), *entry, input.CandidateType, input.CandidateID)
+		if err != nil {
+			if errors.Is(err, mediaengine.ErrInvalidManualMatch) {
+				writeError(w, http.StatusBadRequest, "invalid_media_match", "the selected media cannot be matched to this file")
+				return
+			}
+			s.logger.Printf("apply manual media match for %s: %v", entry.ID, err)
+			writeError(w, http.StatusBadGateway, "media_match_failed", "unable to apply the selected media match")
+			return
+		}
+		s.reprocess(*entry)
+		writeJSON(w, http.StatusOK, item)
+		return
+	}
+	if input.MediaID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "mediaId or candidateId is required")
+		return
 	}
 	item, err := s.catalog.MediaItem(r.Context(), input.MediaID)
 	if errors.Is(err, catalog.ErrNotFound) {
@@ -366,7 +424,10 @@ func (s *Server) setEntryMediaItem(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, err)
 		return
 	}
-	if err := s.catalog.UnmatchEntry(r.Context(), entry.ID); err == nil {
+	if err := s.catalog.SetMediaMatchSuppressed(r.Context(), entry.ID, false); err == nil {
+		err = s.catalog.UnmatchEntry(r.Context(), entry.ID)
+	}
+	if err == nil {
 		err = s.catalog.AssociateMediaFile(r.Context(), item.ID, entry.ID, input.Role)
 	}
 	if err == nil {
@@ -385,6 +446,10 @@ func (s *Server) unmatchEntryMediaItem(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, err)
 		return
 	}
+	if err := s.catalog.SetMediaMatchSuppressed(r.Context(), r.PathValue("id"), true); err != nil {
+		s.internalError(w, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -399,6 +464,10 @@ func (s *Server) rematchEntryMediaItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.catalog.UnmatchEntry(r.Context(), entry.ID); err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if err := s.catalog.SetMediaMatchSuppressed(r.Context(), entry.ID, false); err != nil {
 		s.internalError(w, err)
 		return
 	}
@@ -959,9 +1028,10 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, err)
 		return
 	}
-	result := make([]entryResponse, len(items))
-	for index := range items {
-		result[index] = responseFor(items[index])
+	result, err := s.responsesFor(r.Context(), items)
+	if err != nil {
+		s.internalError(w, err)
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": result})
 }
@@ -1029,18 +1099,41 @@ func (s *Server) listLibraries(w http.ResponseWriter, r *http.Request) {
 }
 
 type entryResponse struct {
-	ID         string            `json:"id"`
-	ParentID   *string           `json:"parentId,omitempty"`
-	Name       string            `json:"name"`
-	Type       model.EntryType   `json:"type"`
-	Size       int64             `json:"size"`
-	MIME       string            `json:"mime,omitempty"`
-	Extension  string            `json:"extension,omitempty"`
-	Available  bool              `json:"available"`
-	ModifiedAt any               `json:"modifiedAt,omitempty"`
-	CreatedAt  any               `json:"createdAt"`
-	UpdatedAt  any               `json:"updatedAt"`
-	Links      map[string]string `json:"links"`
+	ID         string              `json:"id"`
+	ParentID   *string             `json:"parentId,omitempty"`
+	Name       string              `json:"name"`
+	Type       model.EntryType     `json:"type"`
+	Size       int64               `json:"size"`
+	MIME       string              `json:"mime,omitempty"`
+	Extension  string              `json:"extension,omitempty"`
+	Available  bool                `json:"available"`
+	ModifiedAt any                 `json:"modifiedAt,omitempty"`
+	CreatedAt  any                 `json:"createdAt"`
+	UpdatedAt  any                 `json:"updatedAt"`
+	Links      map[string]string   `json:"links"`
+	Media      *model.MediaSummary `json:"media,omitempty"`
+}
+
+func (s *Server) responsesFor(ctx context.Context, entries []model.Entry) ([]entryResponse, error) {
+	entryIDs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Type == model.EntryFile {
+			entryIDs = append(entryIDs, entry.ID)
+		}
+	}
+	media, err := s.catalog.MediaSummariesForEntries(ctx, entryIDs)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]entryResponse, len(entries))
+	for index, entry := range entries {
+		result[index] = responseFor(entry)
+		if summary, ok := media[entry.ID]; ok {
+			copy := summary
+			result[index].Media = &copy
+		}
+	}
+	return result, nil
 }
 
 func responseFor(entry model.Entry) entryResponse {
@@ -1127,9 +1220,10 @@ func (s *Server) listChildren(w http.ResponseWriter, r *http.Request) {
 		next = encodeCursor(last)
 		items = items[:limit]
 	}
-	result := make([]entryResponse, len(items))
-	for index := range items {
-		result[index] = responseFor(items[index])
+	result, err := s.responsesFor(r.Context(), items)
+	if err != nil {
+		s.internalError(w, err)
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": result, "cursor": next})
 }

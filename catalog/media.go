@@ -188,6 +188,50 @@ func (c *Catalog) MediaItemForEntry(ctx context.Context, entryID, role string) (
 	return &item, err
 }
 
+func (c *Catalog) MediaSummariesForEntries(ctx context.Context, entryIDs []string) (map[string]model.MediaSummary, error) {
+	result := make(map[string]model.MediaSummary)
+	if len(entryIDs) == 0 {
+		return result, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(entryIDs)), ",")
+	args := make([]any, len(entryIDs))
+	for index, id := range entryIDs {
+		args[index] = id
+	}
+	rows, err := c.reader.QueryContext(ctx, `SELECT mf.entry_id, m.id, m.type, m.title, m.year,
+		m.index_number, m.match_source, m.match_confidence
+		FROM media_item_files mf JOIN media_items m ON m.id=mf.media_id
+		WHERE mf.entry_id IN (`+placeholders+`)
+		ORDER BY mf.entry_id, CASE mf.role WHEN 'video' THEN 0 WHEN 'track' THEN 1
+			WHEN 'photo' THEN 2 WHEN 'book' THEN 3 ELSE 4 END, mf.created_at`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var entryID string
+		var summary model.MediaSummary
+		var year, indexNumber sql.NullInt64
+		if err := rows.Scan(&entryID, &summary.ID, &summary.Type, &summary.Title, &year,
+			&indexNumber, &summary.MatchSource, &summary.MatchConfidence); err != nil {
+			return nil, err
+		}
+		if _, exists := result[entryID]; exists {
+			continue
+		}
+		if year.Valid {
+			value := int(year.Int64)
+			summary.Year = &value
+		}
+		if indexNumber.Valid {
+			value := int(indexNumber.Int64)
+			summary.IndexNumber = &value
+		}
+		result[entryID] = summary
+	}
+	return result, rows.Err()
+}
+
 // MediaItemForDirectory returns a single coherent media identity represented by
 // files below a physical directory. Library roots and mixed collections do not
 // resolve because they contain more than one candidate.
@@ -250,6 +294,25 @@ func (c *Catalog) MediaItemFiles(ctx context.Context, mediaID string) ([]model.M
 func (c *Catalog) UnmatchEntry(ctx context.Context, entryID string) error {
 	_, err := c.db.ExecContext(ctx, `DELETE FROM media_item_files WHERE entry_id=?`, entryID)
 	return err
+}
+
+func (c *Catalog) SetMediaMatchSuppressed(ctx context.Context, entryID string, suppressed bool) error {
+	if suppressed {
+		_, err := c.db.ExecContext(ctx, `INSERT INTO media_match_suppressions(entry_id, created_at)
+			VALUES (?, ?) ON CONFLICT(entry_id) DO NOTHING`, entryID, time.Now().UTC())
+		return err
+	}
+	_, err := c.db.ExecContext(ctx, `DELETE FROM media_match_suppressions WHERE entry_id=?`, entryID)
+	return err
+}
+
+func (c *Catalog) MediaMatchSuppressed(ctx context.Context, entryID string) (bool, error) {
+	var value int
+	err := c.reader.QueryRowContext(ctx, `SELECT 1 FROM media_match_suppressions WHERE entry_id=?`, entryID).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func (c *Catalog) SetMediaMatchLocked(ctx context.Context, id string, locked bool) error {
