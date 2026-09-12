@@ -65,15 +65,19 @@ func (e *Engine) matches(entry model.Entry) bool {
 }
 
 func (e *Engine) ReprocessEntry(ctx context.Context, entry model.Entry) error {
+	return e.ReprocessEntryPriority(ctx, entry, 1000)
+}
+
+func (e *Engine) ReprocessEntryPriority(ctx context.Context, entry model.Entry, priority int) error {
 	key := e.processEntryKey(entry)
-	if err := e.queue.Requeue(ctx, JobProcessEntry, key, 100); err == nil {
+	if err := e.queue.Requeue(ctx, JobProcessEntry, key, priority); err == nil {
 		return nil
 	} else if !errors.Is(err, jobs.ErrNotFound) {
 		return err
 	}
 	return e.queue.EnqueueMany(ctx, []jobs.Request{{
 		Type: JobProcessEntry, Payload: entryPayload{EntryID: entry.ID},
-		Options: jobs.EnqueueOptions{Key: key, Priority: 100},
+		Options: jobs.EnqueueOptions{Key: key, Priority: priority},
 	}})
 }
 

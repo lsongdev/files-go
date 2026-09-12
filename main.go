@@ -110,7 +110,7 @@ func main() {
 					break
 				}
 				for _, entry := range entries {
-					if err := processing.ReprocessEntry(ctx, entry); err != nil {
+					if err := processing.ReprocessEntryPriority(ctx, entry, 100); err != nil {
 						return err
 					}
 				}
@@ -142,7 +142,7 @@ func main() {
 					break
 				}
 				for _, entry := range entries {
-					if err := processing.ReprocessEntry(ctx, entry); err != nil {
+					if err := processing.ReprocessEntryPriority(ctx, entry, 100); err != nil {
 						return err
 					}
 				}

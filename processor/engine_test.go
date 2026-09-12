@@ -83,6 +83,9 @@ func TestEngineEnqueuesDeduplicatedFileJobsAndRunsMatchingProcessors(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	if job.Priority != 1000 {
+		t.Fatalf("interactive reprocess priority = %d, want 1000", job.Priority)
+	}
 	err = continued.Handle(ctx, job)
 	if err == nil || len(failing.entries) != 1 || len(after.entries) != 1 {
 		t.Fatalf("processor isolation = failing %v, after %v, err %v", failing.entries, after.entries, err)
