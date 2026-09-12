@@ -53,6 +53,10 @@ func (p *Thumbnail) Process(ctx context.Context, entry model.Entry) error {
 	if err != nil || imageValue == nil {
 		return err
 	}
+	return p.writeVariants(ctx, entry, imageValue)
+}
+
+func (p *Thumbnail) writeVariants(ctx context.Context, entry model.Entry, imageValue image.Image) error {
 	bounds := imageValue.Bounds()
 	if bounds.Dx() <= 0 || bounds.Dy() <= 0 || int64(bounds.Dx())*int64(bounds.Dy()) > 50_000_000 {
 		return fmt.Errorf("image dimensions exceed thumbnail limit: %dx%d", bounds.Dx(), bounds.Dy())

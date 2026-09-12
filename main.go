@@ -71,12 +71,14 @@ func main() {
 	}
 	idx := indexer.New(catalogDB, registry)
 	jobQueue := jobs.New(db, 2*time.Minute)
+	thumbnailer := processor.NewThumbnail(catalogDB, registry, cfg.CacheDir)
 	processors := []processor.Processor{
 		processor.NewImageMetadata(catalogDB, registry),
 		processor.NewFFProbe(catalogDB, registry, cfg.Processing.FFProbe, 30*time.Second),
 		processor.NewEPUBMetadata(catalogDB, registry),
 		processor.NewPDFMetadata(catalogDB, registry, cfg.Processing.PDFInfo, 30*time.Second),
-		processor.NewThumbnail(catalogDB, registry, cfg.CacheDir),
+		thumbnailer,
+		processor.NewVideoThumbnail(catalogDB, registry, thumbnailer, cfg.Processing.FFmpeg, 60*time.Second),
 		mediaengine.NewCataloger(catalogDB),
 	}
 	var mediaMatcher *mediaengine.Matcher

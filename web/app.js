@@ -171,6 +171,27 @@ function MediaPoster({ media, thumbnailURL }) {
   </div>`;
 }
 
+function ThumbnailImage({ item }) {
+  const [attempt, setAttempt] = useState(0);
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const retryTimer = useRef(null);
+  useEffect(() => () => window.clearTimeout(retryTimer.current), []);
+  const retry = () => {
+    if (attempt >= 8) {
+      setFailed(true);
+      return;
+    }
+    window.clearTimeout(retryTimer.current);
+    retryTimer.current = window.setTimeout(() => setAttempt((value) => value + 1), 2000);
+  };
+  const separator = item.links.thumbnail.includes('?') ? '&' : '?';
+  return html`<span class=${`card-thumbnail ${!ready && !failed ? 'pending' : ''} ${failed ? 'failed' : ''}`}>
+    ${!failed && html`<img src=${`${item.links.thumbnail}${separator}v=${attempt}`} alt="" loading="lazy" onLoad=${() => setReady(true)} onError=${retry}/>`}
+    <i><${Icon} name="file" size=${30}/></i>
+  </span>`;
+}
+
 function MediaHeader({ item, media, technical, actions }) {
   if (!media) return null;
   const metadata = mediaMetadata(media);
@@ -219,7 +240,7 @@ function MatchDialog({ item, media, query, setQuery, candidates, loading, saving
 }
 
 function failureProcessorLabel(value) {
-  return ({ epub_metadata: 'EPUB 元数据', image_metadata: '图片元数据', pdf_metadata: 'PDF 元数据', thumbnail: '缩略图', ffprobe: '音视频分析', media_match: 'TMDB 匹配', poster: '海报下载', media_catalog: '媒体整理', other: '其他处理' }[value] || value);
+  return ({ epub_metadata: 'EPUB 元数据', image_metadata: '图片元数据', pdf_metadata: 'PDF 元数据', thumbnail: '图片/书籍缩略图', video_thumbnail: '视频缩略图', ffprobe: '音视频分析', media_match: 'TMDB 匹配', poster: '海报下载', media_catalog: '媒体整理', other: '其他处理' }[value] || value);
 }
 
 function FailureDialog({ groups, loading, error, onClose }) {
@@ -938,7 +959,7 @@ function App() {
           <div class="file-grid">
             ${items.map((item) => html`<article key=${item.id} class="file-card">
               <button class="card-main" onClick=${() => openEntry(item.id)}>
-                ${item.links.thumbnail ? html`<span class="card-thumbnail"><img src=${item.links.thumbnail} alt="" loading="lazy" onError=${(event) => event.currentTarget.parentElement.classList.add('failed')}/><i><${Icon} name="file" size=${30}/></i></span>` : html`<span class=${`card-icon ${item.type}`}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${30}/></span>`}
+                ${item.links.thumbnail ? html`<${ThumbnailImage} key=${item.id} item=${item}/>` : html`<span class=${`card-icon ${item.type}`}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${30}/></span>`}
                 <strong title=${item.name}>${item.name}</strong><small>${item.type === 'directory' ? '文件夹' : item.media ? `${mediaTypeLabel(item.media.type)} · ${item.media.title}` : formatSize(item.size)}</small>${!item.available && html`<em>不可用</em>`}
               </button>
               <button class="card-action" onClick=${() => openManage(item)} aria-label=${`管理 ${item.name}`}><${Icon} name="more" size=${18}/></button>
