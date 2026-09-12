@@ -124,6 +124,41 @@ func TestQueueStatsCountsStatesByType(t *testing.T) {
 	}
 }
 
+func TestQueueStatsAndFailuresOnlyCountLatestJobForEntry(t *testing.T) {
+	ctx := context.Background()
+	queue := testQueue(t)
+	old, _, err := queue.Enqueue(ctx, "process", map[string]string{"entryId": "entry-1"}, EnqueueOptions{Key: "pipeline-v1", MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err = queue.Claim(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.Fail(ctx, old, errors.New("processor ffprobe: invalid media"), 0); err != nil {
+		t.Fatal(err)
+	}
+	current, _, err := queue.Enqueue(ctx, "process", map[string]string{"entryId": "entry-1"}, EnqueueOptions{Key: "pipeline-v2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err = queue.Claim(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.Complete(ctx, current.ID); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := queue.Stats(ctx, "process")
+	if err != nil || stats.Done != 1 || stats.Failed != 0 {
+		t.Fatalf("latest entry stats = %#v, %v", stats, err)
+	}
+	groups, err := queue.FailureGroups(ctx, "process", 10)
+	if err != nil || len(groups) != 0 {
+		t.Fatalf("recovered failure groups = %#v, %v", groups, err)
+	}
+}
+
 func TestRequeuePromotesPendingJob(t *testing.T) {
 	ctx := context.Background()
 	queue := testQueue(t)

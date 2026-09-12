@@ -87,7 +87,14 @@ func New(db *sql.DB, lease time.Duration) *Queue {
 }
 
 func (q *Queue) Stats(ctx context.Context, jobType string) (Stats, error) {
-	rows, err := q.db.QueryContext(ctx, `SELECT state, COUNT(*) FROM jobs WHERE type=? GROUP BY state`, jobType)
+	rows, err := q.db.QueryContext(ctx, `WITH latest AS (
+		SELECT state, ROW_NUMBER() OVER (
+			PARTITION BY COALESCE(json_extract(payload, '$.entryId'), id)
+			ORDER BY created_at DESC, rowid DESC
+		) AS entry_rank
+		FROM jobs WHERE type=?
+	)
+	SELECT state, COUNT(*) FROM latest WHERE entry_rank=1 GROUP BY state`, jobType)
 	if err != nil {
 		return Stats{}, err
 	}
@@ -120,15 +127,22 @@ func (q *Queue) FailureGroups(ctx context.Context, jobType string, limit int) ([
 	if limit > 100 {
 		limit = 100
 	}
-	rows, err := q.db.QueryContext(ctx, `SELECT
+	rows, err := q.db.QueryContext(ctx, `WITH latest AS (
+		SELECT j.*, ROW_NUMBER() OVER (
+			PARTITION BY COALESCE(json_extract(j.payload, '$.entryId'), j.id)
+			ORDER BY j.created_at DESC, j.rowid DESC
+		) AS entry_rank
+		FROM jobs j WHERE j.type=?
+	)
+	SELECT
 		CASE WHEN j.error LIKE 'processor %:%'
 			THEN substr(j.error, 11, instr(substr(j.error, 11), ':') - 1)
 			ELSE 'other' END AS processor,
 		COALESCE(lower(e.extension), '') AS extension,
 		COUNT(*)
-		FROM jobs j
+		FROM latest j
 		LEFT JOIN entries e ON e.id=json_extract(j.payload, '$.entryId')
-		WHERE j.type=? AND j.state='failed'
+		WHERE j.entry_rank=1 AND j.state='failed'
 		GROUP BY processor, extension
 		ORDER BY COUNT(*) DESC, processor, extension
 		LIMIT ?`, jobType, limit)
