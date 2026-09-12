@@ -5,9 +5,10 @@
 rebuildable SQLite catalog so directory browsing and metadata requests never
 need to wake or enumerate disks.
 
-The current implementation provides the Phase 1 core through the Phase 5
-playback experience described in
-[`docs/design.md`](docs/design.md):
+The current implementation provides the Phase 1/2 core and substantial parts
+of the Phase 3-5 media and playback roadmap described in
+[`docs/design.md`](docs/design.md). The design document is a roadmap rather
+than a claim that every section is implemented.
 
 - local storage isolation with traversal and symlink-escape protection;
 - an opaque-ID filesystem catalog and SQLite migrations;
@@ -25,9 +26,16 @@ playback experience described in
 - bounded EPUB package parsing and pdfinfo-backed PDF metadata.
 - separate movie, series/season/episode, track, photo, and book catalog items;
 - optional TMDB movie/TV matching with confidence scoring and manual override APIs;
-- cached TMDB posters and library-scoped media galleries.
+- cached TMDB posters, episode details, and media annotations attached to the
+  physical file/folder views.
 - capability-based direct play, remux, and single-profile HLS transcoding;
 - per-user resume state and a Continue Watching media shelf.
+
+Important design work that is still outstanding includes filesystem watchers
+and scheduled reconciliation, authentication/permissions/sharing, health and
+metrics endpoints, cache GC and supported SQLite backup tooling, mount identity
+verification, and optional extensions such as archive browsing, waveform
+generation, and non-local storage adapters.
 
 ## Configuration
 
