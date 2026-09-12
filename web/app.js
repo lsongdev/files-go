@@ -147,9 +147,10 @@ function durationLabel(durationMS) {
   return minutes >= 60 ? `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟` : `${minutes} 分钟`;
 }
 
-function MediaPoster({ media }) {
+function MediaPoster({ media, thumbnailURL }) {
   const metadata = mediaMetadata(media);
-  const hasPoster = Boolean(metadata.posterPath);
+  const posterURL = metadata.posterPath ? `${API}/media/${encodeURIComponent(media.id)}/poster` : thumbnailURL;
+  const hasPoster = Boolean(posterURL);
   const [attempt, setAttempt] = useState(0);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -165,7 +166,7 @@ function MediaPoster({ media }) {
   };
   const missing = !hasPoster || failed;
   return html`<div class=${`media-poster ${missing ? 'missing' : ''} ${hasPoster && !ready && !failed ? 'pending' : ''}`}>
-    ${hasPoster && !failed && html`<img src=${`${API}/media/${encodeURIComponent(media.id)}/poster?v=${attempt}`} alt="" onLoad=${() => setReady(true)} onError=${retry}/>`}
+    ${hasPoster && !failed && html`<img src=${`${posterURL}${posterURL.includes('?') ? '&' : '?'}v=${attempt}`} alt="" onLoad=${() => setReady(true)} onError=${retry}/>`}
     <span><${Icon} name=${media.type === 'album' || media.type === 'track' ? 'music' : 'movies'} size=${32}/></span>
   </div>`;
 }
@@ -174,9 +175,10 @@ function MediaHeader({ item, media, technical, actions }) {
   if (!media) return null;
   const metadata = mediaMetadata(media);
   const details = [mediaTypeLabel(media.type), media.year, metadata.voteAverage ? `TMDB ${metadata.voteAverage.toFixed(1)}` : '', durationLabel(technical?.durationMs)].filter(Boolean);
+  const overview = metadata.overview || metadata.description;
   return html`<section class="media-header">
-    <${MediaPoster} key=${media.id} media=${media}/>
-    <div class="media-copy"><p>${details.join(' · ')}</p><h1>${media.title || item.name}</h1>${metadata.originalTitle && metadata.originalTitle !== media.title && html`<small>${metadata.originalTitle}</small>`}${metadata.overview && html`<div class="media-overview">${metadata.overview}</div>`}<div class="media-match">${media.matchSource === 'tmdb' ? 'TMDB 已匹配' : media.matchSource === 'embedded' ? '来自文件标签' : '根据文件名识别'}${media.matchConfidence ? ` · ${Math.round(media.matchConfidence * 100)}%` : ''}</div></div>
+    <${MediaPoster} key=${`${media.id}:${metadata.posterPath || item?.links?.thumbnail || ''}`} media=${media} thumbnailURL=${item?.links?.thumbnail}/>
+    <div class="media-copy"><p>${details.join(' · ')}</p><h1>${media.title || item.name}</h1>${metadata.originalTitle && metadata.originalTitle !== media.title && html`<small>${metadata.originalTitle}</small>`}${overview && html`<div class="media-overview">${overview}</div>`}<div class="media-match">${media.matchSource === 'tmdb' ? 'TMDB 已匹配' : media.matchSource === 'embedded' ? '来自文件标签' : '根据文件名识别'}${media.matchConfidence ? ` · ${Math.round(media.matchConfidence * 100)}%` : ''}</div></div>
     ${actions && html`<div class="media-actions">${actions}</div>`}
   </section>`;
 }
@@ -191,6 +193,8 @@ function FileDetail({ item, media, technical, text, loading, error, playbackURL,
     technical?.container && ['封装', technical.container], technical?.width && technical?.height && ['画面', `${technical.width} × ${technical.height}`],
     technical?.videoCodec && ['视频编码', technical.videoCodec.toUpperCase()], technical?.audioCodec && ['音频编码', technical.audioCodec.toUpperCase()],
     durationLabel(technical?.durationMs) && ['时长', durationLabel(technical.durationMs)], metadata.music?.artist && ['艺人', metadata.music.artist], metadata.music?.album && ['专辑', metadata.music.album],
+    metadata.authors?.length && ['作者', metadata.authors.join('、')], metadata.author && ['作者', metadata.author], metadata.language && ['语言', metadata.language],
+    metadata.publisher && ['出版社', metadata.publisher], Number.isFinite(metadata.pageCount) && ['页数', `${metadata.pageCount} 页`],
   ].filter(Boolean);
   const actions = html`${kind === 'video' && html`<button class="detail-button" onClick=${onMatch}><${Icon} name="refresh" size=${17}/>${media ? '纠正匹配' : '识别媒体'}</button>`}<a class="detail-button primary" href=${contentURL} download=${item.name}><${Icon} name="download" size=${17}/>下载</a><button class="detail-button" onClick=${onManage}><${Icon} name="more" size=${17}/>管理</button>`;
   return html`<article class="file-detail">

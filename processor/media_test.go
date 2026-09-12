@@ -179,7 +179,13 @@ func TestEPUBMetadataReadsPackage(t *testing.T) {
 	archive := zip.NewWriter(&encoded)
 	writeArchiveFile(t, archive, "META-INF/container.xml", `<?xml version="1.0"?><container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>`)
 	writeArchiveFile(t, archive, "OPS/book.opf", `<?xml version="1.0"?><package><metadata><title>The Left Hand of Darkness</title><creator>Ursula K. Le Guin</creator><language>en</language><publisher>Ace</publisher><identifier>book-1</identifier><meta name="cover" content="cover-image"/></metadata><manifest><item id="cover-image" href="images/cover.jpg" media-type="image/jpeg"/></manifest></package>`)
-	writeArchiveFile(t, archive, "OPS/images/cover.jpg", "jpeg")
+	coverImage := image.NewRGBA(image.Rect(0, 0, 120, 180))
+	coverImage.Set(60, 90, color.RGBA{R: 80, G: 120, B: 200, A: 255})
+	var cover bytes.Buffer
+	if err := png.Encode(&cover, coverImage); err != nil {
+		t.Fatal(err)
+	}
+	writeArchiveBytes(t, archive, "OPS/images/cover.jpg", cover.Bytes())
 	if err := archive.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +210,24 @@ func TestEPUBMetadataReadsPackage(t *testing.T) {
 	if media.Kind != "book" || metadata.Title != "The Left Hand of Darkness" || len(metadata.Authors) != 1 || metadata.Cover.Path != "OPS/images/cover.jpg" {
 		t.Fatalf("EPUB metadata = %#v, media = %#v", metadata, media)
 	}
+	cacheDir := t.TempDir()
+	if err := NewThumbnail(cat, registry, cacheDir).Process(context.Background(), entry); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := cat.ArtifactForEntry(context.Background(), entry.ID, "thumbnail", "medium")
+	if err != nil || artifact.MIME != "image/jpeg" {
+		t.Fatalf("EPUB cover thumbnail = %#v, %v", artifact, err)
+	}
+}
+
+func TestResolveEPUBResourceDecodesEscapedPaths(t *testing.T) {
+	resolved, err := resolveEPUBResource("OEBPS/book.opf", "Images/%E5%B0%81%E9%9D%A2.jpg#cover")
+	if err != nil || resolved != "OEBPS/Images/封面.jpg" {
+		t.Fatalf("resolved EPUB cover = %q, %v", resolved, err)
+	}
+	if _, err := resolveEPUBResource("OEBPS/book.opf", "https://example.com/cover.jpg"); err == nil {
+		t.Fatal("external EPUB cover was accepted")
+	}
 }
 
 func TestPDFInfoMetadata(t *testing.T) {
@@ -214,12 +238,16 @@ func TestPDFInfoMetadata(t *testing.T) {
 }
 
 func writeArchiveFile(t *testing.T, archive *zip.Writer, name, value string) {
+	writeArchiveBytes(t, archive, name, []byte(value))
+}
+
+func writeArchiveBytes(t *testing.T, archive *zip.Writer, name string, value []byte) {
 	t.Helper()
 	file, err := archive.Create(name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := file.Write([]byte(value)); err != nil {
+	if _, err := file.Write(value); err != nil {
 		t.Fatal(err)
 	}
 }

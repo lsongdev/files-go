@@ -1,9 +1,13 @@
 package processor
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -37,7 +41,7 @@ func (p *Thumbnail) Match(entry model.Entry) bool {
 		return false
 	}
 	switch strings.ToLower(entry.Extension) {
-	case "jpg", "jpeg", "png", "gif":
+	case "jpg", "jpeg", "png", "gif", "epub":
 		return true
 	default:
 		return false
@@ -45,31 +49,13 @@ func (p *Thumbnail) Match(entry model.Entry) bool {
 }
 
 func (p *Thumbnail) Process(ctx context.Context, entry model.Entry) error {
-	backend, ok := p.storages.Get(entry.StorageID)
-	if !ok {
-		return storage.ErrOffline
-	}
-	file, err := backend.Open(ctx, entry.Path)
-	if err != nil {
+	imageValue, err := p.sourceImage(ctx, entry)
+	if err != nil || imageValue == nil {
 		return err
 	}
-	config, _, err := image.DecodeConfig(contextReader{ctx: ctx, reader: file})
-	if err != nil {
-		_ = file.Close()
-		return err
-	}
-	if config.Width <= 0 || config.Height <= 0 || int64(config.Width)*int64(config.Height) > 50_000_000 {
-		_ = file.Close()
-		return fmt.Errorf("image dimensions exceed thumbnail limit: %dx%d", config.Width, config.Height)
-	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		_ = file.Close()
-		return err
-	}
-	imageValue, _, err := image.Decode(contextReader{ctx: ctx, reader: file})
-	_ = file.Close()
-	if err != nil {
-		return err
+	bounds := imageValue.Bounds()
+	if bounds.Dx() <= 0 || bounds.Dy() <= 0 || int64(bounds.Dx())*int64(bounds.Dy()) > 50_000_000 {
+		return fmt.Errorf("image dimensions exceed thumbnail limit: %dx%d", bounds.Dx(), bounds.Dy())
 	}
 	current := imageValue
 	for _, item := range []struct {
@@ -103,6 +89,71 @@ func (p *Thumbnail) Process(ctx context.Context, entry model.Entry) error {
 		}
 	}
 	return nil
+}
+
+func (p *Thumbnail) sourceImage(ctx context.Context, entry model.Entry) (image.Image, error) {
+	backend, ok := p.storages.Get(entry.StorageID)
+	if !ok {
+		return nil, storage.ErrOffline
+	}
+	file, err := backend.Open(ctx, entry.Path)
+	if err != nil {
+		return nil, err
+	}
+	if strings.EqualFold(entry.Extension, "epub") {
+		defer file.Close()
+		readerAt, ok := file.(io.ReaderAt)
+		if !ok {
+			return nil, storage.ErrUnsupported
+		}
+		mediaFile, err := p.catalog.MediaFile(ctx, entry.ID)
+		if errors.Is(err, catalog.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		var metadata struct {
+			Cover struct {
+				Path string `json:"path"`
+			} `json:"cover"`
+		}
+		if json.Unmarshal(mediaFile.Metadata, &metadata) != nil || metadata.Cover.Path == "" {
+			return nil, nil
+		}
+		reader, err := zip.NewReader(readerAt, entry.Size)
+		if err != nil {
+			return nil, fmt.Errorf("open EPUB for cover: %w", err)
+		}
+		cover, err := readZIPFile(ctx, reader.File, metadata.Cover.Path, 32<<20)
+		if err != nil {
+			return nil, err
+		}
+		imageValue, _, err := image.Decode(bytes.NewReader(cover))
+		if err != nil {
+			return nil, fmt.Errorf("decode EPUB cover: %w", err)
+		}
+		return imageValue, nil
+	}
+	config, _, err := image.DecodeConfig(contextReader{ctx: ctx, reader: file})
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if config.Width <= 0 || config.Height <= 0 || int64(config.Width)*int64(config.Height) > 50_000_000 {
+		_ = file.Close()
+		return nil, fmt.Errorf("image dimensions exceed thumbnail limit: %dx%d", config.Width, config.Height)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	imageValue, _, err := image.Decode(contextReader{ctx: ctx, reader: file})
+	_ = file.Close()
+	if err != nil {
+		return nil, err
+	}
+	return imageValue, nil
 }
 
 func thumbnailKey(entry model.Entry, variant string) string {

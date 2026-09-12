@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"path"
 	"strings"
 
@@ -121,7 +122,7 @@ func (p *EPUBMetadata) Process(ctx context.Context, entry model.Entry) error {
 	}
 	for _, item := range publication.Manifest {
 		if containsWord(item.Properties, "cover-image") || item.ID == coverID {
-			if coverPath, err := safeArchivePath(path.Join(path.Dir(opfPath), item.Href)); err == nil {
+			if coverPath, err := resolveEPUBResource(opfPath, item.Href); err == nil {
 				metadata["cover"] = map[string]string{"path": coverPath, "mediaType": item.MediaType}
 			}
 			break
@@ -132,6 +133,17 @@ func (p *EPUBMetadata) Process(ctx context.Context, entry model.Entry) error {
 		return err
 	}
 	return p.catalog.UpsertMediaFile(ctx, model.MediaFile{EntryID: entry.ID, Kind: "book", Container: "epub", Metadata: encoded})
+}
+
+func resolveEPUBResource(opfPath, href string) (string, error) {
+	reference, err := url.Parse(strings.TrimSpace(href))
+	if err != nil {
+		return "", err
+	}
+	if reference.IsAbs() || reference.Host != "" {
+		return "", errors.New("EPUB resource must be inside the archive")
+	}
+	return safeArchivePath(path.Join(path.Dir(opfPath), reference.Path))
 }
 
 func readZIPFile(ctx context.Context, files []*zip.File, name string, limit int64) ([]byte, error) {
