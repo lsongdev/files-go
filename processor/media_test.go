@@ -155,6 +155,46 @@ func TestFFProbeSkipsTypeScriptFilesWithTSExtension(t *testing.T) {
 	}
 }
 
+func TestVideoThumbnailGeneratesCachedVariants(t *testing.T) {
+	ctx := context.Background()
+	cat, registry, entry := mediaFixture(t, "movie.mp4", []byte("video fixture"))
+	duration := int64(100_000)
+	if err := cat.UpsertMediaFile(ctx, model.MediaFile{EntryID: entry.ID, Kind: "video", DurationMS: &duration, Metadata: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	frame := image.NewRGBA(image.Rect(0, 0, 320, 180))
+	frame.Set(10, 10, color.RGBA{R: 220, G: 80, B: 40, A: 255})
+	fixtureDir := t.TempDir()
+	framePath := filepath.Join(fixtureDir, "frame.png")
+	frameFile, err := os.Create(framePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(frameFile, frame); err != nil {
+		t.Fatal(err)
+	}
+	if err := frameFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fakeFFmpeg := filepath.Join(fixtureDir, "ffmpeg")
+	if err := os.WriteFile(fakeFFmpeg, []byte("#!/bin/sh\ncat '"+framePath+"'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	thumbnailer := NewThumbnail(cat, registry, t.TempDir())
+	processor := NewVideoThumbnail(cat, registry, thumbnailer, fakeFFmpeg, time.Second)
+	if !processor.Match(entry) {
+		t.Fatal("MP4 did not match video thumbnail processor")
+	}
+	if err := processor.Process(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+	for _, variant := range []string{"small", "medium", "large"} {
+		if _, err := cat.ArtifactForEntry(ctx, entry.ID, "thumbnail", variant); err != nil {
+			t.Fatalf("%s video thumbnail: %v", variant, err)
+		}
+	}
+}
+
 func TestFFProbeNormalizesMusicTags(t *testing.T) {
 	parsed, err := parseFFProbe("entry", []byte(`{
 		"streams":[{"codec_type":"audio","codec_name":"flac","tags":{"artist":"Portishead"}}, {"codec_type":"video","codec_name":"mjpeg","disposition":{"attached_pic":1}}],

@@ -236,6 +236,8 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .card-thumbnail { width: calc(100% + 2rem); height: 6.5rem; display: grid; place-items: center; margin: -1rem -1rem 0.85rem; overflow: hidden; color: var(--document-text); background: var(--document-bg); }
 .card-thumbnail img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .card-thumbnail i { display: none; }
+.card-thumbnail.pending img { opacity: 0; }
+.card-thumbnail.pending i { display: block; }
 .card-thumbnail.failed img { display: none; }
 .card-thumbnail.failed i { display: block; }
 .file-card strong { width: 100%; overflow: hidden; font-size: 0.86rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
