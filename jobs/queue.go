@@ -64,6 +64,12 @@ type Stats struct {
 	Failed  int64 `json:"failed"`
 }
 
+type FailureGroup struct {
+	Processor string `json:"processor"`
+	Extension string `json:"extension,omitempty"`
+	Count     int64  `json:"count"`
+}
+
 type Queue struct {
 	db          *sql.DB
 	lease       time.Duration
@@ -105,6 +111,40 @@ func (q *Queue) Stats(ctx context.Context, jobType string) (Stats, error) {
 		}
 	}
 	return stats, rows.Err()
+}
+
+func (q *Queue) FailureGroups(ctx context.Context, jobType string, limit int) ([]FailureGroup, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	rows, err := q.db.QueryContext(ctx, `SELECT
+		CASE WHEN j.error LIKE 'processor %:%'
+			THEN substr(j.error, 11, instr(substr(j.error, 11), ':') - 1)
+			ELSE 'other' END AS processor,
+		COALESCE(lower(e.extension), '') AS extension,
+		COUNT(*)
+		FROM jobs j
+		LEFT JOIN entries e ON e.id=json_extract(j.payload, '$.entryId')
+		WHERE j.type=? AND j.state='failed'
+		GROUP BY processor, extension
+		ORDER BY COUNT(*) DESC, processor, extension
+		LIMIT ?`, jobType, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	groups := make([]FailureGroup, 0)
+	for rows.Next() {
+		var group FailureGroup
+		if err := rows.Scan(&group.Processor, &group.Extension, &group.Count); err != nil {
+			return nil, err
+		}
+		groups = append(groups, group)
+	}
+	return groups, rows.Err()
 }
 
 func (q *Queue) Enqueue(ctx context.Context, jobType string, payload any, opts EnqueueOptions) (*Job, bool, error) {

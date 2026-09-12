@@ -113,6 +113,11 @@ func TestSystemStatusReportsProcessingQueue(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"pending":1`) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/system/failures", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"items":[]`) {
+		t.Fatalf("failure groups = %d, body = %s", response.Code, response.Body.String())
+	}
 }
 
 func TestThumbnailPendingDoesNotProduceNoisyNotFound(t *testing.T) {

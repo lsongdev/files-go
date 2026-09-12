@@ -60,6 +60,7 @@ func (s *Server) SetMediaMatcher(matcher *mediaengine.Matcher) { s.matcher = mat
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/system", s.system)
 	s.mux.HandleFunc("GET /api/v1/system/status", s.systemStatus)
+	s.mux.HandleFunc("GET /api/v1/system/failures", s.systemFailures)
 	s.mux.HandleFunc("GET /api/v1/storages", s.listStorages)
 	s.mux.HandleFunc("GET /api/v1/storages/{id}", s.getStorage)
 	s.mux.HandleFunc("POST /api/v1/storages/{id}/scan", s.scanStorage)
@@ -1051,6 +1052,19 @@ func (s *Server) systemStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"processing": stats})
+}
+
+func (s *Server) systemFailures(w http.ResponseWriter, r *http.Request) {
+	if s.jobQueue == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"items": []jobs.FailureGroup{}})
+		return
+	}
+	groups, err := s.jobQueue.FailureGroups(r.Context(), processor.JobProcessEntry, 30)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": groups})
 }
 
 func (s *Server) listStorages(w http.ResponseWriter, r *http.Request) {

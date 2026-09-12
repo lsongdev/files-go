@@ -76,12 +76,16 @@ func TestQueueFailsPermanentlyAtAttemptLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := queue.Fail(ctx, job, errors.New("permanent failure"), 0); err != nil {
+	if err := queue.Fail(ctx, job, errors.New("processor epub_metadata: permanent failure"), 0); err != nil {
 		t.Fatal(err)
 	}
 	failed, err := queue.byTypeKey(ctx, "broken", "one")
-	if err != nil || failed.State != StateFailed || failed.Error != "permanent failure" || failed.FinishedAt == nil {
+	if err != nil || failed.State != StateFailed || failed.Error != "processor epub_metadata: permanent failure" || failed.FinishedAt == nil {
 		t.Fatalf("failed job = %#v, %v", failed, err)
+	}
+	groups, err := queue.FailureGroups(ctx, "broken", 10)
+	if err != nil || len(groups) != 1 || groups[0].Processor != "epub_metadata" || groups[0].Count != 1 {
+		t.Fatalf("failure groups = %#v, %v", groups, err)
 	}
 	if _, err := queue.Claim(ctx); !errors.Is(err, ErrNoJob) {
 		t.Fatalf("claim after permanent failure = %v", err)
