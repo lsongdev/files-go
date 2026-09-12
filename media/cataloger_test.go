@@ -37,6 +37,7 @@ func TestCatalogerCreatesLocalMovieAndTVFallbacks(t *testing.T) {
 	entries, err := cat.UpsertEntries(ctx, []model.Entry{
 		{StorageID: "disk", Name: "Interstellar.2014.mkv", Path: "Movies/Interstellar.2014.mkv", Type: model.EntryFile, Extension: "mkv"},
 		{StorageID: "disk", Name: "The.Bear.S02E03.mkv", Path: "TV/The.Bear.S02E03.mkv", Type: model.EntryFile, Extension: "mkv"},
+		{StorageID: "disk", Name: "S01E01.mkv", Path: "TV/Attack.On.Titan/S01/S01E01.mkv", Type: model.EntryFile, Extension: "mkv"},
 	}, generation)
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +60,7 @@ func TestCatalogerCreatesLocalMovieAndTVFallbacks(t *testing.T) {
 		t.Fatalf("episode = %#v, %v", episode, err)
 	}
 	series, err := cat.MediaItems(ctx, "series", "tv", 10)
-	if err != nil || len(series) != 1 || series[0].Title != "The Bear" || series[0].PrimaryEntryID != entries[1].ID {
+	if err != nil || len(series) != 2 || series[0].Title != "Attack On Titan" || series[1].Title != "The Bear" || series[1].PrimaryEntryID != entries[1].ID {
 		t.Fatalf("series = %#v, %v", series, err)
 	}
 	if err := cat.UnmatchEntry(ctx, entries[0].ID); err != nil {
@@ -127,7 +128,7 @@ func TestCatalogerBuildsArtistAlbumTrackHierarchy(t *testing.T) {
 		t.Fatalf("artist = %#v, %v", artist, err)
 	}
 	folderMedia, err := cat.MediaItemForDirectory(ctx, albums[0])
-	if err != nil || folderMedia.ID != album.ID {
+	if err != nil || folderMedia.ID != album.ID || folderMedia.PrimaryEntryID != entries[0].ID {
 		t.Fatalf("folder media = %#v, %v", folderMedia, err)
 	}
 	missing, err = cat.EntriesMissingMediaAssociation(ctx, "audio", "album", "", 100)

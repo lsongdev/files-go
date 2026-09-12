@@ -174,14 +174,19 @@ func (c *Catalog) AssociateMediaFile(ctx context.Context, mediaID, entryID, role
 
 func (c *Catalog) MediaItemForEntry(ctx context.Context, entryID, role string) (*model.MediaItem, error) {
 	where, args := "mf.entry_id=?", []any{entryID}
+	order := `CASE mf.role WHEN 'video' THEN 0 WHEN 'audio' THEN 1
+		WHEN 'photo' THEN 2 WHEN 'book' THEN 3 WHEN 'album' THEN 4
+		WHEN 'artist' THEN 5 WHEN 'season' THEN 6 WHEN 'series' THEN 7 ELSE 8 END,
+		mf.created_at DESC, m.id`
 	if role != "" {
 		where += " AND mf.role=?"
 		args = append(args, role)
+		order = "mf.created_at DESC, m.id"
 	}
 	item, err := scanMediaItem(c.reader.QueryRowContext(ctx, `SELECT m.id, m.type, m.title, m.sort_title,
 		m.year, m.parent_id, m.index_number, m.external_id, m.match_source, m.match_confidence,
 		m.match_locked, m.metadata, m.created_at, m.updated_at FROM media_item_files mf
-		JOIN media_items m ON m.id=mf.media_id WHERE `+where+` ORDER BY mf.created_at DESC LIMIT 1`, args...))
+		JOIN media_items m ON m.id=mf.media_id WHERE `+where+` ORDER BY `+order+` LIMIT 1`, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -202,8 +207,10 @@ func (c *Catalog) MediaSummariesForEntries(ctx context.Context, entryIDs []strin
 		m.index_number, m.match_source, m.match_confidence
 		FROM media_item_files mf JOIN media_items m ON m.id=mf.media_id
 		WHERE mf.entry_id IN (`+placeholders+`)
-		ORDER BY mf.entry_id, CASE mf.role WHEN 'video' THEN 0 WHEN 'track' THEN 1
-			WHEN 'photo' THEN 2 WHEN 'book' THEN 3 ELSE 4 END, mf.created_at`, args...)
+		ORDER BY mf.entry_id, CASE mf.role WHEN 'video' THEN 0 WHEN 'audio' THEN 1
+			WHEN 'photo' THEN 2 WHEN 'book' THEN 3 WHEN 'album' THEN 4
+			WHEN 'artist' THEN 5 WHEN 'season' THEN 6 WHEN 'series' THEN 7 ELSE 8 END,
+			mf.created_at DESC, m.id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +248,12 @@ func (c *Catalog) MediaItemForDirectory(ctx context.Context, entry model.Entry) 
 	}
 	rows, err := c.reader.QueryContext(ctx, `SELECT m.id, m.type, m.title, m.sort_title,
 		m.year, m.parent_id, m.index_number, m.external_id, m.match_source, m.match_confidence,
-		m.match_locked, m.metadata, m.created_at, m.updated_at
+		m.match_locked, m.metadata, m.created_at, m.updated_at,
+		COALESCE((SELECT candidate.entry_id FROM media_item_files candidate
+			LEFT JOIN artifacts cover ON cover.entry_id=candidate.entry_id
+				AND cover.type='thumbnail' AND cover.variant='medium'
+			WHERE candidate.media_id=m.id
+			ORDER BY cover.id IS NULL, candidate.entry_id LIMIT 1), '')
 		FROM media_items m JOIN media_item_files mf ON mf.media_id=m.id
 		JOIN entries e ON e.id=mf.entry_id
 		WHERE e.storage_id=? AND (?='' OR substr(e.path,1,length(?)+1)=? || '/') AND (
@@ -258,7 +270,7 @@ func (c *Catalog) MediaItemForDirectory(ctx context.Context, entry model.Entry) 
 	defer rows.Close()
 	items := make([]model.MediaItem, 0, 2)
 	for rows.Next() {
-		item, err := scanMediaItem(rows)
+		item, err := scanMediaItemWithPrimary(rows)
 		if err != nil {
 			return nil, err
 		}

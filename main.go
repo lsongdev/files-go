@@ -80,6 +80,7 @@ func main() {
 		thumbnailer,
 		processor.NewVideoThumbnail(catalogDB, registry, thumbnailer, cfg.Processing.FFmpeg, 60*time.Second),
 		processor.NewPDFThumbnail(catalogDB, registry, thumbnailer, cfg.CacheDir, cfg.Processing.PDFToPPM, 60*time.Second),
+		processor.NewAudioArtwork(catalogDB, registry, thumbnailer, cfg.Processing.FFmpeg, 30*time.Second),
 		mediaengine.NewCataloger(catalogDB),
 	}
 	var mediaMatcher *mediaengine.Matcher
@@ -92,23 +93,52 @@ func main() {
 	}
 	processing := processor.New(catalogDB, jobQueue, processors...)
 	idx.SetEntrySink(processing)
-	afterID := ""
-	for {
-		entries, err := catalogDB.EntriesMissingMediaAssociation(ctx, "audio", "album", afterID, 500)
-		if err != nil {
-			log.Fatal(err)
+	runMediaBackfills := func() error {
+		for _, backfill := range []struct{ kind, role string }{
+			{"audio", "album"},
+			{"video", "video"},
+			{"photo", "photo"},
+			{"book", "book"},
+		} {
+			afterID := ""
+			for {
+				entries, err := catalogDB.EntriesMissingMediaAssociation(ctx, backfill.kind, backfill.role, afterID, 500)
+				if err != nil {
+					return err
+				}
+				if len(entries) == 0 {
+					break
+				}
+				if err := processing.EnqueueEntries(ctx, entries); err != nil {
+					return err
+				}
+				afterID = entries[len(entries)-1].ID
+			}
 		}
-		if len(entries) == 0 {
-			break
+		afterID := ""
+		for {
+			entries, err := catalogDB.EntriesMissingAudioArtwork(ctx, afterID, 500)
+			if err != nil {
+				return err
+			}
+			if len(entries) == 0 {
+				break
+			}
+			if err := processing.EnqueueEntries(ctx, entries); err != nil {
+				return err
+			}
+			afterID = entries[len(entries)-1].ID
 		}
-		if err := processing.EnqueueEntries(ctx, entries); err != nil {
-			log.Fatal(err)
-		}
-		afterID = entries[len(entries)-1].ID
+		return nil
 	}
 	workerPool := jobs.NewPool(jobQueue, cfg.Processing.Workers)
 	workerPool.Handle(processor.JobProcessEntry, processing.Handle)
 	workerPool.Start(ctx)
+	go func() {
+		if err := runMediaBackfills(); err != nil && ctx.Err() == nil {
+			log.Printf("media backfill: %v", err)
+		}
+	}()
 	for _, item := range cfg.Storages {
 		var priority []string
 		for _, library := range cfg.Libraries {
