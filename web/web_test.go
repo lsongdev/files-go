@@ -84,7 +84,7 @@ func TestMediaDetailAssetsIncludeFileAndDirectoryEnhancement(t *testing.T) {
 	response := httptest.NewRecorder()
 	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	body := response.Body.String()
-	for _, expected := range []string{"MediaHeader", "media-header", "/media-item", "/media-candidates", "MatchDialog", "纠正匹配", "移除当前匹配", "mediaTypeLabel(item.media.type)", "current.type === 'directory'", "entry?.type === 'file'"} {
+	for _, expected := range []string{"MediaHeader", "media-header", "/media-item", "/media-candidates", "MatchDialog", "纠正匹配", "移除当前匹配", "mediaTypeLabel(item.media.type)", "FailureDialog", "/system/failures", "current.type === 'directory'", "entry?.type === 'file'"} {
 		if response.Code != http.StatusOK || !strings.Contains(body, expected) {
 			t.Fatalf("app.js does not contain %q", expected)
 		}

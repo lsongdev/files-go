@@ -62,7 +62,7 @@ function formatCount(value) {
   return new Intl.NumberFormat('zh-CN').format(value || 0);
 }
 
-function ActivityPanel({ storages, processing }) {
+function ActivityPanel({ storages, processing, onFailures }) {
   const scanning = storages.find((item) => item.state === 'scanning');
   const interrupted = storages.find((item) => item.state === 'interrupted');
   const activeJobs = (processing.pending || 0) + (processing.running || 0);
@@ -75,7 +75,7 @@ function ActivityPanel({ storages, processing }) {
     <strong>后台活动</strong>
     ${scanning && html`<div class="activity-row"><span class="activity-pulse"></span><p><b>正在扫描文件${scanPercent == null ? '' : ` · ${scanPercentLabel}`}</b><small>${formatCount(scanning.scanEntries)} 个条目 · ${formatCount(scanning.scanDirectories)} 个文件夹 · ${formatCount(scanning.scanFiles)} 个文件</small><span class=${`activity-progress ${scanPercent == null ? 'indeterminate' : ''}`} role="progressbar" aria-label="整体扫描进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow=${scanPercent == null ? undefined : scanPercent}><i style=${scanPercent == null ? undefined : { width: `${scanProgressWidth}%` }}></i></span></p></div>`}
     ${!scanning && interrupted && html`<div class="activity-row interrupted"><span>!</span><p><b>上次扫描已中断</b><small>已保留 ${formatCount(interrupted.scanEntries)} 个条目，服务恢复后会从检查点继续</small></p></div>`}
-    ${(activeJobs > 0 || processing.failed > 0) && html`<div class="activity-row"><span class=${processing.running ? 'activity-pulse' : ''}></span><p><b>媒体增强</b><small>${formatCount(processing.running)} 个处理中 · ${formatCount(processing.pending)} 个等待${processing.failed ? ` · ${formatCount(processing.failed)} 个失败` : ''}</small></p></div>`}
+    ${(activeJobs > 0 || processing.failed > 0) && html`<div class="activity-row"><span class=${processing.running ? 'activity-pulse' : ''}></span><p><b>媒体增强</b><small>${formatCount(processing.running)} 个处理中 · ${formatCount(processing.pending)} 个等待${processing.failed ? html` · <button class="failure-link" onClick=${onFailures}>${formatCount(processing.failed)} 个失败</button>` : ''}</small></p></div>`}
   </section>`;
 }
 
@@ -218,6 +218,18 @@ function MatchDialog({ item, media, query, setQuery, candidates, loading, saving
   </section></div>`;
 }
 
+function failureProcessorLabel(value) {
+  return ({ epub_metadata: 'EPUB 元数据', image_metadata: '图片元数据', pdf_metadata: 'PDF 元数据', thumbnail: '缩略图', ffprobe: '音视频分析', media_match: 'TMDB 匹配', poster: '海报下载', media_catalog: '媒体整理', other: '其他处理' }[value] || value);
+}
+
+function FailureDialog({ groups, loading, error, onClose }) {
+  return html`<div class="preview-scrim" onClick=${onClose}><section class="action-dialog failure-dialog" role="dialog" aria-modal="true" aria-labelledby="failure-title" onClick=${(event) => event.stopPropagation()}>
+    <header><div><strong id="failure-title">媒体增强失败</strong><span>仅影响派生信息，文件浏览、下载和管理不受影响</span></div><button type="button" class="icon-button" onClick=${onClose} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header>
+    ${loading ? html`<p class="failure-empty">正在读取失败分类…</p>` : error ? html`<p class="action-error" role="alert">${error}</p>` : groups.length ? html`<div class="failure-groups">${groups.map((group) => html`<div key=${`${group.processor}:${group.extension}`}><span><strong>${failureProcessorLabel(group.processor)}</strong><small>${group.extension ? `${group.extension.toUpperCase()} 文件` : '未识别格式'}</small></span><b>${formatCount(group.count)}</b></div>`)}</div>` : html`<p class="failure-empty">当前没有失败任务。</p>`}
+    <footer><span>通常表示文件损坏、格式伪装或外部工具无法解析；原文件不会被修改。</span><button onClick=${onClose}>知道了</button></footer>
+  </section></div>`;
+}
+
 function routeEntryID() {
   const match = window.location.pathname.match(/^\/files\/([^/]+)$/);
   return match ? decodeURIComponent(match[1]) : null;
@@ -278,6 +290,10 @@ function App() {
   const [matchLoading, setMatchLoading] = useState(false);
   const [matchSaving, setMatchSaving] = useState(false);
   const [matchError, setMatchError] = useState('');
+  const [failureOpen, setFailureOpen] = useState(false);
+  const [failureGroups, setFailureGroups] = useState([]);
+  const [failureLoading, setFailureLoading] = useState(false);
+  const [failureError, setFailureError] = useState('');
   const loadMoreSentinelRef = useRef(null);
   const loadingMoreRef = useRef(false);
   const playbackSessionRef = useRef(null);
@@ -293,7 +309,7 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
-    if (!createFolderOpen && !manageItem && !movingItem && !matchOpen) return undefined;
+    if (!createFolderOpen && !manageItem && !movingItem && !matchOpen && !failureOpen) return undefined;
     const frame = window.requestAnimationFrame(() => document.querySelector('.action-dialog input, .action-dialog button')?.focus());
     const close = (event) => {
       if (event.key !== 'Escape' || actionSaving || matchSaving) return;
@@ -301,6 +317,7 @@ function App() {
       setManageItem(null);
       setMovingItem(null);
       setMatchOpen(false);
+      setFailureOpen(false);
     };
     document.body.classList.add('preview-open');
     window.addEventListener('keydown', close);
@@ -309,7 +326,7 @@ function App() {
       document.body.classList.remove('preview-open');
       window.removeEventListener('keydown', close);
     };
-  }, [createFolderOpen, manageItem, movingItem, matchOpen, actionSaving, matchSaving]);
+  }, [createFolderOpen, manageItem, movingItem, matchOpen, failureOpen, actionSaving, matchSaving]);
 
   const loadNavigation = useCallback(async () => {
     const [libraryData, storageData] = await Promise.all([request(`${API}/libraries`), request(`${API}/storages`)]);
@@ -653,6 +670,21 @@ function App() {
     }
   };
 
+  const openFailureDetails = async () => {
+    setFailureOpen(true);
+    setFailureLoading(true);
+    setFailureError('');
+    try {
+      const data = await request(`${API}/system/failures`);
+      setFailureGroups(data.items || []);
+    } catch (reason) {
+      setFailureGroups([]);
+      setFailureError(reason.message || '无法读取失败详情');
+    } finally {
+      setFailureLoading(false);
+    }
+  };
+
   const createFolder = async (event) => {
     event.preventDefault();
     if (!entry || !folderName.trim()) return;
@@ -852,7 +884,7 @@ function App() {
           </button></div>`;
         })}
       </nav>
-      <${ActivityPanel} storages=${storages} processing=${processingStatus}/>
+      <${ActivityPanel} storages=${storages} processing=${processingStatus} onFailures=${openFailureDetails}/>
       <div class="storage-summary">
         <span class="summary-icon"><${Icon} name="drive"/></span>
         <div><strong>${storages.length || '—'} 个存储</strong><span>${storageSummaryText(storages)}</span></div>
@@ -916,6 +948,7 @@ function App() {
       </section>
     </main>
     ${matchOpen && html`<${MatchDialog} item=${entry} media=${entryMedia} query=${matchQuery} setQuery=${setMatchQuery} candidates=${matchCandidates} loading=${matchLoading} saving=${matchSaving} error=${matchError} onSearch=${searchMediaCandidates} onSelect=${selectMediaCandidate} onUnmatch=${unmatchMedia} onClose=${() => setMatchOpen(false)}/>`}
+    ${failureOpen && html`<${FailureDialog} groups=${failureGroups} loading=${failureLoading} error=${failureError} onClose=${() => setFailureOpen(false)}/>`}
     ${createFolderOpen && html`<div class="preview-scrim" onClick=${() => !actionSaving && setCreateFolderOpen(false)}><form class="action-dialog" role="dialog" aria-modal="true" aria-labelledby="create-folder-title" onSubmit=${createFolder} onClick=${(event) => event.stopPropagation()}><header><div><strong id="create-folder-title">新建文件夹</strong><span>在 ${entry?.name || activeLibrary?.name || '当前目录'} 中创建</span></div><button type="button" class="icon-button" onClick=${() => setCreateFolderOpen(false)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header><label>名称<input value=${folderName} onInput=${(event) => setFolderName(event.currentTarget.value)} maxlength="255" required/></label>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}<footer><button type="button" onClick=${() => setCreateFolderOpen(false)}>取消</button><button class="primary" disabled=${actionSaving}>${actionSaving ? '正在创建…' : '创建'}</button></footer></form></div>`}
     ${manageItem && html`<div class="preview-scrim" onClick=${() => !actionSaving && setManageItem(null)}><form class="action-dialog" role="dialog" aria-modal="true" aria-labelledby="manage-entry-title" onSubmit=${renameEntry} onClick=${(event) => event.stopPropagation()}><header><div><strong id="manage-entry-title">管理条目</strong><span>${manageItem.type === 'directory' ? '文件夹' : formatSize(manageItem.size)}</span></div><button type="button" class="icon-button" onClick=${() => setManageItem(null)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header><label>名称<input value=${renameValue} onInput=${(event) => { setRenameValue(event.currentTarget.value); setDeleteArmed(false); }} maxlength="255" required/></label>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}${deleteArmed && html`<p class="delete-warning" role="alert">此操作无法撤销。再次点击删除以确认。</p>`}<footer class="manage-footer"><button type="button" class="danger" onClick=${() => deleteArmed ? deleteManagedEntry() : setDeleteArmed(true)} disabled=${actionSaving}><${Icon} name="trash" size=${16}/>${deleteArmed ? '确认删除' : '删除'}</button><button type="button" onClick=${() => openTransfer('copy')}><${Icon} name="copy" size=${16}/>复制</button><button type="button" onClick=${() => openTransfer('move')}><${Icon} name="move" size=${16}/>移动</button><span></span><button type="button" onClick=${() => setManageItem(null)}>取消</button><button class="primary" disabled=${actionSaving || renameValue.trim() === manageItem.name}>${actionSaving ? '正在保存…' : '重命名'}</button></footer></form></div>`}
     ${movingItem && html`<div class="preview-scrim" onClick=${() => !actionSaving && setMovingItem(null)}><section class=${`action-dialog destination-dialog ${transferMode}`} role="dialog" aria-modal="true" aria-labelledby="transfer-entry-title" onClick=${(event) => event.stopPropagation()}><header><div><strong id="transfer-entry-title">${transferMode === 'copy' ? '复制' : '移动'}“${movingItem.name}”</strong><span>选择${transferMode === 'copy' ? '目标名称和' : ''}目标文件夹</span></div><button type="button" class="icon-button" onClick=${() => setMovingItem(null)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header>${transferMode === 'copy' && html`<label class="copy-name">副本名称<input value=${copyName} onInput=${(event) => setCopyName(event.currentTarget.value)} maxlength="255" required/></label>`}<nav class="destination-trail" aria-label="目标位置">${destinationTrail.map((item, index) => html`<span key=${item.id || index}>${index > 0 && html`<${Icon} name="chevron" size=${14}/>`}<button onClick=${() => item.id && loadDestination(item.id)}>${item.label}</button></span>`)}</nav><div class="destination-list">${destinationLoading ? html`<p>正在读取文件夹…</p>` : destinationFolders.length ? destinationFolders.map((folder) => html`<button key=${folder.id} onClick=${() => loadDestination(folder.id)}><span class="folder"><${Icon} name="folder" size=${18}/></span>${folder.name}<${Icon} name="chevron" size=${15}/></button>`) : html`<p>这里没有子文件夹</p>`}</div>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}<footer><button type="button" onClick=${() => setMovingItem(null)}>取消</button><button class="primary" onClick=${confirmTransfer} disabled=${actionSaving || destinationLoading || !destination || !copyName.trim() || (transferMode === 'move' && destination.id === movingItem.parentId) || (transferMode === 'copy' && destination.id === movingItem.parentId && copyName.trim() === movingItem.name)}>${actionSaving ? (transferMode === 'copy' ? '正在复制…' : '正在移动…') : transferMode === 'move' && destination?.id === movingItem.parentId ? '已在此位置' : transferMode === 'copy' ? '复制到这里' : '移动到这里'}</button></footer></section></div>`}
