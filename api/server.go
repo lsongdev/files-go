@@ -268,6 +268,7 @@ func (s *Server) continueWatching(w http.ResponseWriter, r *http.Request) {
 func (s *Server) mediaPoster(w http.ResponseWriter, r *http.Request) {
 	artifact, err := s.catalog.ArtifactForMedia(r.Context(), r.PathValue("id"), "poster", "w500")
 	if errors.Is(err, catalog.ErrNotFound) {
+		s.reprocessMedia(r.Context(), r.PathValue("id"))
 		w.Header().Set("Retry-After", "2")
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusNoContent)
@@ -289,7 +290,10 @@ func (s *Server) mediaPoster(w http.ResponseWriter, r *http.Request) {
 	}
 	file, err := os.Open(filename)
 	if errors.Is(err, os.ErrNotExist) {
-		writeError(w, http.StatusNotFound, "poster_not_ready", "poster cache is not available")
+		s.reprocessMedia(r.Context(), r.PathValue("id"))
+		w.Header().Set("Retry-After", "2")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if err != nil {
@@ -307,6 +311,20 @@ func (s *Server) mediaPoster(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("ETag", `"`+parts[0]+`"`)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, artifact.ID+"."+parts[1], info.ModTime(), file)
+}
+
+func (s *Server) reprocessMedia(ctx context.Context, mediaID string) {
+	item, err := s.catalog.MediaItem(ctx, mediaID)
+	if err != nil {
+		return
+	}
+	for _, file := range item.Files {
+		entry, err := s.catalog.Entry(ctx, file.EntryID)
+		if err == nil && entry.Available {
+			s.reprocess(*entry)
+			return
+		}
+	}
 }
 
 func (s *Server) listMediaItems(w http.ResponseWriter, r *http.Request) {
