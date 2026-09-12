@@ -649,8 +649,14 @@ function App() {
   };
 
   const openMatchDialog = () => {
+    let query = entryMedia?.title || '';
+    if (entryMedia?.type === 'episode') {
+      const parents = trail.slice(0, -1).map((item) => item.label).reverse();
+      const series = parents.find((label) => !/^(?:s(?:eason)?[ ._-]*\d{1,2}|第[一二三四五六七八九十百0-9]+季)$/i.test(label));
+      if (series && series !== activeLibrary?.name) query = series.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
+    }
     setMatchOpen(true);
-    setMatchQuery(entryMedia?.title || '');
+    setMatchQuery(query);
     setMatchCandidates([]);
     setMatchError('');
     loadMediaCandidates('');
