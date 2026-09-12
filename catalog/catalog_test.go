@@ -344,6 +344,49 @@ func TestEntriesMissingAudioArtworkOnlyReturnsTaggedAudioWithoutThumbnail(t *tes
 	}
 }
 
+func TestEntriesNeedingEpisodeMetadataSkipsTMDBAndLockedEpisodes(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.RegisterLibrary(ctx, model.Library{ID: "tv", Name: "TV", Type: "tv", Sources: []model.LibrarySource{{StorageID: "disk", Path: "TV"}}}); err != nil {
+		t.Fatal(err)
+	}
+	generation, _ := cat.BeginScan(ctx, "disk")
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{
+		{StorageID: "disk", Name: "Show.S01E01.mkv", Path: "TV/Show.S01E01.mkv", Type: model.EntryFile},
+		{StorageID: "disk", Name: "Show.S01E02.mkv", Path: "TV/Show.S01E02.mkv", Type: model.EntryFile},
+		{StorageID: "disk", Name: "Show.S01E03.mkv", Path: "TV/Show.S01E03.mkv", Type: model.EntryFile},
+	}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := []model.MediaItem{
+		{Type: "episode", Title: "Episode 1", MatchSource: "filename"},
+		{Type: "episode", Title: "Episode 2", MatchSource: "tmdb"},
+		{Type: "episode", Title: "Episode 3", MatchSource: "filename", MatchLocked: true},
+	}
+	for index := range items {
+		item, err := cat.UpsertMediaItem(ctx, items[index])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cat.AssociateMediaFile(ctx, item.ID, entries[index].ID, "video"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	missing, err := cat.EntriesNeedingEpisodeMetadata(ctx, "", 100)
+	if err != nil || len(missing) != 1 || missing[0].ID != entries[0].ID {
+		t.Fatalf("episode metadata backfill = %#v, %v", missing, err)
+	}
+}
+
 func TestDirectoryMediaContextRequiresOneCoherentIdentity(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(ctx, t.TempDir())

@@ -211,10 +211,27 @@ func (m *Matcher) matchEpisode(ctx context.Context, entry model.Entry, parsed Pa
 	if err != nil {
 		return err
 	}
+	episodeTitle := fmt.Sprintf("Episode %d", *parsed.Episode)
+	episodeMetadata := metadata
+	if provider, ok := m.provider.(EpisodeMetadataProvider); ok {
+		if details, fetchErr := provider.FetchEpisode(ctx, candidate.ID, *parsed.Season, *parsed.Episode, m.language); fetchErr == nil {
+			if strings.TrimSpace(details.Title) != "" {
+				episodeTitle = details.Title
+			}
+			if encoded, encodeErr := json.Marshal(details); encodeErr == nil {
+				episodeMetadata = encoded
+			}
+		}
+	}
 	episode, err := m.catalog.MediaChild(ctx, season.ID, "episode", *parsed.Episode)
 	if errors.Is(err, catalog.ErrNotFound) {
-		title := fmt.Sprintf("Episode %d", *parsed.Episode)
-		episode, err = m.catalog.UpsertMediaItem(ctx, model.MediaItem{Type: "episode", Title: title, SortTitle: fmt.Sprintf("%04d", *parsed.Episode), ParentID: season.ID, IndexNumber: parsed.Episode, MatchSource: "filename", MatchConfidence: confidence, Metadata: metadata})
+		episode, err = m.catalog.UpsertMediaItem(ctx, model.MediaItem{Type: "episode", Title: episodeTitle, SortTitle: fmt.Sprintf("%04d", *parsed.Episode), ParentID: season.ID, IndexNumber: parsed.Episode, MatchSource: "tmdb", MatchConfidence: confidence, Metadata: episodeMetadata})
+	} else if err == nil && episode.MatchSource != "tmdb" && episodeTitle != fmt.Sprintf("Episode %d", *parsed.Episode) {
+		episode.Title = episodeTitle
+		episode.MatchSource = "tmdb"
+		episode.MatchConfidence = confidence
+		episode.Metadata = episodeMetadata
+		episode, err = m.catalog.UpsertMediaItem(ctx, *episode)
 	}
 	if err != nil {
 		return err

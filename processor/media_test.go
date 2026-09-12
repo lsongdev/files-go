@@ -221,7 +221,7 @@ func TestAudioArtworkGeneratesCachedVariants(t *testing.T) {
 		t.Fatal(err)
 	}
 	thumbnailer := NewThumbnail(cat, registry, t.TempDir())
-	processor := NewAudioArtwork(cat, registry, thumbnailer, fakeFFmpeg, time.Second)
+	processor := NewAudioArtwork(cat, registry, thumbnailer, fakeFFmpeg, 5*time.Second)
 	if !processor.Match(entry) {
 		t.Fatal("MP3 did not match audio artwork processor")
 	}

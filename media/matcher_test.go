@@ -44,6 +44,9 @@ func (fakeProvider) Fetch(_ context.Context, itemType, id, language string) (Can
 	}
 	return Candidate{ID: id, Type: itemType, Title: map[string]string{"movie": "Interstellar", "tv": "The Last of Us"}[itemType], Year: &year, Overview: language}, nil
 }
+func (fakeProvider) FetchEpisode(_ context.Context, seriesID string, season, episode int, language string) (Candidate, error) {
+	return Candidate{ID: "episode-3", Type: "episode", Title: "Long, Long Time", Overview: language, PosterPath: "/still.jpg"}, nil
+}
 
 func TestMatcherBuildsMovieAndTVHierarchy(t *testing.T) {
 	ctx := context.Background()
@@ -93,7 +96,7 @@ func TestMatcherBuildsMovieAndTVHierarchy(t *testing.T) {
 		t.Fatalf("manual movie=%#v err=%v", manual, err)
 	}
 	episode, err := cat.MediaItemForEntry(ctx, entries[1].ID, "video")
-	if err != nil || episode.Type != "episode" || episode.IndexNumber == nil || *episode.IndexNumber != 3 {
+	if err != nil || episode.Type != "episode" || episode.Title != "Long, Long Time" || episode.MatchSource != "tmdb" || episode.IndexNumber == nil || *episode.IndexNumber != 3 {
 		t.Fatalf("episode=%#v err=%v", episode, err)
 	}
 	season, err := cat.MediaItem(ctx, episode.ParentID)
