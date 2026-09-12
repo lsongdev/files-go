@@ -33,6 +33,9 @@ func NewPoster(catalog *catalog.Catalog, cacheDir string, client *http.Client) *
 }
 func (p *Poster) Name() string { return "poster" }
 func (p *Poster) Match(entry model.Entry) bool {
+	if strings.HasSuffix(strings.ToLower(entry.Name), ".d.ts") {
+		return false
+	}
 	switch strings.ToLower(entry.Extension) {
 	case "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "wmv":
 		return !strings.HasPrefix(entry.Name, "._")

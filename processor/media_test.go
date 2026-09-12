@@ -140,6 +140,21 @@ func TestFFProbeParsesAndProbesAudio(t *testing.T) {
 	}
 }
 
+func TestFFProbeSkipsTypeScriptFilesWithTSExtension(t *testing.T) {
+	cat, registry, entry := mediaFixture(t, "source.ts", []byte("export const answer = 42;\n"))
+	probe := NewFFProbe(cat, registry, "/missing/ffprobe", time.Second)
+	if !probe.Match(entry) {
+		t.Fatal("plain .ts entry should reach content sniffing")
+	}
+	if err := probe.Process(context.Background(), entry); err != nil {
+		t.Fatalf("TypeScript source should be skipped without invoking ffprobe: %v", err)
+	}
+	_, _, declaration := mediaFixture(t, "types.d.ts", []byte("export declare const answer: number;\n"))
+	if probe.Match(declaration) {
+		t.Fatal("TypeScript declaration was classified as media")
+	}
+}
+
 func TestFFProbeNormalizesMusicTags(t *testing.T) {
 	parsed, err := parseFFProbe("entry", []byte(`{
 		"streams":[{"codec_type":"audio","codec_name":"flac","tags":{"artist":"Portishead"}}, {"codec_type":"video","codec_name":"mjpeg","disposition":{"attached_pic":1}}],

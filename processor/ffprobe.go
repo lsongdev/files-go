@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -41,6 +43,9 @@ func (p *FFProbe) Match(entry model.Entry) bool {
 	if isMetadataSidecar(entry) {
 		return false
 	}
+	if strings.HasSuffix(strings.ToLower(entry.Name), ".d.ts") {
+		return false
+	}
 	switch strings.ToLower(entry.Extension) {
 	case "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "flv", "wmv",
 		"mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "wma", "aiff", "ape":
@@ -62,6 +67,15 @@ func (p *FFProbe) Process(ctx context.Context, entry model.Entry) error {
 	filename, err := native.NativePath(ctx, entry.Path)
 	if err != nil {
 		return err
+	}
+	if strings.EqualFold(entry.Extension, "ts") {
+		transportStream, err := looksLikeMPEGTransportStream(filename)
+		if err != nil {
+			return err
+		}
+		if !transportStream {
+			return nil
+		}
 	}
 	processCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
@@ -88,6 +102,26 @@ func (p *FFProbe) Process(ctx context.Context, entry model.Entry) error {
 		return err
 	}
 	return p.catalog.UpsertMediaFile(ctx, media)
+}
+
+func looksLikeMPEGTransportStream(filename string) (bool, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	buffer := make([]byte, 4096)
+	read, err := file.Read(buffer)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	buffer = buffer[:read]
+	for offset := 0; offset < 188 && offset+376 < len(buffer); offset++ {
+		if buffer[offset] == 0x47 && buffer[offset+188] == 0x47 && buffer[offset+376] == 0x47 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 type ffprobeStream struct {

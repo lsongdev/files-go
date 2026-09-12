@@ -23,10 +23,75 @@ import (
 	"github.com/lsongdev/files-go/database"
 	"github.com/lsongdev/files-go/indexer"
 	"github.com/lsongdev/files-go/jobs"
+	mediaengine "github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/model"
 	"github.com/lsongdev/files-go/processor"
 	"github.com/lsongdev/files-go/storage"
 )
+
+type apiMetadataProvider struct{}
+
+func (apiMetadataProvider) Search(_ context.Context, query mediaengine.Query) ([]mediaengine.Candidate, error) {
+	year := 2014
+	return []mediaengine.Candidate{{ID: "157336", Type: query.Type, Title: "Interstellar", Year: &year}}, nil
+}
+
+func (apiMetadataProvider) Fetch(_ context.Context, itemType, id, _ string) (mediaengine.Candidate, error) {
+	year := 2014
+	return mediaengine.Candidate{ID: id, Type: itemType, Title: "Interstellar", Year: &year}, nil
+}
+
+func TestManualMediaCandidateAPI(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.RegisterLibrary(ctx, model.Library{ID: "movies", Name: "Movies", Type: "movies", Sources: []model.LibrarySource{{StorageID: "disk", Path: "Movies"}}}); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := cat.BeginScan(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{{StorageID: "disk", Name: "Interstellar.2014.mkv", Path: "Movies/Interstellar.2014.mkv", Type: model.EntryFile, Extension: "mkv"}}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := storage.NewRegistry()
+	server := New(ctx, cat, registry, indexer.New(cat, registry), log.Default(), t.TempDir())
+	server.SetMediaMatcher(mediaengine.NewMatcher(cat, apiMetadataProvider{}, "en-US"))
+
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+entries[0].ID+"/media-candidates?q=Interstellar", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"157336"`) {
+		t.Fatalf("candidates = %d %s", response.Code, response.Body.String())
+	}
+	payload := strings.NewReader(`{"candidateId":"157336","candidateType":"movie"}`)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/entries/"+entries[0].ID+"/media-item", payload))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"matchLocked":true`) {
+		t.Fatalf("manual match = %d %s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/search?q=Interstellar", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"media":{"id":`) || !strings.Contains(response.Body.String(), `"title":"Interstellar"`) {
+		t.Fatalf("entry media summary = %d %s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/entries/"+entries[0].ID+"/media-item", nil))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("unmatch = %d %s", response.Code, response.Body.String())
+	}
+	if suppressed, err := cat.MediaMatchSuppressed(ctx, entries[0].ID); err != nil || !suppressed {
+		t.Fatalf("suppression = %v, %v", suppressed, err)
+	}
+}
 
 func TestSystemStatusReportsProcessingQueue(t *testing.T) {
 	ctx := context.Background()

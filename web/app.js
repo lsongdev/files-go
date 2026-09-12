@@ -92,6 +92,7 @@ const textExtensions = new Set(['txt', 'md', 'nfo', 'srt', 'vtt', 'json', 'yaml'
 function previewKind(item) {
   const mime = item.mime || '';
   const extension = (item.extension || '').toLowerCase();
+  if (extension === 'ts' && (item.name.toLowerCase().endsWith('.d.ts') || item.size < 1024 * 1024)) return 'text';
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('audio/')) return 'audio';
   if (mime.startsWith('video/')) return 'video';
@@ -146,19 +147,41 @@ function durationLabel(durationMS) {
   return minutes >= 60 ? `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟` : `${minutes} 分钟`;
 }
 
+function MediaPoster({ media }) {
+  const metadata = mediaMetadata(media);
+  const hasPoster = Boolean(metadata.posterPath);
+  const [attempt, setAttempt] = useState(0);
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const retryTimer = useRef(null);
+  useEffect(() => () => window.clearTimeout(retryTimer.current), []);
+  const retry = () => {
+    if (attempt >= 4) {
+      setFailed(true);
+      return;
+    }
+    window.clearTimeout(retryTimer.current);
+    retryTimer.current = window.setTimeout(() => setAttempt((value) => value + 1), 2000);
+  };
+  const missing = !hasPoster || failed;
+  return html`<div class=${`media-poster ${missing ? 'missing' : ''} ${hasPoster && !ready && !failed ? 'pending' : ''}`}>
+    ${hasPoster && !failed && html`<img src=${`${API}/media/${encodeURIComponent(media.id)}/poster?v=${attempt}`} alt="" onLoad=${() => setReady(true)} onError=${retry}/>`}
+    <span><${Icon} name=${media.type === 'album' || media.type === 'track' ? 'music' : 'movies'} size=${32}/></span>
+  </div>`;
+}
+
 function MediaHeader({ item, media, technical, actions }) {
   if (!media) return null;
   const metadata = mediaMetadata(media);
-  const hasPoster = Boolean(metadata.posterPath);
   const details = [mediaTypeLabel(media.type), media.year, metadata.voteAverage ? `TMDB ${metadata.voteAverage.toFixed(1)}` : '', durationLabel(technical?.durationMs)].filter(Boolean);
   return html`<section class="media-header">
-    <div class=${`media-poster ${hasPoster ? '' : 'missing'}`}>${hasPoster && html`<img src=${`${API}/media/${encodeURIComponent(media.id)}/poster`} alt="" onError=${(event) => event.currentTarget.parentElement.classList.add('missing')}/>`}<span><${Icon} name=${media.type === 'album' || media.type === 'track' ? 'music' : 'movies'} size=${32}/></span></div>
+    <${MediaPoster} key=${media.id} media=${media}/>
     <div class="media-copy"><p>${details.join(' · ')}</p><h1>${media.title || item.name}</h1>${metadata.originalTitle && metadata.originalTitle !== media.title && html`<small>${metadata.originalTitle}</small>`}${metadata.overview && html`<div class="media-overview">${metadata.overview}</div>`}<div class="media-match">${media.matchSource === 'tmdb' ? 'TMDB 已匹配' : media.matchSource === 'embedded' ? '来自文件标签' : '根据文件名识别'}${media.matchConfidence ? ` · ${Math.round(media.matchConfidence * 100)}%` : ''}</div></div>
     ${actions && html`<div class="media-actions">${actions}</div>`}
   </section>`;
 }
 
-function FileDetail({ item, media, technical, text, loading, error, playbackURL, startPositionMS, onPlay, onPlaybackProgress, onManage }) {
+function FileDetail({ item, media, technical, text, loading, error, playbackURL, startPositionMS, onPlay, onPlaybackProgress, onManage, onMatch }) {
   if (!item) return null;
   const kind = previewKind(item);
   const contentURL = item.links.content;
@@ -169,7 +192,7 @@ function FileDetail({ item, media, technical, text, loading, error, playbackURL,
     technical?.videoCodec && ['视频编码', technical.videoCodec.toUpperCase()], technical?.audioCodec && ['音频编码', technical.audioCodec.toUpperCase()],
     durationLabel(technical?.durationMs) && ['时长', durationLabel(technical.durationMs)], metadata.music?.artist && ['艺人', metadata.music.artist], metadata.music?.album && ['专辑', metadata.music.album],
   ].filter(Boolean);
-  const actions = html`<a class="detail-button primary" href=${contentURL} download=${item.name}><${Icon} name="download" size=${17}/>下载</a><button class="detail-button" onClick=${onManage}><${Icon} name="more" size=${17}/>管理</button>`;
+  const actions = html`${kind === 'video' && html`<button class="detail-button" onClick=${onMatch}><${Icon} name="refresh" size=${17}/>${media ? '纠正匹配' : '识别媒体'}</button>`}<a class="detail-button primary" href=${contentURL} download=${item.name}><${Icon} name="download" size=${17}/>下载</a><button class="detail-button" onClick=${onManage}><${Icon} name="more" size=${17}/>管理</button>`;
   return html`<article class="file-detail">
     ${media ? html`<${MediaHeader} item=${item} media=${media} technical=${technical} actions=${actions}/>` : html`<header class="plain-detail-head"><div><p>${item.extension?.toUpperCase() || 'FILE'}</p><h1>${item.name}</h1><span>${item.mime || '未知文件类型'}</span></div><div class="media-actions">${actions}</div></header>`}
     <div class="detail-layout">
@@ -179,6 +202,16 @@ function FileDetail({ item, media, technical, text, loading, error, playbackURL,
       <aside class="detail-facts"><h2>文件信息</h2>${facts.map(([label, value]) => html`<div key=${label}><span>${label}</span><strong>${value}</strong></div>`)}</aside>
     </div>
   </article>`;
+}
+
+function MatchDialog({ item, media, query, setQuery, candidates, loading, saving, error, onSearch, onSelect, onUnmatch, onClose }) {
+  return html`<div class="preview-scrim" onClick=${() => !saving && onClose()}><section class="action-dialog match-dialog" role="dialog" aria-modal="true" aria-labelledby="match-title" onClick=${(event) => event.stopPropagation()}>
+    <header><div><strong id="match-title">识别媒体</strong><span>${item?.name}</span></div><button type="button" class="icon-button" onClick=${onClose} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header>
+    <form class="match-search" onSubmit=${onSearch}><label>电影或电视剧名称<input value=${query} onInput=${(event) => setQuery(event.currentTarget.value)} maxlength="200" required/></label><button class="primary" disabled=${loading || saving}>${loading ? '正在搜索…' : '搜索'}</button></form>
+    ${error && html`<p class="action-error" role="alert">${error}</p>`}
+    <div class="candidate-list" aria-live="polite">${!loading && candidates.length === 0 ? html`<p>输入名称搜索 TMDB；选择结果后会锁定该匹配。</p>` : candidates.map((candidate) => html`<button key=${`${candidate.type}:${candidate.id}`} disabled=${saving} onClick=${() => onSelect(candidate)}><span><strong>${candidate.title}</strong><small>${[candidate.originalTitle && candidate.originalTitle !== candidate.title ? candidate.originalTitle : '', candidate.year, candidate.type === 'tv' ? '电视剧' : '电影'].filter(Boolean).join(' · ')}</small>${candidate.overview && html`<em>${candidate.overview}</em>`}</span><b>${saving ? '保存中…' : '选择'}</b></button>`)}</div>
+    ${media && html`<footer class="match-footer"><button class="danger" disabled=${saving} onClick=${onUnmatch}>移除当前匹配</button><span>之后不会自动重新识别，仍可随时在这里恢复。</span></footer>`}
+  </section></div>`;
 }
 
 function routeEntryID() {
@@ -235,6 +268,12 @@ function App() {
   const [destinationTrail, setDestinationTrail] = useState([]);
   const [destinationFolders, setDestinationFolders] = useState([]);
   const [destinationLoading, setDestinationLoading] = useState(false);
+  const [matchOpen, setMatchOpen] = useState(false);
+  const [matchQuery, setMatchQuery] = useState('');
+  const [matchCandidates, setMatchCandidates] = useState([]);
+  const [matchLoading, setMatchLoading] = useState(false);
+  const [matchSaving, setMatchSaving] = useState(false);
+  const [matchError, setMatchError] = useState('');
   const loadMoreSentinelRef = useRef(null);
   const loadingMoreRef = useRef(false);
   const playbackSessionRef = useRef(null);
@@ -250,13 +289,14 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
-    if (!createFolderOpen && !manageItem && !movingItem) return undefined;
+    if (!createFolderOpen && !manageItem && !movingItem && !matchOpen) return undefined;
     const frame = window.requestAnimationFrame(() => document.querySelector('.action-dialog input, .action-dialog button')?.focus());
     const close = (event) => {
-      if (event.key !== 'Escape' || actionSaving) return;
+      if (event.key !== 'Escape' || actionSaving || matchSaving) return;
       setCreateFolderOpen(false);
       setManageItem(null);
       setMovingItem(null);
+      setMatchOpen(false);
     };
     document.body.classList.add('preview-open');
     window.addEventListener('keydown', close);
@@ -265,7 +305,7 @@ function App() {
       document.body.classList.remove('preview-open');
       window.removeEventListener('keydown', close);
     };
-  }, [createFolderOpen, manageItem, movingItem, actionSaving]);
+  }, [createFolderOpen, manageItem, movingItem, matchOpen, actionSaving, matchSaving]);
 
   const loadNavigation = useCallback(async () => {
     const [libraryData, storageData] = await Promise.all([request(`${API}/libraries`), request(`${API}/storages`)]);
@@ -545,6 +585,70 @@ function App() {
     }).catch(() => {});
   };
 
+  const loadMediaCandidates = async (value = matchQuery) => {
+    if (!entry) return;
+    setMatchLoading(true);
+    setMatchError('');
+    try {
+      const parameters = new URLSearchParams();
+      if (value.trim()) parameters.set('q', value.trim());
+      const data = await request(`${API}/entries/${encodeURIComponent(entry.id)}/media-candidates?${parameters}`);
+      setMatchCandidates(data.items || []);
+      if (!(data.items || []).length) setMatchError('没有找到候选结果，请尝试更简短或更准确的名称。');
+    } catch (reason) {
+      setMatchCandidates([]);
+      setMatchError(reason.message || '无法搜索媒体信息');
+    } finally {
+      setMatchLoading(false);
+    }
+  };
+
+  const openMatchDialog = () => {
+    setMatchOpen(true);
+    setMatchQuery(entryMedia?.title || '');
+    setMatchCandidates([]);
+    setMatchError('');
+    loadMediaCandidates('');
+  };
+
+  const searchMediaCandidates = (event) => {
+    event.preventDefault();
+    loadMediaCandidates(matchQuery);
+  };
+
+  const selectMediaCandidate = async (candidate) => {
+    if (!entry) return;
+    setMatchSaving(true);
+    setMatchError('');
+    try {
+      const media = await request(`${API}/entries/${encodeURIComponent(entry.id)}/media-item`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ candidateId: candidate.id, candidateType: candidate.type }),
+      });
+      setEntryMedia(media);
+      setMatchOpen(false);
+    } catch (reason) {
+      setMatchError(reason.message || '无法保存媒体匹配');
+    } finally {
+      setMatchSaving(false);
+    }
+  };
+
+  const unmatchMedia = async () => {
+    if (!entry || !window.confirm('移除这个文件的媒体匹配？之后不会自动重新识别。')) return;
+    setMatchSaving(true);
+    setMatchError('');
+    try {
+      await request(`${API}/entries/${encodeURIComponent(entry.id)}/media-item`, { method: 'DELETE' });
+      setEntryMedia(null);
+      setMatchOpen(false);
+    } catch (reason) {
+      setMatchError(reason.message || '无法移除媒体匹配');
+    } finally {
+      setMatchSaving(false);
+    }
+  };
+
   const createFolder = async (event) => {
     event.preventDefault();
     if (!entry || !folderName.trim()) return;
@@ -783,12 +887,12 @@ function App() {
       ${error && html`<div class="error-banner" role="alert"><span>${error}</span><button onClick=${refresh}>重试</button></div>`}
 
       <section class="browser" aria-live="polite">
-        ${loading ? html`<${Skeleton}/>` : entry?.type === 'file' && !searchTerm ? html`<${FileDetail} item=${entry} media=${entryMedia} technical=${technicalMedia} text=${detailText} loading=${detailLoading} error=${detailError} playbackURL=${playbackURL} startPositionMS=${startPositionMS} onPlay=${startDetailPlayback} onPlaybackProgress=${updatePlaybackProgress} onManage=${() => openManage(entry)}/>` : items.length === 0 ? html`<${EmptyState} searchTerm=${searchTerm}/>` : view === 'list' ? html`
+        ${loading ? html`<${Skeleton}/>` : entry?.type === 'file' && !searchTerm ? html`<${FileDetail} item=${entry} media=${entryMedia} technical=${technicalMedia} text=${detailText} loading=${detailLoading} error=${detailError} playbackURL=${playbackURL} startPositionMS=${startPositionMS} onPlay=${startDetailPlayback} onPlaybackProgress=${updatePlaybackProgress} onManage=${() => openManage(entry)} onMatch=${openMatchDialog}/>` : items.length === 0 ? html`<${EmptyState} searchTerm=${searchTerm}/>` : view === 'list' ? html`
           <div class="file-table" role="table" aria-label="文件">
             <div class="table-head" role="row"><span>名称</span><span>大小</span><span>修改时间</span><span></span></div>
             ${items.map((item) => html`<div key=${item.id} class="file-row" role="row">
               <button class="file-main" onClick=${() => openEntry(item.id)}>
-                <span class="name-cell" role="cell"><i class=${item.type === 'directory' ? 'folder' : 'document'}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${20}/></i><span><strong>${item.name}</strong><small>${item.type === 'directory' ? '文件夹' : (item.extension?.toUpperCase() || '文件')}</small></span>${!item.available && html`<em>不可用</em>`}</span>
+                <span class="name-cell" role="cell"><i class=${item.type === 'directory' ? 'folder' : 'document'}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${20}/></i><span><strong>${item.name}</strong><small>${item.type === 'directory' ? '文件夹' : item.media ? `${mediaTypeLabel(item.media.type)} · ${item.media.title}${item.media.year ? ` (${item.media.year})` : ''}` : (item.extension?.toUpperCase() || '文件')}</small></span>${!item.available && html`<em>不可用</em>`}</span>
                 <span class="size-cell" role="cell">${item.type === 'directory' ? '—' : formatSize(item.size)}</span>
                 <span class="date-cell" role="cell">${formatDate(item.modifiedAt)}</span>
               </button>
@@ -799,7 +903,7 @@ function App() {
             ${items.map((item) => html`<article key=${item.id} class="file-card">
               <button class="card-main" onClick=${() => openEntry(item.id)}>
                 ${item.links.thumbnail ? html`<span class="card-thumbnail"><img src=${item.links.thumbnail} alt="" loading="lazy" onError=${(event) => event.currentTarget.parentElement.classList.add('failed')}/><i><${Icon} name="file" size=${30}/></i></span>` : html`<span class=${`card-icon ${item.type}`}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${30}/></span>`}
-                <strong title=${item.name}>${item.name}</strong><small>${item.type === 'directory' ? '文件夹' : formatSize(item.size)}</small>${!item.available && html`<em>不可用</em>`}
+                <strong title=${item.name}>${item.name}</strong><small>${item.type === 'directory' ? '文件夹' : item.media ? `${mediaTypeLabel(item.media.type)} · ${item.media.title}` : formatSize(item.size)}</small>${!item.available && html`<em>不可用</em>`}
               </button>
               <button class="card-action" onClick=${() => openManage(item)} aria-label=${`管理 ${item.name}`}><${Icon} name="more" size=${18}/></button>
             </article>`)}
@@ -807,6 +911,7 @@ function App() {
         ${cursor && html`<div class="load-more" ref=${loadMoreSentinelRef}><button onClick=${loadMore} disabled=${moreLoading}><${Icon} name="more"/>${moreLoading ? '正在加载…' : '加载更多'}</button></div>`}
       </section>
     </main>
+    ${matchOpen && html`<${MatchDialog} item=${entry} media=${entryMedia} query=${matchQuery} setQuery=${setMatchQuery} candidates=${matchCandidates} loading=${matchLoading} saving=${matchSaving} error=${matchError} onSearch=${searchMediaCandidates} onSelect=${selectMediaCandidate} onUnmatch=${unmatchMedia} onClose=${() => setMatchOpen(false)}/>`}
     ${createFolderOpen && html`<div class="preview-scrim" onClick=${() => !actionSaving && setCreateFolderOpen(false)}><form class="action-dialog" role="dialog" aria-modal="true" aria-labelledby="create-folder-title" onSubmit=${createFolder} onClick=${(event) => event.stopPropagation()}><header><div><strong id="create-folder-title">新建文件夹</strong><span>在 ${entry?.name || activeLibrary?.name || '当前目录'} 中创建</span></div><button type="button" class="icon-button" onClick=${() => setCreateFolderOpen(false)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header><label>名称<input value=${folderName} onInput=${(event) => setFolderName(event.currentTarget.value)} maxlength="255" required/></label>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}<footer><button type="button" onClick=${() => setCreateFolderOpen(false)}>取消</button><button class="primary" disabled=${actionSaving}>${actionSaving ? '正在创建…' : '创建'}</button></footer></form></div>`}
     ${manageItem && html`<div class="preview-scrim" onClick=${() => !actionSaving && setManageItem(null)}><form class="action-dialog" role="dialog" aria-modal="true" aria-labelledby="manage-entry-title" onSubmit=${renameEntry} onClick=${(event) => event.stopPropagation()}><header><div><strong id="manage-entry-title">管理条目</strong><span>${manageItem.type === 'directory' ? '文件夹' : formatSize(manageItem.size)}</span></div><button type="button" class="icon-button" onClick=${() => setManageItem(null)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header><label>名称<input value=${renameValue} onInput=${(event) => { setRenameValue(event.currentTarget.value); setDeleteArmed(false); }} maxlength="255" required/></label>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}${deleteArmed && html`<p class="delete-warning" role="alert">此操作无法撤销。再次点击删除以确认。</p>`}<footer class="manage-footer"><button type="button" class="danger" onClick=${() => deleteArmed ? deleteManagedEntry() : setDeleteArmed(true)} disabled=${actionSaving}><${Icon} name="trash" size=${16}/>${deleteArmed ? '确认删除' : '删除'}</button><button type="button" onClick=${() => openTransfer('copy')}><${Icon} name="copy" size=${16}/>复制</button><button type="button" onClick=${() => openTransfer('move')}><${Icon} name="move" size=${16}/>移动</button><span></span><button type="button" onClick=${() => setManageItem(null)}>取消</button><button class="primary" disabled=${actionSaving || renameValue.trim() === manageItem.name}>${actionSaving ? '正在保存…' : '重命名'}</button></footer></form></div>`}
     ${movingItem && html`<div class="preview-scrim" onClick=${() => !actionSaving && setMovingItem(null)}><section class=${`action-dialog destination-dialog ${transferMode}`} role="dialog" aria-modal="true" aria-labelledby="transfer-entry-title" onClick=${(event) => event.stopPropagation()}><header><div><strong id="transfer-entry-title">${transferMode === 'copy' ? '复制' : '移动'}“${movingItem.name}”</strong><span>选择${transferMode === 'copy' ? '目标名称和' : ''}目标文件夹</span></div><button type="button" class="icon-button" onClick=${() => setMovingItem(null)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header>${transferMode === 'copy' && html`<label class="copy-name">副本名称<input value=${copyName} onInput=${(event) => setCopyName(event.currentTarget.value)} maxlength="255" required/></label>`}<nav class="destination-trail" aria-label="目标位置">${destinationTrail.map((item, index) => html`<span key=${item.id || index}>${index > 0 && html`<${Icon} name="chevron" size=${14}/>`}<button onClick=${() => item.id && loadDestination(item.id)}>${item.label}</button></span>`)}</nav><div class="destination-list">${destinationLoading ? html`<p>正在读取文件夹…</p>` : destinationFolders.length ? destinationFolders.map((folder) => html`<button key=${folder.id} onClick=${() => loadDestination(folder.id)}><span class="folder"><${Icon} name="folder" size=${18}/></span>${folder.name}<${Icon} name="chevron" size=${15}/></button>`) : html`<p>这里没有子文件夹</p>`}</div>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}<footer><button type="button" onClick=${() => setMovingItem(null)}>取消</button><button class="primary" onClick=${confirmTransfer} disabled=${actionSaving || destinationLoading || !destination || !copyName.trim() || (transferMode === 'move' && destination.id === movingItem.parentId) || (transferMode === 'copy' && destination.id === movingItem.parentId && copyName.trim() === movingItem.name)}>${actionSaving ? (transferMode === 'copy' ? '正在复制…' : '正在移动…') : transferMode === 'move' && destination?.id === movingItem.parentId ? '已在此位置' : transferMode === 'copy' ? '复制到这里' : '移动到这里'}</button></footer></section></div>`}

@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/lsongdev/files-go/catalog"
@@ -83,6 +84,14 @@ func TestMatcherBuildsMovieAndTVHierarchy(t *testing.T) {
 	if err != nil || movie.Type != "movie" || movie.ExternalID != "tmdb:157336" {
 		t.Fatalf("movie=%#v err=%v", movie, err)
 	}
+	candidates, err := matcher.Candidates(ctx, entries[0], "Corrected title")
+	if err != nil || len(candidates) != 1 || candidates[0].Title != "Corrected title" {
+		t.Fatalf("manual candidates=%#v err=%v", candidates, err)
+	}
+	manual, err := matcher.MatchCandidate(ctx, entries[0], "movie", "999")
+	if err != nil || manual.ExternalID != "tmdb:999" || !manual.MatchLocked {
+		t.Fatalf("manual movie=%#v err=%v", manual, err)
+	}
 	episode, err := cat.MediaItemForEntry(ctx, entries[1].ID, "video")
 	if err != nil || episode.Type != "episode" || episode.IndexNumber == nil || *episode.IndexNumber != 3 {
 		t.Fatalf("episode=%#v err=%v", episode, err)
@@ -94,5 +103,24 @@ func TestMatcherBuildsMovieAndTVHierarchy(t *testing.T) {
 	series, err := cat.MediaItem(ctx, season.ParentID)
 	if err != nil || series.Type != "series" || series.ExternalID != "tmdb:100" {
 		t.Fatalf("series=%#v err=%v", series, err)
+	}
+	if err := cat.UnmatchEntry(ctx, entries[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SetMediaMatchSuppressed(ctx, entries[0].ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := matcher.Process(ctx, entries[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.MediaItemForEntry(ctx, entries[0].ID, "video"); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("suppressed entry was rematched: %v", err)
+	}
+	manual, err = matcher.MatchCandidate(ctx, entries[0], "movie", "999")
+	if err != nil || !manual.MatchLocked {
+		t.Fatalf("manual rematch after suppression=%#v err=%v", manual, err)
+	}
+	if suppressed, err := cat.MediaMatchSuppressed(ctx, entries[0].ID); err != nil || suppressed {
+		t.Fatalf("suppression after manual match=%v err=%v", suppressed, err)
 	}
 }
