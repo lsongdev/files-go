@@ -187,6 +187,11 @@ func leadingNumber(value string) *int {
 }
 
 func (p *Cataloger) catalogVideo(ctx context.Context, entry model.Entry, technical model.MediaFile) error {
+	if _, err := p.catalog.MediaItemForEntry(ctx, entry.ID, "video"); err == nil {
+		return nil
+	} else if !errors.Is(err, catalog.ErrNotFound) {
+		return err
+	}
 	libraryTypes, err := p.catalog.LibraryTypesForEntry(ctx, entry)
 	if err != nil {
 		return err

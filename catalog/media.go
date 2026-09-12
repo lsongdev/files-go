@@ -177,11 +177,13 @@ func (c *Catalog) MediaItemForEntry(ctx context.Context, entryID, role string) (
 	order := `CASE mf.role WHEN 'video' THEN 0 WHEN 'audio' THEN 1
 		WHEN 'photo' THEN 2 WHEN 'book' THEN 3 WHEN 'album' THEN 4
 		WHEN 'artist' THEN 5 WHEN 'season' THEN 6 WHEN 'series' THEN 7 ELSE 8 END,
+		m.match_locked DESC, CASE m.match_source WHEN 'tmdb' THEN 0 WHEN 'manual' THEN 1 ELSE 2 END,
 		mf.created_at DESC, m.id`
 	if role != "" {
 		where += " AND mf.role=?"
 		args = append(args, role)
-		order = "mf.created_at DESC, m.id"
+		order = `m.match_locked DESC, CASE m.match_source WHEN 'tmdb' THEN 0 WHEN 'manual' THEN 1 ELSE 2 END,
+			mf.created_at DESC, m.id`
 	}
 	item, err := scanMediaItem(c.reader.QueryRowContext(ctx, `SELECT m.id, m.type, m.title, m.sort_title,
 		m.year, m.parent_id, m.index_number, m.external_id, m.match_source, m.match_confidence,
@@ -210,6 +212,7 @@ func (c *Catalog) MediaSummariesForEntries(ctx context.Context, entryIDs []strin
 		ORDER BY mf.entry_id, CASE mf.role WHEN 'video' THEN 0 WHEN 'audio' THEN 1
 			WHEN 'photo' THEN 2 WHEN 'book' THEN 3 WHEN 'album' THEN 4
 			WHEN 'artist' THEN 5 WHEN 'season' THEN 6 WHEN 'series' THEN 7 ELSE 8 END,
+			m.match_locked DESC, CASE m.match_source WHEN 'tmdb' THEN 0 WHEN 'manual' THEN 1 ELSE 2 END,
 			mf.created_at DESC, m.id`, args...)
 	if err != nil {
 		return nil, err

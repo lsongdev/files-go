@@ -136,3 +136,41 @@ func TestCatalogerBuildsArtistAlbumTrackHierarchy(t *testing.T) {
 		t.Fatalf("missing album association after cataloging = %#v, %v", missing, err)
 	}
 }
+
+func TestCatalogerDoesNotAddFallbackBesideExistingManualVideoMatch(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.RegisterLibrary(ctx, model.Library{ID: "tv", Name: "TV", Type: "tv", Sources: []model.LibrarySource{{StorageID: "disk", Path: "TV"}}}); err != nil {
+		t.Fatal(err)
+	}
+	generation, _ := cat.BeginScan(ctx, "disk")
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{{StorageID: "disk", Name: "Show.S01E01.mkv", Path: "TV/Show.S01E01.mkv", Type: model.EntryFile, Extension: "mkv"}}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.UpsertMediaFile(ctx, model.MediaFile{EntryID: entries[0].ID, Kind: "video"}); err != nil {
+		t.Fatal(err)
+	}
+	manual, err := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "episode", Title: "Pilot", MatchSource: "tmdb", MatchLocked: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.AssociateMediaFile(ctx, manual.ID, entries[0].ID, "video"); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCataloger(cat).Process(ctx, entries[0]); err != nil {
+		t.Fatal(err)
+	}
+	found, err := cat.MediaItemForEntry(ctx, entries[0].ID, "video")
+	if err != nil || found.ID != manual.ID {
+		t.Fatalf("manual video match replaced by fallback: %#v, %v", found, err)
+	}
+}
