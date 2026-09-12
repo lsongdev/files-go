@@ -277,6 +277,44 @@ func TestPDFInfoMetadata(t *testing.T) {
 	}
 }
 
+func TestPDFThumbnailGeneratesCachedVariants(t *testing.T) {
+	ctx := context.Background()
+	cat, registry, entry := mediaFixture(t, "book.pdf", []byte("PDF fixture"))
+	if err := cat.UpsertMediaFile(ctx, model.MediaFile{EntryID: entry.ID, Kind: "book", Container: "pdf", Metadata: json.RawMessage(`{"pageCount":1}`)}); err != nil {
+		t.Fatal(err)
+	}
+	frame := image.NewRGBA(image.Rect(0, 0, 240, 320))
+	frame.Set(20, 20, color.RGBA{R: 240, G: 210, B: 80, A: 255})
+	fixtureDir := t.TempDir()
+	framePath := filepath.Join(fixtureDir, "page.jpg")
+	frameFile, err := os.Create(framePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(frameFile, frame); err != nil {
+		t.Fatal(err)
+	}
+	if err := frameFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fakePDFToPPM := filepath.Join(fixtureDir, "pdftoppm")
+	script := "#!/bin/sh\nfor last; do :; done\ncp '" + framePath + "' \"$last.jpg\"\n"
+	if err := os.WriteFile(fakePDFToPPM, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	thumbnailer := NewThumbnail(cat, registry, t.TempDir())
+	processor := NewPDFThumbnail(cat, registry, thumbnailer, t.TempDir(), fakePDFToPPM, time.Second)
+	if !processor.Match(entry) {
+		t.Fatal("PDF did not match PDF thumbnail processor")
+	}
+	if err := processor.Process(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.ArtifactForEntry(ctx, entry.ID, "thumbnail", "medium"); err != nil {
+		t.Fatalf("PDF thumbnail: %v", err)
+	}
+}
+
 func writeArchiveFile(t *testing.T, archive *zip.Writer, name, value string) {
 	writeArchiveBytes(t, archive, name, []byte(value))
 }

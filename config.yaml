@@ -8,6 +8,7 @@ processing:
   ffprobe: ffprobe
   ffmpeg: ffmpeg
   pdfinfo: pdfinfo
+  pdftoppm: pdftoppm
 
 media:
   tmdb:

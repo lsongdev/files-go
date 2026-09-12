@@ -79,6 +79,7 @@ func main() {
 		processor.NewPDFMetadata(catalogDB, registry, cfg.Processing.PDFInfo, 30*time.Second),
 		thumbnailer,
 		processor.NewVideoThumbnail(catalogDB, registry, thumbnailer, cfg.Processing.FFmpeg, 60*time.Second),
+		processor.NewPDFThumbnail(catalogDB, registry, thumbnailer, cfg.CacheDir, cfg.Processing.PDFToPPM, 60*time.Second),
 		mediaengine.NewCataloger(catalogDB),
 	}
 	var mediaMatcher *mediaengine.Matcher
