@@ -9,6 +9,9 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"strings"
+	"time"
+
+	"github.com/rwcarlsen/goexif/exif"
 
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/model"
@@ -48,6 +51,32 @@ func (p *ImageMetadata) Process(ctx context.Context, entry model.Entry) error {
 		return err
 	}
 	defer file.Close()
+	metadata := map[string]any{}
+	var takenAt *time.Time
+	var latitude, longitude *float64
+	camera := ""
+	if document, decodeErr := exif.Decode(contextReader{ctx: ctx, reader: file}); decodeErr == nil {
+		if value, dateErr := document.DateTime(); dateErr == nil {
+			value = value.UTC()
+			takenAt = &value
+			metadata["takenAt"] = value.Format(time.RFC3339)
+		}
+		makeName := exifString(document, exif.Make)
+		modelName := exifString(document, exif.Model)
+		camera = strings.TrimSpace(strings.Join(trimNonEmpty([]string{makeName, modelName}), " "))
+		for key, value := range map[string]string{"make": makeName, "model": modelName, "lens": exifString(document, exif.LensModel), "orientation": exifValue(document, exif.Orientation), "iso": exifValue(document, exif.ISOSpeedRatings), "exposureTime": exifValue(document, exif.ExposureTime), "fNumber": exifValue(document, exif.FNumber)} {
+			if value != "" {
+				metadata[key] = value
+			}
+		}
+		if lat, long, gpsErr := document.LatLong(); gpsErr == nil {
+			latitude, longitude = &lat, &long
+			metadata["latitude"], metadata["longitude"] = lat, long
+		}
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		return err
+	}
 	config, format, err := image.DecodeConfig(contextReader{ctx: ctx, reader: file})
 	if err != nil {
 		return err
@@ -55,14 +84,36 @@ func (p *ImageMetadata) Process(ctx context.Context, entry model.Entry) error {
 	if config.Width <= 0 || config.Height <= 0 || config.Width > 100_000 || config.Height > 100_000 {
 		return errors.New("invalid image dimensions")
 	}
-	metadata, err := json.Marshal(map[string]any{"format": format})
+	metadata["format"] = format
+	encoded, err := json.Marshal(metadata)
 	if err != nil {
 		return err
 	}
 	width, height := config.Width, config.Height
 	return p.catalog.UpsertMediaFile(ctx, model.MediaFile{
-		EntryID: entry.ID, Kind: "photo", Width: &width, Height: &height, Metadata: metadata,
+		EntryID: entry.ID, Kind: "photo", Width: &width, Height: &height, TakenAt: takenAt,
+		Camera: camera, Latitude: latitude, Longitude: longitude, Metadata: encoded,
 	})
+}
+
+func exifString(document *exif.Exif, name exif.FieldName) string {
+	tag, err := document.Get(name)
+	if err != nil {
+		return ""
+	}
+	value, err := tag.StringVal()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func exifValue(document *exif.Exif, name exif.FieldName) string {
+	tag, err := document.Get(name)
+	if err != nil {
+		return ""
+	}
+	return strings.Trim(strings.TrimSpace(tag.String()), "\"")
 }
 
 type contextReader struct {

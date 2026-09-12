@@ -679,14 +679,18 @@ func (c *Catalog) UpsertMediaFile(ctx context.Context, item model.MediaFile) err
 	}
 	item.UpdatedAt = time.Now().UTC()
 	_, err := c.db.ExecContext(ctx, `INSERT INTO media_files
-		(entry_id, kind, duration_ms, container, width, height, video_codec, audio_codec, bitrate, metadata, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(entry_id, kind, duration_ms, container, width, height, video_codec, audio_codec, bitrate,
+		 taken_at, camera, latitude, longitude, metadata, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(entry_id) DO UPDATE SET kind=excluded.kind, duration_ms=excluded.duration_ms,
 			container=excluded.container, width=excluded.width, height=excluded.height,
 			video_codec=excluded.video_codec, audio_codec=excluded.audio_codec,
-			bitrate=excluded.bitrate, metadata=excluded.metadata, updated_at=excluded.updated_at`,
+			bitrate=excluded.bitrate, taken_at=excluded.taken_at, camera=excluded.camera,
+			latitude=excluded.latitude, longitude=excluded.longitude,
+			metadata=excluded.metadata, updated_at=excluded.updated_at`,
 		item.EntryID, item.Kind, item.DurationMS, item.Container, item.Width, item.Height,
-		item.VideoCodec, item.AudioCodec, item.Bitrate, string(item.Metadata), item.UpdatedAt)
+		item.VideoCodec, item.AudioCodec, item.Bitrate, item.TakenAt, item.Camera,
+		item.Latitude, item.Longitude, string(item.Metadata), item.UpdatedAt)
 	return err
 }
 
@@ -694,11 +698,14 @@ func (c *Catalog) MediaFile(ctx context.Context, entryID string) (*model.MediaFi
 	var item model.MediaFile
 	var duration, bitrate sql.NullInt64
 	var width, height sql.NullInt64
+	var takenAt sql.NullTime
+	var latitude, longitude sql.NullFloat64
 	var metadata string
 	err := c.reader.QueryRowContext(ctx, `SELECT entry_id, kind, duration_ms, container, width, height,
-		video_codec, audio_codec, bitrate, metadata, updated_at FROM media_files WHERE entry_id=?`, entryID).
+		video_codec, audio_codec, bitrate, taken_at, camera, latitude, longitude, metadata, updated_at FROM media_files WHERE entry_id=?`, entryID).
 		Scan(&item.EntryID, &item.Kind, &duration, &item.Container, &width, &height,
-			&item.VideoCodec, &item.AudioCodec, &bitrate, &metadata, &item.UpdatedAt)
+			&item.VideoCodec, &item.AudioCodec, &bitrate, &takenAt, &item.Camera,
+			&latitude, &longitude, &metadata, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -710,6 +717,15 @@ func (c *Catalog) MediaFile(ctx context.Context, entryID string) (*model.MediaFi
 	}
 	if bitrate.Valid {
 		item.Bitrate = &bitrate.Int64
+	}
+	if takenAt.Valid {
+		item.TakenAt = &takenAt.Time
+	}
+	if latitude.Valid {
+		item.Latitude = &latitude.Float64
+	}
+	if longitude.Valid {
+		item.Longitude = &longitude.Float64
 	}
 	if width.Valid {
 		value := int(width.Int64)

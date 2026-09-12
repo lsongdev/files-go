@@ -100,13 +100,14 @@ func (e *Engine) Handle(ctx context.Context, job *jobs.Job) error {
 	if !entry.Available {
 		return storage.ErrOffline
 	}
+	var failures []error
 	for _, item := range e.processors {
 		if !item.Match(*entry) {
 			continue
 		}
 		if err := item.Process(ctx, *entry); err != nil {
-			return fmt.Errorf("processor %s: %w", item.Name(), err)
+			failures = append(failures, fmt.Errorf("processor %s: %w", item.Name(), err))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }

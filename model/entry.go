@@ -76,6 +76,10 @@ type MediaFile struct {
 	VideoCodec string          `json:"videoCodec,omitempty"`
 	AudioCodec string          `json:"audioCodec,omitempty"`
 	Bitrate    *int64          `json:"bitrate,omitempty"`
+	TakenAt    *time.Time      `json:"takenAt,omitempty"`
+	Camera     string          `json:"camera,omitempty"`
+	Latitude   *float64        `json:"latitude,omitempty"`
+	Longitude  *float64        `json:"longitude,omitempty"`
 	Metadata   json.RawMessage `json:"metadata"`
 	UpdatedAt  time.Time       `json:"updatedAt"`
 }
