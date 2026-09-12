@@ -129,6 +129,22 @@ func main() {
 			}
 			afterID = entries[len(entries)-1].ID
 		}
+		if mediaMatcher != nil {
+			afterID = ""
+			for {
+				entries, err := catalogDB.EntriesNeedingEpisodeMetadata(ctx, afterID, 500)
+				if err != nil {
+					return err
+				}
+				if len(entries) == 0 {
+					break
+				}
+				if err := processing.EnqueueEntries(ctx, entries); err != nil {
+					return err
+				}
+				afterID = entries[len(entries)-1].ID
+			}
+		}
 		return nil
 	}
 	workerPool := jobs.NewPool(jobQueue, cfg.Processing.Workers)

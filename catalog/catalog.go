@@ -802,6 +802,38 @@ func (c *Catalog) EntriesMissingAudioArtwork(ctx context.Context, afterID string
 	return items, rows.Err()
 }
 
+// EntriesNeedingEpisodeMetadata returns unlocked TV episodes that still use
+// the filename fallback. A pipeline-versioned job can enrich them with the
+// provider's episode title, overview, and still without a filesystem rescan.
+func (c *Catalog) EntriesNeedingEpisodeMetadata(ctx context.Context, afterID string, limit int) ([]model.Entry, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := c.reader.QueryContext(ctx, `SELECT `+qualifiedEntryColumns+`
+		FROM entries e JOIN media_item_files association ON association.entry_id=e.id AND association.role='video'
+		JOIN media_items media ON media.id=association.media_id
+		WHERE e.available=1 AND e.id>? AND media.type='episode' AND media.match_source!='tmdb'
+			AND media.match_locked=0
+			AND NOT EXISTS (SELECT 1 FROM media_match_suppressions suppression WHERE suppression.entry_id=e.id)
+			AND EXISTS (SELECT 1 FROM library_sources source JOIN libraries library ON library.id=source.library_id
+				WHERE source.storage_id=e.storage_id AND library.type='tv' AND
+					(source.path='' OR e.path=source.path OR substr(e.path,1,length(source.path)+1)=source.path || '/'))
+		ORDER BY e.id LIMIT ?`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.Entry, 0, limit)
+	for rows.Next() {
+		entry, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, entry)
+	}
+	return items, rows.Err()
+}
+
 func (c *Catalog) UpsertArtifact(ctx context.Context, item model.Artifact) (*model.Artifact, error) {
 	if item.ID == "" {
 		item.ID = uuid.Must(uuid.NewV7()).String()

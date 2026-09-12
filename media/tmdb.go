@@ -71,6 +71,36 @@ func (p *TMDB) Fetch(ctx context.Context, itemType, id, language string) (Candid
 	return item.candidate(itemType), nil
 }
 
+func (p *TMDB) FetchEpisode(ctx context.Context, seriesID string, season, episode int, language string) (Candidate, error) {
+	if _, err := strconv.ParseInt(seriesID, 10, 64); err != nil || season < 0 || episode < 0 {
+		return Candidate{}, errors.New("invalid TMDB episode identity")
+	}
+	values := url.Values{}
+	if language != "" {
+		values.Set("language", language)
+	}
+	var item struct {
+		ID          int64   `json:"id"`
+		Name        string  `json:"name"`
+		Overview    string  `json:"overview"`
+		AirDate     string  `json:"air_date"`
+		StillPath   string  `json:"still_path"`
+		VoteAverage float64 `json:"vote_average"`
+	}
+	endpoint := fmt.Sprintf("/tv/%s/season/%d/episode/%d", seriesID, season, episode)
+	if err := p.get(ctx, endpoint, values, &item); err != nil {
+		return Candidate{}, err
+	}
+	result := Candidate{ID: strconv.FormatInt(item.ID, 10), Type: "episode", Title: item.Name,
+		Overview: item.Overview, PosterPath: item.StillPath, VoteAverage: item.VoteAverage}
+	if len(item.AirDate) >= 4 {
+		if year, err := strconv.Atoi(item.AirDate[:4]); err == nil {
+			result.Year = &year
+		}
+	}
+	return result, nil
+}
+
 func (p *TMDB) get(ctx context.Context, endpoint string, values url.Values, output any) error {
 	if p.token == "" {
 		return errors.New("TMDB token is not configured")
