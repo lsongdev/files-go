@@ -49,11 +49,32 @@ func (p *Thumbnail) Match(entry model.Entry) bool {
 }
 
 func (p *Thumbnail) Process(ctx context.Context, entry model.Entry) error {
+	if p.cached(ctx, entry) {
+		return nil
+	}
 	imageValue, err := p.sourceImage(ctx, entry)
 	if err != nil || imageValue == nil {
 		return err
 	}
 	return p.writeVariants(ctx, entry, imageValue)
+}
+
+func (p *Thumbnail) cached(ctx context.Context, entry model.Entry) bool {
+	for variant := range thumbnailVariants {
+		expected := thumbnailKey(entry, variant)
+		artifact, err := p.catalog.ArtifactForEntry(ctx, entry.ID, "thumbnail", variant)
+		if err != nil || artifact.Key != expected {
+			return false
+		}
+		filename, err := ThumbnailPath(p.cacheDir, artifact.Key)
+		if err != nil {
+			return false
+		}
+		if info, err := os.Stat(filename); err != nil || info.Size() == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *Thumbnail) writeVariants(ctx context.Context, entry model.Entry, imageValue image.Image) error {

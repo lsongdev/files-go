@@ -1149,9 +1149,7 @@ type entryResponse struct {
 func (s *Server) responsesFor(ctx context.Context, entries []model.Entry) ([]entryResponse, error) {
 	entryIDs := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Type == model.EntryFile {
-			entryIDs = append(entryIDs, entry.ID)
-		}
+		entryIDs = append(entryIDs, entry.ID)
 	}
 	media, err := s.catalog.MediaSummariesForEntries(ctx, entryIDs)
 	if err != nil {
@@ -1163,6 +1161,9 @@ func (s *Server) responsesFor(ctx context.Context, entries []model.Entry) ([]ent
 		if summary, ok := media[entry.ID]; ok {
 			copy := summary
 			result[index].Media = &copy
+			if entry.Type == model.EntryDirectory && summary.PrimaryEntryID != "" {
+				result[index].Links["thumbnail"] = "/api/v1/entries/" + summary.PrimaryEntryID + "/thumbnail?size=medium"
+			}
 		}
 	}
 	return result, nil
@@ -1191,7 +1192,7 @@ func responseFor(entry model.Entry) entryResponse {
 
 func hasThumbnailExtension(extension string) bool {
 	switch strings.ToLower(extension) {
-	case "jpg", "jpeg", "png", "gif", "epub", "pdf", "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "flv", "wmv", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "aiff", "ape":
+	case "jpg", "jpeg", "png", "gif", "epub", "pdf", "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "flv", "wmv", "rmvb", "mp3", "m4a", "aac", "flac", "ogg", "opus", "wma", "aiff", "ape":
 		return true
 	default:
 		return false

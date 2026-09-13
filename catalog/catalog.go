@@ -203,6 +203,37 @@ func (c *Catalog) Children(ctx context.Context, parentID string, opts ListOption
 	return items, rows.Err()
 }
 
+// ChildrenByNames returns direct children matching a small, case-insensitive
+// set of names. It avoids paging through large TV directories just to locate
+// conventional artwork and metadata sidecars.
+func (c *Catalog) ChildrenByNames(ctx context.Context, parentID string, names []string) ([]model.Entry, error) {
+	if len(names) == 0 {
+		return []model.Entry{}, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(names)), ",")
+	args := make([]any, 0, len(names)+1)
+	args = append(args, parentID)
+	for _, name := range names {
+		args = append(args, strings.ToLower(name))
+	}
+	rows, err := c.reader.QueryContext(ctx, `SELECT `+entryColumns+` FROM entries
+		WHERE parent_id=? AND available=1 AND lower(name) IN (`+placeholders+`)
+		ORDER BY lower(name), id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.Entry, 0, len(names))
+	for rows.Next() {
+		entry, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, entry)
+	}
+	return items, rows.Err()
+}
+
 func (c *Catalog) Search(ctx context.Context, opts SearchOptions) ([]model.Entry, error) {
 	limit := opts.Limit
 	if limit <= 0 {
@@ -801,6 +832,7 @@ func (c *Catalog) EntriesMissingMediaAssociation(ctx context.Context, kind, role
 	rows, err := c.reader.QueryContext(ctx, `SELECT `+qualifiedEntryColumns+`
 		FROM entries e JOIN media_files technical ON technical.entry_id=e.id
 		WHERE technical.kind=? AND e.available=1 AND e.id>? AND
+			(?!='photo' OR lower(e.name) NOT IN ('folder.jpg','folder.jpeg','folder.png','poster.jpg','poster.jpeg','poster.png','cover.jpg','cover.jpeg','cover.png','backdrop.jpg','backdrop.jpeg','backdrop.png','fanart.jpg','fanart.jpeg','fanart.png','background.jpg','background.jpeg','background.png')) AND
 			(?!='album' OR trim(COALESCE(json_extract(technical.metadata, '$.music.album'), ''))!='') AND
 			(?!='video' OR EXISTS (
 				SELECT 1 FROM library_sources source JOIN libraries library ON library.id=source.library_id
@@ -809,7 +841,7 @@ func (c *Catalog) EntriesMissingMediaAssociation(ctx context.Context, kind, role
 			)) AND
 			NOT EXISTS (SELECT 1 FROM media_item_files association
 				WHERE association.entry_id=e.id AND association.role=?)
-		ORDER BY e.id LIMIT ?`, kind, afterID, role, kind, role, limit)
+		ORDER BY e.id LIMIT ?`, kind, afterID, role, role, kind, role, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -839,6 +871,40 @@ func (c *Catalog) EntriesMissingAudioArtwork(ctx context.Context, afterID string
 			NOT EXISTS (SELECT 1 FROM artifacts artifact
 				WHERE artifact.entry_id=e.id AND artifact.type='thumbnail')
 		ORDER BY e.id LIMIT ?`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.Entry, 0, limit)
+	for rows.Next() {
+		entry, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, entry)
+	}
+	return items, rows.Err()
+}
+
+// EntriesMediaSidecars pages through conventional directory-level NFO and
+// artwork files so a new sidecar processor can backfill an existing catalog
+// without a storage scan.
+func (c *Catalog) EntriesMediaSidecars(ctx context.Context, afterID string, limit int) ([]model.Entry, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := c.reader.QueryContext(ctx, `SELECT `+qualifiedEntryColumns+` FROM entries e
+		WHERE e.type='file' AND e.available=1 AND e.id>? AND (
+			(lower(e.extension)='nfo' AND EXISTS (
+				SELECT 1 FROM library_sources source JOIN libraries library ON library.id=source.library_id
+				WHERE library.type='movies' AND source.storage_id=e.storage_id AND
+					(source.path='' OR e.path=source.path OR substr(e.path,1,length(source.path)+1)=source.path || '/')
+			)) OR lower(e.name) IN (
+			'tvshow.nfo','movie.nfo',
+			'folder.jpg','folder.jpeg','folder.png','poster.jpg','poster.jpeg','poster.png',
+			'cover.jpg','cover.jpeg','cover.png','backdrop.jpg','backdrop.jpeg','backdrop.png',
+			'fanart.jpg','fanart.jpeg','fanart.png','background.jpg','background.jpeg','background.png'
+		)) ORDER BY e.id LIMIT ?`, afterID, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -93,6 +93,7 @@ function previewKind(item) {
   const mime = item.mime || '';
   const extension = (item.extension || '').toLowerCase();
   if (extension === 'ts' && (item.name.toLowerCase().endsWith('.d.ts') || item.size < 1024 * 1024)) return 'text';
+  if (['mp4', 'm4v', 'mkv', 'webm', 'mov', 'avi', 'mpeg', 'mpg', 'ts', 'm2ts', 'flv', 'wmv', 'rmvb'].includes(extension)) return 'video';
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('audio/')) return 'audio';
   if (mime.startsWith('video/')) return 'video';
@@ -147,9 +148,9 @@ function durationLabel(durationMS) {
   return minutes >= 60 ? `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟` : `${minutes} 分钟`;
 }
 
-function MediaPoster({ media, thumbnailURL }) {
+function MediaPoster({ media, thumbnailURL, preferThumbnail }) {
   const metadata = mediaMetadata(media);
-  const posterURL = metadata.posterPath ? `${API}/media/${encodeURIComponent(media.id)}/poster` : thumbnailURL;
+  const posterURL = preferThumbnail ? thumbnailURL : (metadata.posterPath ? `${API}/media/${encodeURIComponent(media.id)}/poster` : thumbnailURL);
   const hasPoster = Boolean(posterURL);
   const [attempt, setAttempt] = useState(0);
   const [ready, setReady] = useState(false);
@@ -197,10 +198,13 @@ function MediaHeader({ item, media, technical, actions }) {
   const metadata = mediaMetadata(media);
   const details = [mediaTypeLabel(media.type), media.year, metadata.voteAverage ? `TMDB ${metadata.voteAverage.toFixed(1)}` : '', durationLabel(technical?.durationMs)].filter(Boolean);
   const overview = metadata.overview || metadata.description;
-  const thumbnailURL = item?.links?.thumbnail || (media.primaryEntryId ? `${API}/entries/${encodeURIComponent(media.primaryEntryId)}/thumbnail?size=large` : '');
+  const localPosterURL = metadata.localPosterEntryId ? `${API}/entries/${encodeURIComponent(metadata.localPosterEntryId)}/thumbnail?size=large` : '';
+  const backdropURL = metadata.localBackdropEntryId ? `${API}/entries/${encodeURIComponent(metadata.localBackdropEntryId)}/thumbnail?size=large` : '';
+  const thumbnailURL = localPosterURL || item?.links?.thumbnail || (media.primaryEntryId ? `${API}/entries/${encodeURIComponent(media.primaryEntryId)}/thumbnail?size=large` : '');
   return html`<section class="media-header">
-    <${MediaPoster} key=${`${media.id}:${metadata.posterPath || thumbnailURL}`} media=${media} thumbnailURL=${thumbnailURL}/>
-    <div class="media-copy"><p>${details.join(' · ')}</p><h1>${media.title || item.name}</h1>${metadata.originalTitle && metadata.originalTitle !== media.title && html`<small>${metadata.originalTitle}</small>`}${overview && html`<div class="media-overview">${overview}</div>`}<div class="media-match">${media.matchSource === 'tmdb' ? 'TMDB 已匹配' : media.matchSource === 'embedded' ? '来自文件标签' : '根据文件名识别'}${media.matchConfidence ? ` · ${Math.round(media.matchConfidence * 100)}%` : ''}</div></div>
+    ${backdropURL && html`<div class="media-backdrop" style=${{ backgroundImage: `url(${backdropURL})` }}></div>`}
+    <${MediaPoster} key=${`${media.id}:${localPosterURL || metadata.posterPath || thumbnailURL}`} media=${media} thumbnailURL=${thumbnailURL} preferThumbnail=${Boolean(localPosterURL)}/>
+    <div class="media-copy"><p>${details.join(' · ')}</p><h1>${media.title || item.name}</h1>${metadata.originalTitle && metadata.originalTitle !== media.title && html`<small>${metadata.originalTitle}</small>`}${overview && html`<div class="media-overview">${overview}</div>`}<div class="media-match">${media.matchSource === 'nfo' ? '来自本地 NFO' : media.matchSource === 'tmdb' ? 'TMDB 已匹配' : media.matchSource === 'embedded' ? '来自文件标签' : '根据文件名识别'}${media.matchConfidence ? ` · ${Math.round(media.matchConfidence * 100)}%` : ''}</div></div>
     ${actions && html`<div class="media-actions">${actions}</div>`}
   </section>`;
 }
@@ -958,7 +962,7 @@ function App() {
             <div class="table-head" role="row"><span>名称</span><span>大小</span><span>修改时间</span><span></span></div>
             ${items.map((item) => html`<div key=${item.id} class="file-row" role="row">
               <button class="file-main" onClick=${() => openEntry(item.id)}>
-                <span class="name-cell" role="cell"><i class=${item.type === 'directory' ? 'folder' : 'document'}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${20}/></i><span><strong>${item.name}</strong><small>${item.type === 'directory' ? '文件夹' : item.media ? `${mediaTypeLabel(item.media.type)} · ${item.media.title}${item.media.year ? ` (${item.media.year})` : ''}` : (item.extension?.toUpperCase() || '文件')}</small></span>${!item.available && html`<em>不可用</em>`}</span>
+                <span class="name-cell" role="cell"><i class=${item.type === 'directory' ? 'folder' : 'document'}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${20}/></i><span><strong>${item.name}</strong><small>${item.media ? `${mediaTypeLabel(item.media.type)} · ${item.media.title}${item.media.year ? ` (${item.media.year})` : ''}` : item.type === 'directory' ? '文件夹' : (item.extension?.toUpperCase() || '文件')}</small></span>${!item.available && html`<em>不可用</em>`}</span>
                 <span class="size-cell" role="cell">${item.type === 'directory' ? '—' : formatSize(item.size)}</span>
                 <span class="date-cell" role="cell">${formatDate(item.modifiedAt)}</span>
               </button>
@@ -969,7 +973,7 @@ function App() {
             ${items.map((item) => html`<article key=${item.id} class="file-card">
               <button class="card-main" onClick=${() => openEntry(item.id)}>
                 ${item.links.thumbnail ? html`<${ThumbnailImage} key=${item.id} item=${item}/>` : html`<span class=${`card-icon ${item.type}`}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${30}/></span>`}
-                <strong title=${item.name}>${item.name}</strong><small>${item.type === 'directory' ? '文件夹' : item.media ? `${mediaTypeLabel(item.media.type)} · ${item.media.title}` : formatSize(item.size)}</small>${!item.available && html`<em>不可用</em>`}
+                <strong title=${item.name}>${item.name}</strong><small>${item.media ? `${mediaTypeLabel(item.media.type)} · ${item.media.title}${item.media.year ? ` (${item.media.year})` : ''}` : item.type === 'directory' ? '文件夹' : formatSize(item.size)}</small>${!item.available && html`<em>不可用</em>`}
               </button>
               <button class="card-action" onClick=${() => openManage(item)} aria-label=${`管理 ${item.name}`}><${Icon} name="more" size=${18}/></button>
             </article>`)}

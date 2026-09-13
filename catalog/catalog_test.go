@@ -436,4 +436,18 @@ func TestDirectoryMediaContextRequiresOneCoherentIdentity(t *testing.T) {
 	if _, err := cat.MediaItemForDirectory(ctx, *root); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("mixed root media error = %v, want not found", err)
 	}
+	providerMatch, err := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "movie", Title: "Movie A (TMDB)", MatchSource: "tmdb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.AssociateMediaFile(ctx, providerMatch.ID, files[0].ID, "video"); err != nil {
+		t.Fatal(err)
+	}
+	best, err := cat.DirectMovieForDirectory(ctx, directories[0])
+	if err != nil || best.ID != providerMatch.ID {
+		t.Fatalf("direct movie = %#v, %v", best, err)
+	}
+	if _, err := cat.DirectMovieForDirectory(ctx, *root); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("library root direct movie error = %v, want not found", err)
+	}
 }

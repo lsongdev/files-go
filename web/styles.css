@@ -166,6 +166,8 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .browser { padding: 0 2rem 3rem; }
 .media-header { position: relative; display: grid; grid-template-columns: 8.5rem minmax(0, 1fr) auto; align-items: end; gap: 1.5rem; min-height: 16rem; margin: 0 2rem 1.5rem; padding: 2rem; overflow: hidden; border: 1px solid var(--line); border-radius: 1rem; background: linear-gradient(135deg, var(--panel-raised), var(--panel)); }
 .media-header::before { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 18% 0%, var(--blue-soft), transparent 46%); opacity: 0.8; pointer-events: none; }
+.media-backdrop { position: absolute; inset: 0; background-position: center 28%; background-size: cover; opacity: 0.3; filter: saturate(0.8); pointer-events: none; }
+.media-backdrop::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, var(--panel) 0%, transparent 58%, var(--panel) 100%), linear-gradient(0deg, var(--panel) 0%, transparent 65%); }
 .media-poster { position: relative; z-index: 1; width: 8.5rem; aspect-ratio: 2 / 3; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--line); border-radius: 0.75rem; color: var(--muted); background: var(--document-bg); box-shadow: 0 1rem 2rem var(--drawer-shadow); }
 .media-poster img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .media-poster > span { display: none; }
