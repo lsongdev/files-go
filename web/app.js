@@ -172,7 +172,7 @@ function MediaPoster({ media, thumbnailURL, preferThumbnail }) {
   </div>`;
 }
 
-function ThumbnailImage({ item }) {
+function ThumbnailImage({ item, compact = false }) {
   const [attempt, setAttempt] = useState(0);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -187,9 +187,9 @@ function ThumbnailImage({ item }) {
     retryTimer.current = window.setTimeout(() => setAttempt((value) => value + 1), 2000);
   };
   const separator = item.links.thumbnail.includes('?') ? '&' : '?';
-  return html`<span class=${`card-thumbnail ${!ready && !failed ? 'pending' : ''} ${failed ? 'failed' : ''}`}>
+  return html`<span class=${`${compact ? 'list-thumbnail' : 'card-thumbnail'} ${!ready && !failed ? 'pending' : ''} ${failed ? 'failed' : ''}`}>
     ${!failed && html`<img src=${`${item.links.thumbnail}${separator}v=${attempt}`} alt="" loading="lazy" onLoad=${() => setReady(true)} onError=${retry}/>`}
-    <i><${Icon} name="file" size=${30}/></i>
+    <i><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${compact ? 20 : 30}/></i>
   </span>`;
 }
 
@@ -406,10 +406,14 @@ function App() {
   const openEntry = useCallback(async (id, { history = true, libraryID = activeLibraryID, libraryList = libraries } = {}) => {
     if (!id) return false;
     const requestID = ++entryRequestRef.current;
+    loadingMoreRef.current = false;
     setLoading(true);
+    setMoreLoading(false);
     setError('');
     setSearchQuery('');
     setSearchTerm('');
+    setItems([]);
+    setCursor(null);
     setNavOpen(false);
     setEntryMedia(null);
     setTechnicalMedia(null);
@@ -548,17 +552,23 @@ function App() {
 
   const loadMore = useCallback(async () => {
     if (!cursor || !entry || loadingMoreRef.current) return;
+    const requestID = entryRequestRef.current;
+    const entryID = entry.id;
+    const after = cursor;
     loadingMoreRef.current = true;
     setMoreLoading(true);
     try {
-      const data = await request(`${API}/entries/${encodeURIComponent(entry.id)}/children?limit=100&after=${encodeURIComponent(cursor)}`);
+      const data = await request(`${API}/entries/${encodeURIComponent(entryID)}/children?limit=100&after=${encodeURIComponent(after)}`);
+      if (requestID !== entryRequestRef.current) return;
       setItems((current) => [...current, ...(data.items || [])]);
       setCursor(data.cursor || null);
     } catch (reason) {
-      setError(reason.message || '无法加载更多文件');
+      if (requestID === entryRequestRef.current) setError(reason.message || '无法加载更多文件');
     } finally {
-      loadingMoreRef.current = false;
-      setMoreLoading(false);
+      if (requestID === entryRequestRef.current) {
+        loadingMoreRef.current = false;
+        setMoreLoading(false);
+      }
     }
   }, [cursor, entry]);
 
@@ -964,7 +974,7 @@ function App() {
             <div class="table-head" role="row"><span>名称</span><span>大小</span><span>修改时间</span><span></span></div>
             ${items.map((item) => html`<div key=${item.id} class="file-row" role="row">
               <button class="file-main" onClick=${() => openEntry(item.id)}>
-                <span class="name-cell" role="cell"><i class=${item.type === 'directory' ? 'folder' : 'document'}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${20}/></i><span><strong>${item.name}</strong><small>${item.media ? `${mediaTypeLabel(item.media.type)} · ${item.media.title}${item.media.year ? ` (${item.media.year})` : ''}` : item.type === 'directory' ? '文件夹' : (item.extension?.toUpperCase() || '文件')}</small></span>${!item.available && html`<em>不可用</em>`}</span>
+                <span class="name-cell" role="cell">${item.links.thumbnail ? html`<${ThumbnailImage} key=${item.id} item=${item} compact=${true}/>` : html`<i class=${item.type === 'directory' ? 'folder' : 'document'}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${20}/></i>`}<span><strong>${item.name}</strong><small>${item.media ? `${mediaTypeLabel(item.media.type)} · ${item.media.title}${item.media.year ? ` (${item.media.year})` : ''}` : item.type === 'directory' ? '文件夹' : (item.extension?.toUpperCase() || '文件')}</small></span>${!item.available && html`<em>不可用</em>`}</span>
                 <span class="size-cell" role="cell">${item.type === 'directory' ? '—' : formatSize(item.size)}</span>
                 <span class="date-cell" role="cell">${formatDate(item.modifiedAt)}</span>
               </button>

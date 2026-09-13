@@ -219,7 +219,10 @@ func (p *Cataloger) catalogVideo(ctx context.Context, entry model.Entry, technic
 	if err != nil {
 		return err
 	}
-	return p.catalog.AssociateMediaFile(ctx, item.ID, entry.ID, "video")
+	if err := p.catalog.AssociateMediaFile(ctx, item.ID, entry.ID, "video"); err != nil {
+		return err
+	}
+	return p.catalog.AssociateMediaLibraryFolder(ctx, entry, *item)
 }
 
 func (p *Cataloger) catalogEpisode(ctx context.Context, entry model.Entry, technical model.MediaFile, parsed ParsedName) error {
@@ -255,5 +258,5 @@ func (p *Cataloger) catalogEpisode(ctx context.Context, entry model.Entry, techn
 			return err
 		}
 	}
-	return nil
+	return p.catalog.AssociateMediaLibraryFolder(ctx, entry, *series)
 }

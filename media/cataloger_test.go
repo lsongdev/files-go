@@ -77,6 +77,46 @@ func TestCatalogerCreatesLocalMovieAndTVFallbacks(t *testing.T) {
 	}
 }
 
+func TestCatalogerProjectsVideoIdentityOntoLibraryFolder(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	_ = cat.RegisterStorage(ctx, "disk", "Disk", "local")
+	_ = cat.RegisterLibrary(ctx, model.Library{ID: "movies", Name: "Movies", Type: "movies", Sources: []model.LibrarySource{{StorageID: "disk", Path: "Movies"}}})
+	generation, _ := cat.BeginScan(ctx, "disk")
+	root, _ := cat.EnsureRoot(ctx, "disk", generation)
+	library := insertCatalogEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &root.ID, Name: "Movies", Path: "Movies", Type: model.EntryDirectory})
+	folder := insertCatalogEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &library.ID, Name: "Arrival", Path: "Movies/Arrival", Type: model.EntryDirectory})
+	video := insertCatalogEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &folder.ID, Name: "Arrival.2016.mkv", Path: "Movies/Arrival/Arrival.2016.mkv", Type: model.EntryFile, Extension: "mkv"})
+	if err := cat.UpsertMediaFile(ctx, model.MediaFile{EntryID: video.ID, Kind: "video"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCataloger(cat).Process(ctx, video); err != nil {
+		t.Fatal(err)
+	}
+	fileMedia, err := cat.MediaItemForEntry(ctx, video.ID, "video")
+	if err != nil {
+		t.Fatal(err)
+	}
+	folderMedia, err := cat.MediaItemForEntry(ctx, folder.ID, "folder")
+	if err != nil || folderMedia.ID != fileMedia.ID {
+		t.Fatalf("folder media = %#v, file media = %#v, err=%v", folderMedia, fileMedia, err)
+	}
+}
+
+func insertCatalogEntry(t *testing.T, cat *catalog.Catalog, generation int64, entry model.Entry) model.Entry {
+	t.Helper()
+	items, err := cat.UpsertEntries(context.Background(), []model.Entry{entry}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return items[0]
+}
+
 func TestCatalogerBuildsArtistAlbumTrackHierarchy(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(ctx, t.TempDir())

@@ -41,6 +41,7 @@ type Server struct {
 	playback *playback.Manager
 	jobQueue *jobs.Queue
 	matcher  *mediaengine.Matcher
+	poster   *mediaengine.Poster
 }
 
 func New(ctx context.Context, catalog *catalog.Catalog, storages *storage.Registry, indexer *indexer.Indexer, logger *log.Logger, cacheDir string, managers ...*playback.Manager) *Server {
@@ -56,6 +57,7 @@ func (s *Server) Handler() http.Handler { return s.mux }
 
 func (s *Server) SetJobQueue(queue *jobs.Queue)                { s.jobQueue = queue }
 func (s *Server) SetMediaMatcher(matcher *mediaengine.Matcher) { s.matcher = matcher }
+func (s *Server) SetMediaPoster(poster *mediaengine.Poster)    { s.poster = poster }
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/system", s.system)
@@ -267,6 +269,15 @@ func (s *Server) continueWatching(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) mediaPoster(w http.ResponseWriter, r *http.Request) {
 	artifact, err := s.catalog.ArtifactForMedia(r.Context(), r.PathValue("id"), "poster", "w500")
+	if errors.Is(err, catalog.ErrNotFound) && s.poster != nil {
+		if item, itemErr := s.catalog.MediaItem(r.Context(), r.PathValue("id")); itemErr == nil {
+			if posterErr := s.poster.ProcessMedia(r.Context(), *item); posterErr != nil {
+				s.logger.Printf("download media poster %s: %v", item.ID, posterErr)
+			} else {
+				artifact, err = s.catalog.ArtifactForMedia(r.Context(), item.ID, "poster", "w500")
+			}
+		}
+	}
 	if errors.Is(err, catalog.ErrNotFound) {
 		s.reprocessMedia(r.Context(), r.PathValue("id"))
 		w.Header().Set("Retry-After", "2")
@@ -370,7 +381,7 @@ func (s *Server) getEntryMediaItem(w http.ResponseWriter, r *http.Request) {
 	}
 	var item *model.MediaItem
 	if entry.Type == model.EntryDirectory {
-		item, err = s.catalog.MediaItemForDirectory(r.Context(), *entry)
+		item, err = s.catalog.MediaItemForEntry(r.Context(), entry.ID, "folder")
 	} else {
 		item, err = s.catalog.MediaItemForEntry(r.Context(), entry.ID, r.URL.Query().Get("role"))
 	}
@@ -1163,6 +1174,8 @@ func (s *Server) responsesFor(ctx context.Context, entries []model.Entry) ([]ent
 			result[index].Media = &copy
 			if entry.Type == model.EntryDirectory && summary.PrimaryEntryID != "" {
 				result[index].Links["thumbnail"] = "/api/v1/entries/" + summary.PrimaryEntryID + "/thumbnail?size=medium"
+			} else if entry.Type == model.EntryDirectory && summary.HasPoster {
+				result[index].Links["thumbnail"] = "/api/v1/media/" + summary.ID + "/poster"
 			}
 		}
 	}

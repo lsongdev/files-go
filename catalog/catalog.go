@@ -234,6 +234,34 @@ func (c *Catalog) ChildrenByNames(ctx context.Context, parentID string, names []
 	return items, rows.Err()
 }
 
+// DirectoryMediaSidecars returns direct NFO and artwork sidecars, including
+// the basename conventions emitted by media managers (Movie.Name-poster.jpg).
+func (c *Catalog) DirectoryMediaSidecars(ctx context.Context, parentID string) ([]model.Entry, error) {
+	rows, err := c.reader.QueryContext(ctx, `SELECT `+entryColumns+` FROM entries
+		WHERE parent_id=? AND available=1 AND (lower(extension)='nfo' OR
+			(lower(extension) IN ('jpg','jpeg','png') AND (
+				lower(name) IN ('folder.jpg','folder.jpeg','folder.png','poster.jpg','poster.jpeg','poster.png',
+					'cover.jpg','cover.jpeg','cover.png','backdrop.jpg','backdrop.jpeg','backdrop.png',
+					'fanart.jpg','fanart.jpeg','fanart.png','background.jpg','background.jpeg','background.png') OR
+				lower(name) GLOB '*-poster.*' OR lower(name) GLOB '*-cover.*' OR
+				lower(name) GLOB '*-fanart.*' OR lower(name) GLOB '*-backdrop.*' OR
+				lower(name) GLOB '*-background.*'
+			))) ORDER BY lower(name), id`, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.Entry, 0)
+	for rows.Next() {
+		entry, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, entry)
+	}
+	return items, rows.Err()
+}
+
 func (c *Catalog) Search(ctx context.Context, opts SearchOptions) ([]model.Entry, error) {
 	limit := opts.Limit
 	if limit <= 0 {
@@ -904,7 +932,14 @@ func (c *Catalog) EntriesMediaSidecars(ctx context.Context, afterID string, limi
 			'folder.jpg','folder.jpeg','folder.png','poster.jpg','poster.jpeg','poster.png',
 			'cover.jpg','cover.jpeg','cover.png','backdrop.jpg','backdrop.jpeg','backdrop.png',
 			'fanart.jpg','fanart.jpeg','fanart.png','background.jpg','background.jpeg','background.png'
-		)) ORDER BY e.id LIMIT ?`, afterID, limit)
+		) OR (lower(e.extension) IN ('jpg','jpeg','png') AND (
+			lower(e.name) GLOB '*-poster.*' OR lower(e.name) GLOB '*-cover.*' OR
+			lower(e.name) GLOB '*-fanart.*' OR lower(e.name) GLOB '*-backdrop.*' OR
+			lower(e.name) GLOB '*-background.*') AND EXISTS (
+				SELECT 1 FROM library_sources source JOIN libraries library ON library.id=source.library_id
+				WHERE library.type IN ('movies','tv') AND source.storage_id=e.storage_id AND
+					(source.path='' OR e.path=source.path OR substr(e.path,1,length(source.path)+1)=source.path || '/')
+			))) ORDER BY e.id LIMIT ?`, afterID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -935,6 +970,40 @@ func (c *Catalog) EntriesNeedingEpisodeMetadata(ctx context.Context, afterID str
 			AND NOT EXISTS (SELECT 1 FROM media_match_suppressions suppression WHERE suppression.entry_id=e.id)
 			AND EXISTS (SELECT 1 FROM library_sources source JOIN libraries library ON library.id=source.library_id
 				WHERE source.storage_id=e.storage_id AND library.type='tv' AND
+					(source.path='' OR e.path=source.path OR substr(e.path,1,length(source.path)+1)=source.path || '/'))
+		ORDER BY e.id LIMIT ?`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.Entry, 0, limit)
+	for rows.Next() {
+		entry, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, entry)
+	}
+	return items, rows.Err()
+}
+
+// EntriesNeedingMovieMetadata returns movie files that never advanced beyond
+// filename parsing, allowing provider matching added or repaired later to fill
+// titles and posters without a filesystem scan.
+func (c *Catalog) EntriesNeedingMovieMetadata(ctx context.Context, afterID string, limit int) ([]model.Entry, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := c.reader.QueryContext(ctx, `SELECT DISTINCT `+qualifiedEntryColumns+`
+		FROM entries e JOIN media_item_files association ON association.entry_id=e.id AND association.role='video'
+		JOIN media_items media ON media.id=association.media_id
+		WHERE e.available=1 AND e.id>? AND media.type='movie' AND media.match_source='filename'
+			AND media.match_locked=0
+			AND EXISTS (SELECT 1 FROM media_item_files folder
+				WHERE folder.entry_id=e.parent_id AND folder.role='folder' AND folder.media_id=media.id)
+			AND NOT EXISTS (SELECT 1 FROM media_match_suppressions suppression WHERE suppression.entry_id=e.id)
+			AND EXISTS (SELECT 1 FROM library_sources source JOIN libraries library ON library.id=source.library_id
+				WHERE source.storage_id=e.storage_id AND library.type='movies' AND
 					(source.path='' OR e.path=source.path OR substr(e.path,1,length(source.path)+1)=source.path || '/'))
 		ORDER BY e.id LIMIT ?`, afterID, limit)
 	if err != nil {

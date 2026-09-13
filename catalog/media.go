@@ -163,6 +163,54 @@ func (c *Catalog) LibraryTypesForEntry(ctx context.Context, entry model.Entry) (
 	return types, rows.Err()
 }
 
+// AssociateMediaLibraryFolder projects a file's media identity onto the one
+// top-level folder that represents it in a movie or TV library. Local NFO and
+// locked matches remain authoritative.
+func (c *Catalog) AssociateMediaLibraryFolder(ctx context.Context, entry model.Entry, item model.MediaItem) error {
+	var sourcePath, libraryType string
+	err := c.reader.QueryRowContext(ctx, `SELECT source.path, library.type FROM library_sources source
+		JOIN libraries library ON library.id=source.library_id
+		WHERE source.storage_id=? AND library.type IN ('movies','tv') AND
+			(source.path='' OR ?=source.path OR substr(?,1,length(source.path)+1)=source.path || '/')
+		ORDER BY length(source.path) DESC LIMIT 1`, entry.StorageID, entry.Path, entry.Path).Scan(&sourcePath, &libraryType)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if (libraryType == "movies" && item.Type != "movie") || (libraryType == "tv" && item.Type != "series") {
+		return nil
+	}
+	relative := strings.TrimPrefix(strings.TrimPrefix(entry.Path, sourcePath), "/")
+	segment, _, _ := strings.Cut(relative, "/")
+	if segment == "" || segment == relative {
+		return nil // A bare file at the library root represents itself.
+	}
+	folderPath := segment
+	if sourcePath != "" {
+		folderPath = strings.TrimSuffix(sourcePath, "/") + "/" + segment
+	}
+	folder, err := c.EntryByPath(ctx, entry.StorageID, folderPath)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if current, currentErr := c.MediaItemForEntry(ctx, folder.ID, "folder"); currentErr == nil {
+		if current.ID == item.ID || (current.MatchSource == "nfo" || current.MatchLocked) && item.MatchSource != "manual" && !item.MatchLocked {
+			return nil
+		}
+	} else if !errors.Is(currentErr, ErrNotFound) {
+		return currentErr
+	}
+	if err := c.RemoveMediaFileRole(ctx, folder.ID, "folder"); err != nil {
+		return err
+	}
+	return c.AssociateMediaFile(ctx, item.ID, folder.ID, "folder")
+}
+
 func (c *Catalog) AssociateMediaFile(ctx context.Context, mediaID, entryID, role string) error {
 	if mediaID == "" || entryID == "" || role == "" {
 		return errors.New("media ID, entry ID, and role are required")
@@ -214,7 +262,10 @@ func (c *Catalog) MediaSummariesForEntries(ctx context.Context, entryIDs []strin
 		m.index_number, m.match_source, m.match_confidence,
 		COALESCE((SELECT art.entry_id FROM media_item_files art
 			WHERE art.media_id=m.id AND art.role='artwork-primary'
-			ORDER BY art.created_at DESC, art.entry_id LIMIT 1), '')
+			ORDER BY art.created_at DESC, art.entry_id LIMIT 1), ''),
+		CASE WHEN COALESCE(json_extract(m.metadata, '$.posterPath'), '')!='' OR EXISTS (
+			SELECT 1 FROM media_item_files art WHERE art.media_id=m.id AND art.role='artwork-primary'
+		) THEN 1 ELSE 0 END
 		FROM media_item_files mf JOIN media_items m ON m.id=mf.media_id
 		WHERE mf.entry_id IN (`+placeholders+`)
 		ORDER BY mf.entry_id, CASE mf.role WHEN 'video' THEN 0 WHEN 'audio' THEN 1
@@ -231,7 +282,7 @@ func (c *Catalog) MediaSummariesForEntries(ctx context.Context, entryIDs []strin
 		var summary model.MediaSummary
 		var year, indexNumber sql.NullInt64
 		if err := rows.Scan(&entryID, &summary.ID, &summary.Type, &summary.Title, &year,
-			&indexNumber, &summary.MatchSource, &summary.MatchConfidence, &summary.PrimaryEntryID); err != nil {
+			&indexNumber, &summary.MatchSource, &summary.MatchConfidence, &summary.PrimaryEntryID, &summary.HasPoster); err != nil {
 			return nil, err
 		}
 		if _, exists := result[entryID]; exists {
