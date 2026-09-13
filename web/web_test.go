@@ -35,7 +35,27 @@ func TestHandlerServesAssetsAndHistoryFallback(t *testing.T) {
 			if response.Header().Get("Content-Security-Policy") == "" {
 				t.Fatal("Content-Security-Policy is missing")
 			}
+			if cacheControl := response.Header().Get("Cache-Control"); cacheControl == "" {
+				t.Fatal("Cache-Control is missing")
+			}
 		})
+	}
+}
+
+func TestHTMLShellIsNotCachedAcrossServerUpgrades(t *testing.T) {
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/files/example", nil))
+	if value := response.Header().Get("Cache-Control"); value != "no-store" {
+		t.Fatalf("history fallback Cache-Control = %q, want no-store", value)
+	}
+	body := response.Body.String()
+	if strings.Contains(body, "{{ASSET_VERSION}}") || !strings.Contains(body, "/app.js?v=") || !strings.Contains(body, "/styles.css?v=") {
+		t.Fatalf("HTML shell does not contain resolved versioned asset URLs: %q", body)
+	}
+	response = httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	if value := response.Header().Get("Cache-Control"); value != "no-cache, must-revalidate" {
+		t.Fatalf("app.js Cache-Control = %q", value)
 	}
 }
 
