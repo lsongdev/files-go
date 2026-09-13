@@ -131,6 +131,7 @@ type MediaSummary struct {
 	IndexNumber     *int    `json:"indexNumber,omitempty"`
 	MatchSource     string  `json:"matchSource,omitempty"`
 	MatchConfidence float64 `json:"matchConfidence,omitempty"`
+	PrimaryEntryID  string  `json:"primaryEntryId,omitempty"`
 }
 
 type PlaybackState struct {

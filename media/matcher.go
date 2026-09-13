@@ -36,7 +36,7 @@ func (m *Matcher) Match(entry model.Entry) bool {
 		return false
 	}
 	switch strings.ToLower(entry.Extension) {
-	case "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "wmv":
+	case "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "wmv", "rmvb":
 		return !strings.HasPrefix(entry.Name, "._")
 	default:
 		return false

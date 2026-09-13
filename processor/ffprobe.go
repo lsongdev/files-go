@@ -47,7 +47,7 @@ func (p *FFProbe) Match(entry model.Entry) bool {
 		return false
 	}
 	switch strings.ToLower(entry.Extension) {
-	case "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "flv", "wmv",
+	case "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "flv", "wmv", "rmvb",
 		"mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "wma", "aiff", "ape":
 		return true
 	default:

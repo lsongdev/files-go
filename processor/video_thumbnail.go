@@ -41,7 +41,7 @@ func (p *VideoThumbnail) Match(entry model.Entry) bool {
 		return false
 	}
 	switch strings.ToLower(entry.Extension) {
-	case "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "flv", "wmv":
+	case "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "flv", "wmv", "rmvb":
 		return true
 	default:
 		return false

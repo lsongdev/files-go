@@ -3099,6 +3099,53 @@ Filesystem Browser
 
 物理路径和目录关系始终是唯一事实；媒体信息是可删除、可重建的派生数据。
 
+### 83.1 文件夹媒体旁车约定
+
+电影和电视剧目录可以包含由 Kodi、Jellyfin 等工具生成的本地旁车文件：
+
+```text
+TV Shows/Attack.On.Titan/
+  tvshow.nfo       series metadata
+  folder.jpg       primary poster
+  backdrop.jpg     header backdrop
+  S01/
+    S01E01.mkv
+
+Movies/Millennium.Actress/
+  Millennium.Actress.2001.720p.nfo
+  folder.jpg
+  backdrop.jpg
+  Millennium.Actress.2001.720p.rmvb
+```
+
+目录级映射规则：
+
+```text
+tvshow.nfo                       -> Series metadata
+movie.nfo / <movie filename>.nfo -> Movie metadata
+folder.* / poster.* / cover.*    -> primary artwork
+backdrop.* / fanart.* / background.* -> header backdrop
+```
+
+优先级必须是：
+
+```text
+local NFO/artwork > locked/manual match > provider metadata > filename inference
+```
+
+本地字段只覆盖 NFO 中实际存在的字段，缺失字段可以继续使用 TMDB 等 Provider
+结果。NFO 中的 TMDB/TVDB/IMDb ID 用于把目录绑定到正确的规范化媒体对象，避免同一
+目录内的历史文件名匹配和 Provider 匹配造成歧义。
+
+旁车文件仍然是可浏览、可下载的普通 `Entry`，但 `folder.jpg`、`backdrop.jpg` 等目录
+图片不建立独立的 Photo 媒体对象。目录本身通过 `media_item_files.role=folder` 关联媒体；
+主图和背景分别使用 `artwork-primary`、`artwork-backdrop`。因此列表卡片、目录 Header
+和媒体详情会消费同一个本地增强结果，而不会改变物理文件树。
+
+电视剧季目录中的 `folder.jpg` 可能表示 Season 海报。在 Season 尚未建立独立目录 Header
+身份前，只有同级 `tvshow.nfo` 明确标识 Series 时才把 TV 图片绑定到 Series，避免季海报
+覆盖整部剧的主封面。
+
 ---
 
 # 84. Frontend

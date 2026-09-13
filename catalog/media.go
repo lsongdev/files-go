@@ -172,6 +172,11 @@ func (c *Catalog) AssociateMediaFile(ctx context.Context, mediaID, entryID, role
 	return err
 }
 
+func (c *Catalog) RemoveMediaFileRole(ctx context.Context, entryID, role string) error {
+	_, err := c.db.ExecContext(ctx, `DELETE FROM media_item_files WHERE entry_id=? AND role=?`, entryID, role)
+	return err
+}
+
 func (c *Catalog) MediaItemForEntry(ctx context.Context, entryID, role string) (*model.MediaItem, error) {
 	where, args := "mf.entry_id=?", []any{entryID}
 	order := `CASE mf.role WHEN 'video' THEN 0 WHEN 'audio' THEN 1
@@ -206,7 +211,10 @@ func (c *Catalog) MediaSummariesForEntries(ctx context.Context, entryIDs []strin
 		args[index] = id
 	}
 	rows, err := c.reader.QueryContext(ctx, `SELECT mf.entry_id, m.id, m.type, m.title, m.year,
-		m.index_number, m.match_source, m.match_confidence
+		m.index_number, m.match_source, m.match_confidence,
+		COALESCE((SELECT art.entry_id FROM media_item_files art
+			WHERE art.media_id=m.id AND art.role='artwork-primary'
+			ORDER BY art.created_at DESC, art.entry_id LIMIT 1), '')
 		FROM media_item_files mf JOIN media_items m ON m.id=mf.media_id
 		WHERE mf.entry_id IN (`+placeholders+`)
 		ORDER BY mf.entry_id, CASE mf.role WHEN 'video' THEN 0 WHEN 'audio' THEN 1
@@ -223,7 +231,7 @@ func (c *Catalog) MediaSummariesForEntries(ctx context.Context, entryIDs []strin
 		var summary model.MediaSummary
 		var year, indexNumber sql.NullInt64
 		if err := rows.Scan(&entryID, &summary.ID, &summary.Type, &summary.Title, &year,
-			&indexNumber, &summary.MatchSource, &summary.MatchConfidence); err != nil {
+			&indexNumber, &summary.MatchSource, &summary.MatchConfidence, &summary.PrimaryEntryID); err != nil {
 			return nil, err
 		}
 		if _, exists := result[entryID]; exists {
@@ -249,6 +257,27 @@ func (c *Catalog) MediaItemForDirectory(ctx context.Context, entry model.Entry) 
 	if entry.Type != model.EntryDirectory {
 		return nil, ErrNotFound
 	}
+	// An explicit folder association is authoritative and cheap to resolve.
+	// Checking it separately prevents the descendant fallback from walking a
+	// large TV tree every time an enhanced folder is opened.
+	direct, directErr := scanMediaItemWithPrimary(c.reader.QueryRowContext(ctx, `SELECT m.id, m.type, m.title, m.sort_title,
+		m.year, m.parent_id, m.index_number, m.external_id, m.match_source, m.match_confidence,
+		m.match_locked, m.metadata, m.created_at, m.updated_at,
+		COALESCE((SELECT candidate.entry_id FROM media_item_files candidate
+			LEFT JOIN artifacts cover ON cover.entry_id=candidate.entry_id
+				AND cover.type='thumbnail' AND cover.variant='medium'
+			WHERE candidate.media_id=m.id
+			ORDER BY CASE candidate.role WHEN 'artwork-primary' THEN 0 WHEN 'artwork-backdrop' THEN 2 ELSE 1 END,
+				cover.id IS NULL, candidate.entry_id LIMIT 1), '')
+		FROM media_items m JOIN media_item_files mf ON mf.media_id=m.id
+		WHERE mf.entry_id=? AND mf.role='folder'
+		ORDER BY m.updated_at DESC, m.id LIMIT 1`, entry.ID))
+	if directErr == nil {
+		return &direct, nil
+	}
+	if !errors.Is(directErr, sql.ErrNoRows) {
+		return nil, directErr
+	}
 	rows, err := c.reader.QueryContext(ctx, `SELECT m.id, m.type, m.title, m.sort_title,
 		m.year, m.parent_id, m.index_number, m.external_id, m.match_source, m.match_confidence,
 		m.match_locked, m.metadata, m.created_at, m.updated_at,
@@ -256,7 +285,8 @@ func (c *Catalog) MediaItemForDirectory(ctx context.Context, entry model.Entry) 
 			LEFT JOIN artifacts cover ON cover.entry_id=candidate.entry_id
 				AND cover.type='thumbnail' AND cover.variant='medium'
 			WHERE candidate.media_id=m.id
-			ORDER BY cover.id IS NULL, candidate.entry_id LIMIT 1), '')
+			ORDER BY CASE candidate.role WHEN 'artwork-primary' THEN 0 WHEN 'artwork-backdrop' THEN 2 ELSE 1 END,
+				cover.id IS NULL, candidate.entry_id LIMIT 1), '')
 		FROM media_items m JOIN media_item_files mf ON mf.media_id=m.id
 		JOIN entries e ON e.id=mf.entry_id
 		WHERE e.storage_id=? AND (?='' OR substr(e.path,1,length(?)+1)=? || '/') AND (
@@ -286,6 +316,32 @@ func (c *Catalog) MediaItemForDirectory(ctx context.Context, entry model.Entry) 
 		return nil, ErrNotFound
 	}
 	return &items[0], nil
+}
+
+// DirectMovieForDirectory selects the strongest movie identity attached to a
+// video directly inside a folder. It is deliberately narrower than
+// MediaItemForDirectory so collection/library roots cannot accidentally become
+// a single movie when local folder artwork is discovered.
+func (c *Catalog) DirectMovieForDirectory(ctx context.Context, entry model.Entry) (*model.MediaItem, error) {
+	if entry.Type != model.EntryDirectory {
+		return nil, ErrNotFound
+	}
+	var id string
+	err := c.reader.QueryRowContext(ctx, `SELECT m.id FROM media_items m
+		JOIN media_item_files mf ON mf.media_id=m.id AND mf.role='video'
+		JOIN entries e ON e.id=mf.entry_id
+		WHERE m.type='movie' AND e.storage_id=? AND e.parent_id=?
+		GROUP BY m.id
+		ORDER BY m.match_locked DESC,
+			CASE m.match_source WHEN 'nfo' THEN 0 WHEN 'tmdb' THEN 1 WHEN 'manual' THEN 2 ELSE 3 END,
+			COUNT(*) DESC, m.updated_at DESC, m.id LIMIT 1`, entry.StorageID, entry.ID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return c.MediaItem(ctx, id)
 }
 
 func (c *Catalog) MediaItemFiles(ctx context.Context, mediaID string) ([]model.MediaItemFile, error) {

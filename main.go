@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -92,9 +93,36 @@ func main() {
 			mediaengine.NewPoster(catalogDB, cfg.CacheDir, nil),
 		)
 	}
+	// Local NFO and artwork are applied last so curated sidecars override
+	// filename and online-provider metadata for the containing media folder.
+	sidecarProcessor := mediaengine.NewSidecar(catalogDB, registry)
+	processors = append(processors, sidecarProcessor)
 	processing := processor.New(catalogDB, jobQueue, processors...)
 	idx.SetEntrySink(processing)
 	runMediaBackfills := func() error {
+		afterID := ""
+		for {
+			entries, err := catalogDB.EntriesMediaSidecars(ctx, afterID, 500)
+			if err != nil {
+				return err
+			}
+			if len(entries) == 0 {
+				break
+			}
+			for _, entry := range entries {
+				if strings.EqualFold(entry.Extension, "nfo") &&
+					!strings.EqualFold(entry.Name, "tvshow.nfo") && !strings.EqualFold(entry.Name, "movie.nfo") {
+					if err := processing.ReprocessEntryPriority(ctx, entry, 300); err != nil {
+						return err
+					}
+					continue
+				}
+				if err := sidecarProcessor.Process(ctx, entry); err != nil && ctx.Err() == nil {
+					log.Printf("media sidecar %s: %v", entry.ID, err)
+				}
+			}
+			afterID = entries[len(entries)-1].ID
+		}
 		for _, backfill := range []struct{ kind, role string }{
 			{"audio", "album"},
 			{"video", "video"},
@@ -118,7 +146,7 @@ func main() {
 				afterID = entries[len(entries)-1].ID
 			}
 		}
-		afterID := ""
+		afterID = ""
 		for {
 			entries, err := catalogDB.EntriesMissingAudioArtwork(ctx, afterID, 500)
 			if err != nil {

@@ -20,9 +20,12 @@ func (p *Cataloger) Match(entry model.Entry) bool {
 	if entry.Type != model.EntryFile || strings.HasPrefix(entry.Name, "._") || strings.HasSuffix(strings.ToLower(entry.Name), ".d.ts") {
 		return false
 	}
+	if isFolderArtwork(entry.Name) {
+		return false
+	}
 	switch strings.ToLower(entry.Extension) {
 	case "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "wma", "aiff", "ape", "jpg", "jpeg", "png", "gif", "epub", "pdf",
-		"mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "wmv":
+		"mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "wmv", "rmvb":
 		return true
 	default:
 		return false
