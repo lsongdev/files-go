@@ -172,6 +172,13 @@ function MediaPoster({ media, thumbnailURL, preferThumbnail }) {
   </div>`;
 }
 
+function thumbnailShape(item) {
+  const type = item.media?.type || '';
+  if (type === 'movie' || type === 'series' || type === 'tvshow') return 'poster';
+  if (type === 'artist' || type === 'album' || type === 'track' || type === 'music') return 'square';
+  return 'landscape';
+}
+
 function ThumbnailImage({ item, compact = false }) {
   const [attempt, setAttempt] = useState(0);
   const [ready, setReady] = useState(false);
@@ -187,7 +194,8 @@ function ThumbnailImage({ item, compact = false }) {
     retryTimer.current = window.setTimeout(() => setAttempt((value) => value + 1), 2000);
   };
   const separator = item.links.thumbnail.includes('?') ? '&' : '?';
-  return html`<span class=${`${compact ? 'list-thumbnail' : 'card-thumbnail'} ${!ready && !failed ? 'pending' : ''} ${failed ? 'failed' : ''}`}>
+  const shape = thumbnailShape(item);
+  return html`<span class=${`${compact ? 'list-thumbnail' : 'card-thumbnail'} ${shape} ${!ready && !failed ? 'pending' : ''} ${failed ? 'failed' : ''}`}>
     ${!failed && html`<img src=${`${item.links.thumbnail}${separator}v=${attempt}`} alt="" loading="lazy" onLoad=${() => setReady(true)} onError=${retry}/>`}
     <i><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${compact ? 20 : 30}/></i>
   </span>`;

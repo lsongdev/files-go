@@ -96,15 +96,18 @@ func TestListAndGridBothRenderAvailableThumbnails(t *testing.T) {
 	response := httptest.NewRecorder()
 	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	body := response.Body.String()
-	for _, expected := range []string{"function ThumbnailImage({ item, compact = false })", "compact=${true}", "item.links.thumbnail"} {
+	for _, expected := range []string{"function ThumbnailImage({ item, compact = false })", "function thumbnailShape(item)", "type === 'movie'", "type === 'series'", "return 'square'", "compact=${true}", "item.links.thumbnail"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("app.js does not contain shared list/grid thumbnail marker %q", expected)
 		}
 	}
 	response = httptest.NewRecorder()
 	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/styles.css", nil))
-	if !strings.Contains(response.Body.String(), ".list-thumbnail") {
-		t.Fatal("styles.css does not include list thumbnail styling")
+	styles := response.Body.String()
+	for _, expected := range []string{".list-thumbnail", ".list-thumbnail.poster", ".card-thumbnail.poster", "aspect-ratio: 2 / 3", ".card-thumbnail.square", "aspect-ratio: 1"} {
+		if !strings.Contains(styles, expected) {
+			t.Fatalf("styles.css does not include media-aware thumbnail styling %q", expected)
+		}
 	}
 }
 
