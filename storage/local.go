@@ -16,6 +16,8 @@ type Local struct {
 	root string
 }
 
+func (l *Local) NativeRoot() string { return l.root }
+
 func NewLocal(root string) (*Local, error) {
 	if root == "" {
 		return nil, errors.New("local storage root is required")

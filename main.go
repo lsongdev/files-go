@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"net/http"
@@ -190,6 +191,36 @@ func main() {
 			}
 		}()
 	}
+	go func() {
+		filesystemWatcher, err := indexer.NewWatcher(catalogDB, registry, idx, log.Default())
+		if err != nil {
+			log.Printf("filesystem watcher unavailable: %v", err)
+			return
+		}
+		storageIDs := make([]string, 0, len(cfg.Storages))
+		for _, item := range cfg.Storages {
+			storageIDs = append(storageIDs, item.ID)
+		}
+		if err := filesystemWatcher.Start(ctx, storageIDs); err != nil && ctx.Err() == nil {
+			log.Printf("start filesystem watcher: %v", err)
+		}
+	}()
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				for _, item := range cfg.Storages {
+					if err := idx.Scan(ctx, item.ID); err != nil && !errors.Is(err, indexer.ErrScanInProgress) && ctx.Err() == nil {
+						log.Printf("scheduled reconciliation %s: %v", item.ID, err)
+					}
+				}
+			}
+		}
+	}()
 	playbackManager := playback.NewManager(ctx, catalogDB, registry, cfg.Processing.FFmpeg, cfg.CacheDir, 2)
 	apiServer := api.New(ctx, catalogDB, registry, idx, log.Default(), cfg.CacheDir, playbackManager)
 	apiServer.SetJobQueue(jobQueue)

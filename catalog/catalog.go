@@ -116,6 +116,58 @@ func (c *Catalog) EntryByPath(ctx context.Context, storageID, path string) (*mod
 	return &entry, nil
 }
 
+func (c *Catalog) UnavailableEntryByIdentity(ctx context.Context, storageID string, device, inode uint64) (*model.Entry, error) {
+	if device == 0 || inode == 0 {
+		return nil, ErrNotFound
+	}
+	entry, err := scanEntry(c.reader.QueryRowContext(ctx, `SELECT `+entryColumns+` FROM entries
+		WHERE storage_id=? AND device=? AND inode=? AND available=0
+		ORDER BY updated_at DESC LIMIT 1`, storageID, int64(device), int64(inode)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &entry, nil
+}
+
+func (c *Catalog) MarkEntryTreeUnavailable(ctx context.Context, entry model.Entry) error {
+	now := time.Now().UTC()
+	result, err := c.db.ExecContext(ctx, `UPDATE entries SET available=0, updated_at=?
+		WHERE storage_id=? AND (path=? OR substr(path,1,length(?)+1)=? || '/')`,
+		now, entry.StorageID, entry.Path, entry.Path, entry.Path)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (c *Catalog) AvailableDirectoryPaths(ctx context.Context, storageID, after string, limit int) ([]string, error) {
+	if limit <= 0 || limit > 2000 {
+		limit = 2000
+	}
+	rows, err := c.reader.QueryContext(ctx, `SELECT path FROM entries
+		WHERE storage_id=? AND type='directory' AND available=1 AND path>?
+		ORDER BY path LIMIT ?`, storageID, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	paths := make([]string, 0, limit)
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		paths = append(paths, value)
+	}
+	return paths, rows.Err()
+}
+
 func (c *Catalog) Children(ctx context.Context, parentID string, opts ListOptions) ([]model.Entry, error) {
 	limit := opts.Limit
 	if limit <= 0 {
@@ -428,7 +480,7 @@ func (c *Catalog) UpsertEntries(ctx context.Context, entries []model.Entry, gene
 		if entry.Inode != 0 && entry.Device != 0 {
 			var existingID string
 			err := tx.QueryRowContext(ctx, `SELECT id FROM entries
-				WHERE storage_id=? AND device=? AND inode=? AND path<>? AND scan_generation<?
+			WHERE storage_id=? AND device=? AND inode=? AND path<>? AND (scan_generation<? OR available=0)
 				ORDER BY updated_at DESC LIMIT 1`, entry.StorageID, int64(entry.Device), int64(entry.Inode), entry.Path, generation).Scan(&existingID)
 			if err == nil {
 				entry.ID = existingID

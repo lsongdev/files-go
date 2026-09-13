@@ -83,6 +83,89 @@ func (i *Indexer) ReprocessEntry(ctx context.Context, entry model.Entry) error {
 	return sink.EnqueueEntries(ctx, []model.Entry{entry})
 }
 
+func (i *Indexer) IsScanning(storageID string) bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.scanning[storageID]
+}
+
+// SyncPath applies one externally-observed filesystem path to the catalog.
+// It touches only that path (and its parent lookup), preserving normal catalog
+// browsing as a database-only operation.
+func (i *Indexer) SyncPath(ctx context.Context, storageID, entryPath string) (*model.Entry, error) {
+	if i.IsScanning(storageID) {
+		return nil, ErrScanInProgress
+	}
+	entryPath = path.Clean(filepath.ToSlash(entryPath))
+	if entryPath == "." {
+		entryPath = ""
+	}
+	entryPath = strings.Trim(entryPath, "/")
+	if entryPath == "" || entryPath == ".." || strings.HasPrefix(entryPath, "../") {
+		return nil, storage.ErrPathTraversal
+	}
+	backend, ok := i.storages.Get(storageID)
+	if !ok {
+		return nil, storage.ErrOffline
+	}
+	info, err := backend.Stat(ctx, entryPath)
+	if errors.Is(err, storage.ErrNotFound) {
+		existing, findErr := i.catalog.EntryByPath(ctx, storageID, entryPath)
+		if errors.Is(findErr, catalog.ErrNotFound) {
+			return nil, nil
+		}
+		if findErr != nil {
+			return nil, findErr
+		}
+		if err := i.catalog.MarkEntryTreeUnavailable(ctx, *existing); err != nil && !errors.Is(err, catalog.ErrNotFound) {
+			return nil, err
+		}
+		return existing, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	parentPath := path.Dir(entryPath)
+	if parentPath == "." {
+		parentPath = ""
+	}
+	parent, err := i.catalog.EntryByPath(ctx, storageID, parentPath)
+	if err != nil {
+		return nil, fmt.Errorf("find watched parent %q: %w", parentPath, err)
+	}
+	if _, err := i.catalog.EntryByPath(ctx, storageID, entryPath); errors.Is(err, catalog.ErrNotFound) {
+		if previous, identityErr := i.catalog.UnavailableEntryByIdentity(ctx, storageID, info.Device, info.Inode); identityErr == nil {
+			if _, moveErr := i.catalog.MoveEntry(ctx, previous.ID, parent.ID, info.Name, info.Path); moveErr != nil {
+				return nil, moveErr
+			}
+		} else if !errors.Is(identityErr, catalog.ErrNotFound) {
+			return nil, identityErr
+		}
+	} else if err != nil {
+		return nil, err
+	}
+	extension := strings.TrimPrefix(strings.ToLower(path.Ext(info.Name)), ".")
+	mimeType := ""
+	if extension != "" {
+		mimeType = mime.TypeByExtension("." + extension)
+	}
+	parentID := parent.ID
+	updated, err := i.catalog.AddEntry(ctx, model.Entry{
+		StorageID: storageID, ParentID: &parentID, Name: info.Name, Path: info.Path,
+		Type: info.Type, Size: info.Size, ModifiedAt: info.ModifiedAt, Inode: info.Inode,
+		Device: info.Device, MIME: mimeType, Extension: extension,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if updated.Type == model.EntryFile {
+		if err := i.EnqueueEntries(ctx, []model.Entry{*updated}); err != nil {
+			return nil, err
+		}
+	}
+	return updated, nil
+}
+
 // SetPriority makes configured library roots visible early during a large
 // reconciliation scan without changing which entries are eventually indexed.
 func (i *Indexer) SetPriority(storageID string, paths []string) {
