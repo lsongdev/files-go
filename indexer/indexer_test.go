@@ -208,6 +208,23 @@ func TestWatcherObservesExternalCreateWithoutFullScan(t *testing.T) {
 	}
 }
 
+func TestWatcherStopsAtDescriptorBudget(t *testing.T) {
+	watcher, err := NewWatcher(nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer watcher.close()
+	watcher.maxWatches = 1
+	first := t.TempDir()
+	second := t.TempDir()
+	if err := watcher.add(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := watcher.add(second); !errors.Is(err, ErrWatchLimit) {
+		t.Fatalf("second watch error = %v, want watch limit", err)
+	}
+}
+
 type recordingSink struct{ entries []model.Entry }
 
 func (s *recordingSink) EnqueueEntries(_ context.Context, entries []model.Entry) error {
