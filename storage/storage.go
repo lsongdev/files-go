@@ -45,6 +45,12 @@ type NativePather interface {
 	NativePath(context.Context, string) (string, error)
 }
 
+// NativeRooter is an optional local-storage capability used by filesystem
+// notifications. Remote adapters do not need to expose a native root.
+type NativeRooter interface {
+	NativeRoot() string
+}
+
 type Registry struct {
 	items map[string]Storage
 }
