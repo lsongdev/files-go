@@ -52,6 +52,12 @@ func (p *Poster) Process(ctx context.Context, entry model.Entry) error {
 	if err != nil {
 		return err
 	}
+	return p.ProcessMedia(ctx, *item)
+}
+
+// ProcessMedia downloads artwork for a media identity directly. Series and
+// other parent items are not necessarily the playable item of any one file.
+func (p *Poster) ProcessMedia(ctx context.Context, item model.MediaItem) error {
 	var metadata Candidate
 	if err := json.Unmarshal(item.Metadata, &metadata); err != nil || metadata.PosterPath == "" {
 		return nil

@@ -46,6 +46,9 @@ func (p *Sidecar) Match(entry model.Entry) bool {
 	if isFolderArtwork(entry.Name) || strings.EqualFold(entry.Extension, "nfo") {
 		return true
 	}
+	// Reconcile the video's direct folder after Cataloger and Matcher have run
+	// in the same pipeline. This makes artwork-only folders independent of job
+	// ordering: folder.jpg may be processed before or after the video.
 	switch strings.ToLower(entry.Extension) {
 	case "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "wmv", "rmvb":
 		return true
@@ -55,13 +58,35 @@ func (p *Sidecar) Match(entry model.Entry) bool {
 }
 
 func isFolderArtwork(name string) bool {
+	return folderArtworkKind(name) != ""
+}
+
+func folderArtworkKind(name string) string {
 	value := strings.ToLower(name)
 	for _, candidate := range sidecarNames[2:] {
 		if value == candidate {
-			return true
+			if strings.HasPrefix(candidate, "backdrop.") || strings.HasPrefix(candidate, "fanart.") || strings.HasPrefix(candidate, "background.") {
+				return "backdrop"
+			}
+			return "primary"
 		}
 	}
-	return false
+	extension := filepath.Ext(value)
+	if extension != ".jpg" && extension != ".jpeg" && extension != ".png" {
+		return ""
+	}
+	stem := strings.TrimSuffix(value, extension)
+	for _, suffix := range []string{"-poster", "-cover"} {
+		if strings.HasSuffix(stem, suffix) {
+			return "primary"
+		}
+	}
+	for _, suffix := range []string{"-backdrop", "-fanart", "-background"} {
+		if strings.HasSuffix(stem, suffix) {
+			return "backdrop"
+		}
+	}
+	return ""
 }
 
 func (p *Sidecar) Process(ctx context.Context, entry model.Entry) error {
@@ -70,56 +95,53 @@ func (p *Sidecar) Process(ctx context.Context, entry model.Entry) error {
 			return err
 		}
 	}
-	parent := entry.ParentID
-	for depth := 0; parent != nil && depth < 6; depth++ {
-		directory, err := p.catalog.Entry(ctx, *parent)
-		if errors.Is(err, catalog.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		var explicitNFO *model.Entry
-		if strings.EqualFold(entry.Extension, "nfo") {
-			explicitNFO = &entry
-		}
-		if err := p.applyDirectory(ctx, *directory, explicitNFO); err != nil {
-			return err
-		}
-		if isFolderArtwork(entry.Name) || strings.HasSuffix(strings.ToLower(entry.Name), ".nfo") {
-			break
-		}
-		parent = directory.ParentID
+	if entry.ParentID == nil {
+		return nil
 	}
-	return nil
-}
-
-func (p *Sidecar) applyDirectory(ctx context.Context, directory model.Entry, explicitNFO *model.Entry) error {
-	children, err := p.catalog.ChildrenByNames(ctx, directory.ID, sidecarNames)
+	directory, err := p.catalog.Entry(ctx, *entry.ParentID)
+	if errors.Is(err, catalog.ErrNotFound) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
-	if len(children) == 0 && explicitNFO == nil {
-		return nil
+	return p.applyDirectory(ctx, *directory)
+}
+
+func (p *Sidecar) applyDirectory(ctx context.Context, directory model.Entry) error {
+	children, err := p.catalog.DirectoryMediaSidecars(ctx, directory.ID)
+	if err != nil {
+		return err
 	}
 	byName := make(map[string]model.Entry, len(children))
 	for _, child := range children {
 		byName[strings.ToLower(child.Name)] = child
 	}
-	nfoEntry, hasNFO := firstNamed(byName, "tvshow.nfo", "movie.nfo")
-	if explicitNFO != nil {
-		nfoEntry, hasNFO = *explicitNFO, true
-	}
+	var nfoEntry model.Entry
 	var document *nfoDocument
-	if hasNFO {
-		value, readErr := p.readNFO(ctx, nfoEntry)
+	nfoCandidates := make([]model.Entry, 0)
+	for _, name := range []string{"tvshow.nfo", "movie.nfo"} {
+		if candidate, ok := byName[name]; ok {
+			nfoCandidates = append(nfoCandidates, candidate)
+		}
+	}
+	for _, candidate := range children {
+		if !strings.EqualFold(candidate.Extension, "nfo") || strings.EqualFold(candidate.Name, "tvshow.nfo") || strings.EqualFold(candidate.Name, "movie.nfo") {
+			continue
+		}
+		nfoCandidates = append(nfoCandidates, candidate)
+	}
+	for _, candidate := range nfoCandidates {
+		value, readErr := p.readNFO(ctx, candidate)
 		if readErr != nil {
 			if errors.Is(readErr, errUnsupportedNFO) {
-				return nil
+				continue
 			}
 			return readErr
 		}
+		nfoEntry = candidate
 		document = &value
+		break
 	}
 	var item *model.MediaItem
 	if document != nil {
@@ -145,7 +167,7 @@ func (p *Sidecar) applyDirectory(ctx context.Context, directory model.Entry, exp
 		}
 	}
 	if document == nil && item == nil && (err == nil || errors.Is(err, catalog.ErrNotFound)) {
-		item, err = p.catalog.MediaItemForDirectory(ctx, directory)
+		item, err = p.catalog.MediaItemForEntry(ctx, directory.ID, "folder")
 		if errors.Is(err, catalog.ErrNotFound) {
 			item, err = p.catalog.DirectMovieForDirectory(ctx, directory)
 		}
@@ -156,13 +178,6 @@ func (p *Sidecar) applyDirectory(ctx context.Context, directory model.Entry, exp
 	if err != nil {
 		return err
 	}
-	// A bare folder.jpg in a TV season directory is season artwork, not series
-	// artwork. Until season folders have their own header identity, only bind TV
-	// folder artwork when tvshow.nfo identifies the series directory explicitly.
-	if item.Type == "series" && !hasNFO {
-		return nil
-	}
-
 	metadata := map[string]any{}
 	_ = json.Unmarshal(item.Metadata, &metadata)
 	if document != nil {
@@ -178,13 +193,21 @@ func (p *Sidecar) applyDirectory(ctx context.Context, directory model.Entry, exp
 			return err
 		}
 	}
-	if poster, ok := firstNamed(byName, "folder.jpg", "folder.jpeg", "folder.png", "poster.jpg", "poster.jpeg", "poster.png", "cover.jpg", "cover.jpeg", "cover.png"); ok {
+	poster, hasPoster := firstNamed(byName, "folder.jpg", "folder.jpeg", "folder.png", "poster.jpg", "poster.jpeg", "poster.png", "cover.jpg", "cover.jpeg", "cover.png")
+	if !hasPoster {
+		poster, hasPoster = companionArtwork(children, nfoEntry, "primary")
+	}
+	if hasPoster {
 		metadata["localPosterEntryId"] = poster.ID
 		if err := p.catalog.AssociateMediaFile(ctx, item.ID, poster.ID, "artwork-primary"); err != nil {
 			return err
 		}
 	}
-	if backdrop, ok := firstNamed(byName, "backdrop.jpg", "backdrop.jpeg", "backdrop.png", "fanart.jpg", "fanart.jpeg", "fanart.png", "background.jpg", "background.jpeg", "background.png"); ok {
+	backdrop, hasBackdrop := firstNamed(byName, "backdrop.jpg", "backdrop.jpeg", "backdrop.png", "fanart.jpg", "fanart.jpeg", "fanart.png", "background.jpg", "background.jpeg", "background.png")
+	if !hasBackdrop {
+		backdrop, hasBackdrop = companionArtwork(children, nfoEntry, "backdrop")
+	}
+	if hasBackdrop {
 		metadata["localBackdropEntryId"] = backdrop.ID
 		if err := p.catalog.AssociateMediaFile(ctx, item.ID, backdrop.ID, "artwork-backdrop"); err != nil {
 			return err
@@ -198,7 +221,29 @@ func (p *Sidecar) applyDirectory(ctx context.Context, directory model.Entry, exp
 	if _, err := p.catalog.UpsertMediaItem(ctx, *item); err != nil {
 		return err
 	}
+	if err := p.catalog.RemoveMediaFileRole(ctx, directory.ID, "folder"); err != nil {
+		return err
+	}
 	return p.catalog.AssociateMediaFile(ctx, item.ID, directory.ID, "folder")
+}
+
+func companionArtwork(entries []model.Entry, nfo model.Entry, kind string) (model.Entry, bool) {
+	nfoStem := strings.TrimSuffix(strings.ToLower(nfo.Name), filepath.Ext(nfo.Name))
+	for _, entry := range entries {
+		if folderArtworkKind(entry.Name) != kind {
+			continue
+		}
+		if nfoStem == "" {
+			return entry, true
+		}
+		imageStem := strings.TrimSuffix(strings.ToLower(entry.Name), filepath.Ext(entry.Name))
+		for _, suffix := range []string{"-poster", "-cover", "-backdrop", "-fanart", "-background"} {
+			if imageStem == nfoStem+suffix {
+				return entry, true
+			}
+		}
+	}
+	return model.Entry{}, false
 }
 
 func firstNamed(entries map[string]model.Entry, names ...string) (model.Entry, bool) {

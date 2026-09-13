@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -86,11 +87,13 @@ func main() {
 		mediaengine.NewCataloger(catalogDB),
 	}
 	var mediaMatcher *mediaengine.Matcher
+	var mediaPoster *mediaengine.Poster
 	if cfg.Media.TMDB.Token != "" {
 		mediaMatcher = mediaengine.NewMatcher(catalogDB, mediaengine.NewTMDB(cfg.Media.TMDB.Token, nil), cfg.Media.TMDB.Language)
+		mediaPoster = mediaengine.NewPoster(catalogDB, cfg.CacheDir, nil)
 		processors = append(processors,
 			mediaMatcher,
-			mediaengine.NewPoster(catalogDB, cfg.CacheDir, nil),
+			mediaPoster,
 		)
 	}
 	// Local NFO and artwork are applied last so curated sidecars override
@@ -100,6 +103,52 @@ func main() {
 	processing := processor.New(catalogDB, jobQueue, processors...)
 	idx.SetEntrySink(processing)
 	runMediaBackfills := func() error {
+		const maintenanceName = "media-folders-v3"
+		completed, err := catalogDB.MaintenanceCompleted(ctx, maintenanceName)
+		if err != nil || completed {
+			return err
+		}
+		refreshMovieMetadata := func() error {
+			if mediaMatcher == nil {
+				return nil
+			}
+			afterID := ""
+			for {
+				entries, err := catalogDB.EntriesNeedingMovieMetadata(ctx, afterID, 500)
+				if err != nil {
+					return err
+				}
+				if len(entries) == 0 {
+					return nil
+				}
+				for _, entry := range entries {
+					if err := mediaMatcher.Process(ctx, entry); err != nil {
+						return fmt.Errorf("match movie %s: %w", entry.ID, err)
+					}
+					if mediaPoster != nil {
+						if item, err := catalogDB.MediaItemForEntry(ctx, entry.ID, "video"); err == nil {
+							if err := catalogDB.AssociateMediaLibraryFolder(ctx, entry, *item); err != nil {
+								return err
+							}
+							if err := mediaPoster.ProcessMedia(ctx, *item); err != nil {
+								return fmt.Errorf("download movie poster %s: %w", entry.ID, err)
+							}
+						}
+					}
+				}
+				afterID = entries[len(entries)-1].ID
+			}
+		}
+		previousCompleted, err := catalogDB.MaintenanceCompleted(ctx, "media-folders-v2")
+		if err != nil {
+			return err
+		}
+		if previousCompleted {
+			if err := refreshMovieMetadata(); err != nil {
+				return err
+			}
+			return catalogDB.CompleteMaintenance(ctx, maintenanceName)
+		}
 		afterID := ""
 		for {
 			entries, err := catalogDB.EntriesMediaSidecars(ctx, afterID, 500)
@@ -122,6 +171,9 @@ func main() {
 				}
 			}
 			afterID = entries[len(entries)-1].ID
+		}
+		if err := refreshMovieMetadata(); err != nil {
+			return err
 		}
 		for _, backfill := range []struct{ kind, role string }{
 			{"audio", "album"},
@@ -178,7 +230,7 @@ func main() {
 				afterID = entries[len(entries)-1].ID
 			}
 		}
-		return nil
+		return catalogDB.CompleteMaintenance(ctx, maintenanceName)
 	}
 	workerPool := jobs.NewPool(jobQueue, cfg.Processing.Workers)
 	workerPool.Handle(processor.JobProcessEntry, processing.Handle)
@@ -253,6 +305,7 @@ func main() {
 	apiServer := api.New(ctx, catalogDB, registry, idx, log.Default(), cfg.CacheDir, playbackManager)
 	apiServer.SetJobQueue(jobQueue)
 	apiServer.SetMediaMatcher(mediaMatcher)
+	apiServer.SetMediaPoster(mediaPoster)
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiServer.Handler())
 	mux.Handle("/", web.Handler())

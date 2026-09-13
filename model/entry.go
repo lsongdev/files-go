@@ -132,6 +132,7 @@ type MediaSummary struct {
 	MatchSource     string  `json:"matchSource,omitempty"`
 	MatchConfidence float64 `json:"matchConfidence,omitempty"`
 	PrimaryEntryID  string  `json:"primaryEntryId,omitempty"`
+	HasPoster       bool    `json:"hasPoster,omitempty"`
 }
 
 type PlaybackState struct {

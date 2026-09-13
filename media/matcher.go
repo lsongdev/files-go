@@ -188,7 +188,10 @@ func (m *Matcher) matchMovie(ctx context.Context, entry model.Entry, candidate C
 	if err != nil {
 		return err
 	}
-	return m.catalog.AssociateMediaFile(ctx, item.ID, entry.ID, "video")
+	if err := m.catalog.AssociateMediaFile(ctx, item.ID, entry.ID, "video"); err != nil {
+		return err
+	}
+	return m.catalog.AssociateMediaLibraryFolder(ctx, entry, *item)
 }
 
 func (m *Matcher) matchEpisode(ctx context.Context, entry model.Entry, parsed ParsedName, candidate Candidate, confidence float64, metadata []byte) error {
@@ -241,7 +244,7 @@ func (m *Matcher) matchEpisode(ctx context.Context, entry model.Entry, parsed Pa
 			return err
 		}
 	}
-	return nil
+	return m.catalog.AssociateMediaLibraryFolder(ctx, entry, *series)
 }
 
 func bestCandidate(parsed ParsedName, candidates []Candidate) (Candidate, float64, bool) {

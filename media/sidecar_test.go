@@ -78,7 +78,7 @@ func TestSidecarAppliesLocalTVMetadataAndArtworkToFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	processor := NewSidecar(cat, registry)
-	if err := processor.Process(ctx, video); err != nil {
+	if err := processor.Process(ctx, nfo); err != nil {
 		t.Fatal(err)
 	}
 	got, err := cat.MediaItemForDirectory(ctx, show)
@@ -104,6 +104,124 @@ func TestSidecarAppliesLocalTVMetadataAndArtworkToFolder(t *testing.T) {
 	}
 	if NewCataloger(cat).Match(poster) {
 		t.Fatal("folder artwork must not be cataloged as a standalone photo")
+	}
+}
+
+func TestSidecarAppliesBasenameMovieArtworkAndReplacesStaleFolderMatch(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	files := map[string]string{
+		"Film/Film.2024.nfo":        `<movie><title>正确电影标题</title><year>2024</year></movie>`,
+		"Film/Film.2024-poster.jpg": "poster",
+		"Film/Film.2024-fanart.jpg": "backdrop",
+	}
+	for name, contents := range files {
+		filename := filepath.Join(rootPath, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filename, []byte(contents), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	cat := catalog.New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	generation, _ := cat.BeginScan(ctx, "disk")
+	root, _ := cat.EnsureRoot(ctx, "disk", generation)
+	folder := insertSidecarEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &root.ID, Name: "Film", Path: "Film", Type: model.EntryDirectory})
+	nfo := insertSidecarEntry(t, cat, generation, sidecarFileEntry(t, rootPath, "disk", folder.ID, "Film/Film.2024.nfo"))
+	poster := insertSidecarEntry(t, cat, generation, sidecarFileEntry(t, rootPath, "disk", folder.ID, "Film/Film.2024-poster.jpg"))
+	backdrop := insertSidecarEntry(t, cat, generation, sidecarFileEntry(t, rootPath, "disk", folder.ID, "Film/Film.2024-fanart.jpg"))
+	stale, err := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "movie", Title: "错误旧匹配", ExternalID: "entry:stale", MatchSource: "filename"})
+	if err != nil || cat.AssociateMediaFile(ctx, stale.ID, folder.ID, "folder") != nil {
+		t.Fatalf("create stale folder match: %v", err)
+	}
+	local, _ := storage.NewLocal(rootPath)
+	registry := storage.NewRegistry()
+	_ = registry.Add("disk", local)
+	processor := NewSidecar(cat, registry)
+	if err := processor.Process(ctx, poster); err != nil {
+		t.Fatal(err)
+	}
+	if err := processor.Process(ctx, nfo); err != nil {
+		t.Fatal(err)
+	}
+	got, err := cat.MediaItemForDirectory(ctx, folder)
+	if err != nil || got.Title != "正确电影标题" || got.PrimaryEntryID != poster.ID {
+		t.Fatalf("folder media = %#v, %v", got, err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(got.Metadata, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata["localPosterEntryId"] != poster.ID || metadata["localBackdropEntryId"] != backdrop.ID {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+	var folderLinks int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM media_item_files WHERE entry_id=? AND role='folder'`, folder.ID).Scan(&folderLinks); err != nil || folderLinks != 1 {
+		t.Fatalf("folder links = %d, %v", folderLinks, err)
+	}
+}
+
+func TestSidecarReconcilesArtworkWhenPosterJobRunsBeforeVideo(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	for name, contents := range map[string]string{
+		"Movies/Arrival/folder.jpg":       "poster",
+		"Movies/Arrival/Arrival.2016.mkv": "video",
+	} {
+		filename := filepath.Join(rootPath, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filename, []byte(contents), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	cat := catalog.New(db)
+	_ = cat.RegisterStorage(ctx, "disk", "Disk", "local")
+	_ = cat.RegisterLibrary(ctx, model.Library{ID: "movies", Name: "Movies", Type: "movies", Sources: []model.LibrarySource{{StorageID: "disk", Path: "Movies"}}})
+	generation, _ := cat.BeginScan(ctx, "disk")
+	root, _ := cat.EnsureRoot(ctx, "disk", generation)
+	library := insertSidecarEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &root.ID, Name: "Movies", Path: "Movies", Type: model.EntryDirectory})
+	folder := insertSidecarEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &library.ID, Name: "Arrival", Path: "Movies/Arrival", Type: model.EntryDirectory})
+	poster := insertSidecarEntry(t, cat, generation, sidecarFileEntry(t, rootPath, "disk", folder.ID, "Movies/Arrival/folder.jpg"))
+	video := insertSidecarEntry(t, cat, generation, sidecarFileEntry(t, rootPath, "disk", folder.ID, "Movies/Arrival/Arrival.2016.mkv"))
+	local, _ := storage.NewLocal(rootPath)
+	registry := storage.NewRegistry()
+	_ = registry.Add("disk", local)
+	sidecar := NewSidecar(cat, registry)
+	if err := sidecar.Process(ctx, poster); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.UpsertMediaFile(ctx, model.MediaFile{EntryID: video.ID, Kind: "video"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCataloger(cat).Process(ctx, video); err != nil {
+		t.Fatal(err)
+	}
+	if err := sidecar.Process(ctx, video); err != nil {
+		t.Fatal(err)
+	}
+	got, err := cat.MediaItemForEntry(ctx, folder.ID, "folder")
+	if err != nil || got.Title != "Arrival" {
+		t.Fatalf("folder media = %#v, %v", got, err)
+	}
+	summaries, err := cat.MediaSummariesForEntries(ctx, []string{folder.ID})
+	if err != nil || summaries[folder.ID].PrimaryEntryID != poster.ID {
+		t.Fatalf("folder summary = %#v, %v", summaries[folder.ID], err)
 	}
 }
 

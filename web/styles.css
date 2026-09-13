@@ -228,6 +228,12 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .name-cell > i { width: 2.25rem; height: 2.25rem; display: grid; place-items: center; flex: none; border-radius: 0.55rem; font-style: normal; }
 .name-cell > i.folder { color: var(--folder-text); background: var(--folder-bg); }
 .name-cell > i.document { color: var(--document-text); background: var(--document-bg); }
+.list-thumbnail { position: relative; width: 2.5rem; height: 2.5rem; display: grid; place-items: center; flex: none; overflow: hidden; border-radius: 0.55rem; color: var(--document-text); background: var(--document-bg); }
+.list-thumbnail img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.list-thumbnail i { display: none; font-style: normal; }
+.list-thumbnail.pending img { opacity: 0; }
+.list-thumbnail.pending i, .list-thumbnail.failed i { display: grid; }
+.list-thumbnail.failed img { display: none; }
 .name-cell > span { min-width: 0; display: grid; gap: 0.18rem; }
 .name-cell strong { overflow: hidden; font-size: 0.9rem; font-weight: 570; text-overflow: ellipsis; white-space: nowrap; }
 .name-cell small { color: var(--muted-2); font-size: 0.7rem; }

@@ -77,3 +77,31 @@ func TestPosterDownloadsBoundedArtifact(t *testing.T) {
 		t.Fatal("unsafe artifact path accepted")
 	}
 }
+
+func TestPosterDownloadsSeriesWithoutPlayableFile(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	metadata, _ := json.Marshal(Candidate{ID: "2", Type: "tv", Title: "Series", PosterPath: "/series.jpg"})
+	item, err := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "series", Title: "Series", ExternalID: "tmdb:2", Metadata: metadata})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write([]byte("series-poster"))
+	}))
+	defer server.Close()
+	poster := NewPoster(cat, t.TempDir(), server.Client())
+	poster.baseURL = server.URL
+	if err := poster.ProcessMedia(ctx, *item); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.ArtifactForMedia(ctx, item.ID, "poster", "w500"); err != nil {
+		t.Fatalf("series poster was not stored: %v", err)
+	}
+}

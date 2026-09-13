@@ -92,6 +92,22 @@ func TestMobileToolbarKeepsViewSwitcherAndMovesThemeToSidebar(t *testing.T) {
 	}
 }
 
+func TestListAndGridBothRenderAvailableThumbnails(t *testing.T) {
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	body := response.Body.String()
+	for _, expected := range []string{"function ThumbnailImage({ item, compact = false })", "compact=${true}", "item.links.thumbnail"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("app.js does not contain shared list/grid thumbnail marker %q", expected)
+		}
+	}
+	response = httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/styles.css", nil))
+	if !strings.Contains(response.Body.String(), ".list-thumbnail") {
+		t.Fatal("styles.css does not include list thumbnail styling")
+	}
+}
+
 func TestSearchAssetsIncludeSearchAPIAndAccessibleControl(t *testing.T) {
 	response := httptest.NewRecorder()
 	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
@@ -164,7 +180,7 @@ func TestFileListAutomaticallyLoadsMoreWithButtonFallback(t *testing.T) {
 	response := httptest.NewRecorder()
 	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	body := response.Body.String()
-	for _, expected := range []string{"IntersectionObserver", "loadMoreSentinelRef", "加载更多"} {
+	for _, expected := range []string{"IntersectionObserver", "loadMoreSentinelRef", "加载更多", "requestID !== entryRequestRef.current"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("app.js does not contain %q", expected)
 		}
