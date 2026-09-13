@@ -53,6 +53,25 @@ func TestThemeAssetsIncludeLightModeAndPersistentToggle(t *testing.T) {
 	}
 }
 
+func TestMobileToolbarKeepsViewSwitcherAndMovesThemeToSidebar(t *testing.T) {
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	body := response.Body.String()
+	for _, expected := range []string{`class="sidebar-theme-toggle"`, `aria-label="显示方式"`, `aria-label="列表"`, `aria-label="缩略图"`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("app.js does not contain %q", expected)
+		}
+	}
+	if strings.Contains(body, `onClick=${refresh} aria-label="刷新"`) {
+		t.Fatal("top toolbar still contains the ambiguous refresh button")
+	}
+	response = httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/styles.css", nil))
+	if strings.Contains(response.Body.String(), `.view-switch { display: none; }`) {
+		t.Fatal("mobile CSS still hides the view switcher")
+	}
+}
+
 func TestSearchAssetsIncludeSearchAPIAndAccessibleControl(t *testing.T) {
 	response := httptest.NewRecorder()
 	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
@@ -110,10 +129,14 @@ func TestScanStatusUsesSingleGlobalActivityAndPhysicalDirectoryBrowsing(t *testi
 	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	body := response.Body.String()
 	for _, expected := range []string{"/system/status", "后台活动", "正在扫描文件", "activity-progress", "整体扫描进度", "个正在扫描 · 可浏览", "媒体增强"} {
-		if !strings.Contains(body, expected) { t.Fatalf("app.js does not contain %q", expected) }
+		if !strings.Contains(body, expected) {
+			t.Fatalf("app.js does not contain %q", expected)
+		}
 	}
 	for _, removed := range []string{"media catalog", "loadMediaLibrary", "browseMode === 'media'", "library-progress", "storageSubtitle"} {
-		if strings.Contains(body, removed) { t.Fatalf("app.js still contains separate media catalog marker %q", removed) }
+		if strings.Contains(body, removed) {
+			t.Fatalf("app.js still contains separate media catalog marker %q", removed)
+		}
 	}
 }
 
@@ -122,7 +145,9 @@ func TestFileListAutomaticallyLoadsMoreWithButtonFallback(t *testing.T) {
 	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
 	body := response.Body.String()
 	for _, expected := range []string{"IntersectionObserver", "loadMoreSentinelRef", "加载更多"} {
-		if !strings.Contains(body, expected) { t.Fatalf("app.js does not contain %q", expected) }
+		if !strings.Contains(body, expected) {
+			t.Fatalf("app.js does not contain %q", expected)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -18,7 +19,10 @@ import (
 
 var ErrWatchLimit = errors.New("filesystem watch limit reached")
 
-const defaultMaxWatches = 4096
+// fsnotify uses one kqueue descriptor per watched directory on macOS. Keep a
+// conservative budget for HTTP, SQLite and active file processing; the daily
+// reconciliation scan covers directories outside this hot set.
+const defaultMaxWatches = 128
 
 type Watcher struct {
 	catalog  *catalog.Catalog
@@ -235,6 +239,10 @@ func (w *Watcher) add(directory string) error {
 		return ErrWatchLimit
 	}
 	if err := w.watcher.Add(directory); err != nil {
+		if errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE) {
+			w.maxWatches = len(w.watched)
+			return ErrWatchLimit
+		}
 		return err
 	}
 	w.watched[directory] = true

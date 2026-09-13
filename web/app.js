@@ -903,7 +903,7 @@ function App() {
 
   const activeStorage = activeLibrary?.sources?.[0] ? storageByID[activeLibrary.sources[0].storageId] : null;
   const scanActive = activeStorage?.state === 'scanning';
-  const directoryActions = entry?.type === 'directory' && !searchTerm && html`<div class="head-meta"><span>${`${items.length}${cursor ? '+' : ''}`} 个项目</span><label class=${`scan-button upload-button ${uploading ? 'disabled' : ''}`}><${Icon} name="upload" size=${16}/>${uploading ? '正在上传…' : '上传'}<input type="file" multiple disabled=${uploading} onChange=${uploadFiles}/></label><button class="scan-button" onClick=${() => { setFolderName(''); setActionError(''); setCreateFolderOpen(true); }}><${Icon} name="plus" size=${16}/>新建文件夹</button><button class="scan-button" disabled=${scanActive} onClick=${rescan}><${Icon} name="refresh" size=${16}/>${scanActive ? '正在扫描…' : '重新扫描'}</button></div>`;
+  const directoryActions = entry?.type === 'directory' && !searchTerm && html`<div class="head-meta"><span>${`${items.length}${cursor ? '+' : ''}`} 个项目</span><label class=${`scan-button upload-button ${uploading ? 'disabled' : ''}`}><${Icon} name="upload" size=${16}/>${uploading ? '正在上传…' : '上传'}<input type="file" multiple disabled=${uploading} onChange=${uploadFiles}/></label><button class="scan-button" onClick=${() => { setFolderName(''); setActionError(''); setCreateFolderOpen(true); }}><${Icon} name="plus" size=${16}/>新建文件夹</button><button class="scan-button" disabled=${scanActive} onClick=${rescan} title="重新读取磁盘并更新目录"><${Icon} name="refresh" size=${16}/>${scanActive ? '正在扫描…' : '扫描存储'}</button></div>`;
 
   return html`<div class="app-shell">
     <div class=${`nav-scrim ${navOpen ? 'visible' : ''}`} onClick=${() => setNavOpen(false)}></div>
@@ -923,6 +923,10 @@ function App() {
         <span class="summary-icon"><${Icon} name="drive"/></span>
         <div><strong>${storages.length || '—'} 个存储</strong><span>${storageSummaryText(storages)}</span></div>
       </div>
+      <button class="sidebar-theme-toggle" onClick=${toggleTheme} aria-label=${theme === 'dark' ? '切换到亮色模式' : '切换到暗色模式'}>
+        <span class="summary-icon"><${Icon} name=${theme === 'dark' ? 'sun' : 'moon'}/></span>
+        <span><strong>外观</strong><small>${theme === 'dark' ? '暗色模式' : '亮色模式'}</small></span>
+      </button>
     </aside>
 
     <main class="main-panel">
@@ -940,11 +944,9 @@ function App() {
           ${searchTerm && html`<button type="button" onClick=${clearSearch} aria-label="清除搜索"><${Icon} name="x" size=${15}/></button>`}
         </form>
         <div class="top-actions">
-          <button class="icon-button" onClick=${toggleTheme} aria-label=${theme === 'dark' ? '切换到亮色模式' : '切换到暗色模式'} title=${theme === 'dark' ? '亮色模式' : '暗色模式'}><${Icon} name=${theme === 'dark' ? 'sun' : 'moon'}/></button>
-          <button class="icon-button" onClick=${refresh} aria-label="刷新"><${Icon} name="refresh"/></button>
           <div class="view-switch" role="group" aria-label="显示方式">
-            <button class=${view === 'list' ? 'active' : ''} onClick=${() => setViewMode('list')} aria-label="列表"><${Icon} name="list" size=${18}/></button>
-            <button class=${view === 'grid' ? 'active' : ''} onClick=${() => setViewMode('grid')} aria-label="网格"><${Icon} name="grid" size=${18}/></button>
+            <button class=${view === 'list' ? 'active' : ''} onClick=${() => setViewMode('list')} aria-label="列表" title="列表"><${Icon} name="list" size=${18}/></button>
+            <button class=${view === 'grid' ? 'active' : ''} onClick=${() => setViewMode('grid')} aria-label="缩略图" title="缩略图"><${Icon} name="grid" size=${18}/></button>
           </div>
         </div>
       </header>
