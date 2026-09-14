@@ -170,6 +170,36 @@ func TestSidecarAppliesBasenameMovieArtworkAndReplacesStaleFolderMatch(t *testin
 	}
 }
 
+func TestSidecarSelectsNFOThatMatchesDirectoryInsteadOfFilenameOrder(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	for name, contents := range map[string]string{
+		"The.Shawshank.Redemption/001.Shawshank.nfo":                 `<movie><title>Kill Bill: Vol. 1</title><year>2003</year></movie>`,
+		"The.Shawshank.Redemption/The.Shawshank.Redemption.1994.nfo": `<movie><title>The Shawshank Redemption</title><year>1994</year></movie>`,
+	} {
+		filename := filepath.Join(rootPath, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filename, []byte(contents), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	local, _ := storage.NewLocal(rootPath)
+	registry := storage.NewRegistry()
+	_ = registry.Add("disk", local)
+	processor := NewSidecar(nil, registry)
+	directory := model.Entry{StorageID: "disk", Name: "The.Shawshank.Redemption", Path: "The.Shawshank.Redemption", Type: model.EntryDirectory}
+	candidates := []model.Entry{
+		{StorageID: "disk", Name: "001.Shawshank.nfo", Path: "The.Shawshank.Redemption/001.Shawshank.nfo", Type: model.EntryFile, Extension: "nfo"},
+		{StorageID: "disk", Name: "The.Shawshank.Redemption.1994.nfo", Path: "The.Shawshank.Redemption/The.Shawshank.Redemption.1994.nfo", Type: model.EntryFile, Extension: "nfo"},
+	}
+	selected, document, ambiguous, err := processor.selectDirectoryNFO(ctx, directory, nil, candidates)
+	if err != nil || ambiguous || document == nil || document.Title != "The Shawshank Redemption" || selected.Name != candidates[1].Name {
+		t.Fatalf("selected NFO = %#v, %#v, ambiguous=%v, err=%v", selected, document, ambiguous, err)
+	}
+}
+
 func TestSidecarReconcilesArtworkWhenPosterJobRunsBeforeVideo(t *testing.T) {
 	ctx := context.Background()
 	rootPath := t.TempDir()

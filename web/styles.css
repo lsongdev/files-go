@@ -221,10 +221,10 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .file-row { width: 100%; min-height: 4rem; display: grid; grid-template-columns: minmax(0, 1fr) 2.5rem; align-items: center; padding: 0 0.5rem 0 1rem; border-bottom: 1px solid var(--line-soft); }
 .file-row:last-child { border-bottom: 0; }
 .file-row:hover { background: var(--panel-hover); }
-.file-main { min-width: 0; height: 100%; display: grid; grid-template-columns: minmax(16rem, 1fr) 8rem 11rem; align-items: center; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.file-main { min-width: 0; height: 100%; display: grid; grid-template-columns: minmax(16rem, 1fr) 8rem 11rem; align-items: center; overflow: hidden; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
 .row-action, .card-action { width: 2.1rem; height: 2.1rem; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0.5rem; color: var(--muted-2); background: transparent; cursor: pointer; }
 .row-action:hover, .card-action:hover { color: var(--text); background: var(--panel-raised); }
-.name-cell { min-width: 0; display: flex; align-items: center; gap: 0.8rem; }
+.name-cell { min-width: 0; display: flex; align-items: center; gap: 0.8rem; overflow: hidden; }
 .name-cell > i { width: 2.25rem; height: 2.25rem; display: grid; place-items: center; flex: none; border-radius: 0.55rem; font-style: normal; }
 .name-cell > i.folder { color: var(--folder-text); background: var(--folder-bg); }
 .name-cell > i.document { color: var(--document-text); background: var(--document-bg); }
@@ -237,11 +237,11 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .list-thumbnail.pending img { opacity: 0; }
 .list-thumbnail.pending i, .list-thumbnail.failed i { display: grid; }
 .list-thumbnail.failed img { display: none; }
-.name-cell > span { min-width: 0; display: grid; gap: 0.18rem; }
+.name-cell > span { min-width: 0; display: grid; gap: 0.18rem; overflow: hidden; }
 .name-cell strong { overflow: hidden; font-size: 0.9rem; font-weight: 570; text-overflow: ellipsis; white-space: nowrap; }
-.name-cell small { color: var(--muted-2); font-size: 0.7rem; }
+.name-cell small { min-width: 0; overflow: hidden; color: var(--muted-2); font-size: 0.7rem; text-overflow: ellipsis; white-space: nowrap; }
 .name-cell em, .file-card em { margin-left: 0.4rem; padding: 0.18rem 0.4rem; border-radius: 1rem; color: var(--unavailable-text); background: var(--unavailable-bg); font-size: 0.68rem; font-style: normal; }
-.size-cell, .date-cell { color: var(--muted); font: 0.78rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.size-cell, .date-cell { color: var(--muted); font: 0.78rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
 .file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: 0.75rem; }
 .file-card { position: relative; min-width: 0; min-height: 9.5rem; overflow: hidden; border: 1px solid var(--line); border-radius: 0.8rem; background: var(--panel); }
 .file-card:hover { transform: translateY(-1px); border-color: var(--card-hover-border); background: var(--panel-hover); }
@@ -385,10 +385,10 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
   .plain-detail-head { align-items: flex-start; }
   .error-banner { margin: 0 1rem 1rem; }
   .table-head { display: none; }
-  .file-row { grid-template-columns: minmax(0, 1fr) 2.5rem; padding: 0 0.4rem 0 0.75rem; }
-  .file-main { grid-template-columns: minmax(0, 1fr) auto; }
+  .file-row { grid-template-columns: minmax(0, 1fr) 2.5rem; overflow: hidden; padding: 0 0.4rem 0 0.75rem; }
+  .file-main { grid-template-columns: minmax(0, 1fr) 4.5rem; column-gap: 0.35rem; }
   .date-cell { display: none; }
-  .size-cell { padding-left: 0.5rem; }
+  .size-cell { width: 4.5rem; overflow: hidden; padding-left: 0; text-align: right; text-overflow: ellipsis; }
   .file-grid { grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr)); }
   .preview-scrim { padding: 0; }
 }
