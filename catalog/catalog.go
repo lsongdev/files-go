@@ -987,6 +987,75 @@ func (c *Catalog) EntriesNeedingEpisodeMetadata(ctx context.Context, afterID str
 	return items, rows.Err()
 }
 
+// EntriesNeedingTVFolderMetadata selects one representative technical video
+// from each top-level TV folder that still has no usable poster. Folder-level
+// identity becomes visible promptly while episode detail enrichment continues
+// independently in the background.
+func (c *Catalog) EntriesNeedingTVFolderMetadata(ctx context.Context, limit int) ([]model.Entry, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := c.reader.QueryContext(ctx, `SELECT `+qualifiedEntryColumns+` FROM entries e
+		WHERE e.id IN (
+			SELECT (
+				SELECT video.id FROM entries video
+				JOIN media_files technical ON technical.entry_id=video.id AND technical.kind='video'
+				WHERE video.storage_id=folder.storage_id AND video.available=1 AND
+					substr(video.path,1,length(folder.path)+1)=folder.path || '/'
+				ORDER BY video.path LIMIT 1
+			)
+			FROM libraries library JOIN library_sources source ON source.library_id=library.id
+			JOIN entries library_root ON library_root.storage_id=source.storage_id AND
+				library_root.path=source.path AND library_root.available=1
+			JOIN entries folder ON folder.parent_id=library_root.id AND folder.type='directory' AND folder.available=1
+			LEFT JOIN media_item_files folder_link ON folder_link.entry_id=folder.id AND folder_link.role='folder'
+			LEFT JOIN media_items media ON media.id=folder_link.media_id
+			WHERE library.type='tv' AND COALESCE(
+				json_extract(media.metadata, '$.localPosterEntryId'),
+				json_extract(media.metadata, '$.posterPath'), '')=''
+		) ORDER BY e.id LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.Entry, 0, limit)
+	for rows.Next() {
+		entry, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, entry)
+	}
+	return items, rows.Err()
+}
+
+// EntriesAutoMatchedTV returns episode files attached to an unlocked automatic
+// provider series. Re-validating these against current parsing rules repairs
+// earlier false positives without touching manual or NFO-authoritative matches.
+func (c *Catalog) EntriesAutoMatchedTV(ctx context.Context, afterID string, limit int) ([]model.Entry, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := c.reader.QueryContext(ctx, `SELECT DISTINCT `+qualifiedEntryColumns+`
+		FROM entries e JOIN media_item_files association ON association.entry_id=e.id AND association.role='series'
+		JOIN media_items series ON series.id=association.media_id
+		WHERE e.available=1 AND e.id>? AND series.type='series' AND series.match_source='tmdb' AND series.match_locked=0
+		ORDER BY e.id LIMIT ?`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.Entry, 0, limit)
+	for rows.Next() {
+		entry, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, entry)
+	}
+	return items, rows.Err()
+}
+
 // EntriesNeedingMovieMetadata returns movie files that never advanced beyond
 // filename parsing, allowing provider matching added or repaired later to fill
 // titles and posters without a filesystem scan.

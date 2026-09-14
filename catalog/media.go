@@ -198,17 +198,81 @@ func (c *Catalog) AssociateMediaLibraryFolder(ctx context.Context, entry model.E
 	if err != nil {
 		return err
 	}
+	// A top-level folder may be a collection. Project media only when every
+	// cataloged video beneath it agrees on one canonical movie/series. As more
+	// children are processed, a disagreement also removes an earlier fallback
+	// projection, so results converge regardless of processing order.
+	role := "video"
+	if item.Type == "series" {
+		role = "series"
+	}
+	var identityCount, preferredCount int
+	var identityID, preferredID sql.NullString
+	err = c.reader.QueryRowContext(ctx, `SELECT COUNT(DISTINCT media.id), MIN(media.id),
+		COUNT(DISTINCT CASE WHEN media.match_source='tmdb' OR media.match_locked=1 THEN media.id END),
+		MIN(CASE WHEN media.match_source='tmdb' OR media.match_locked=1 THEN media.id END)
+		FROM entries descendant
+		JOIN media_item_files association ON association.entry_id=descendant.id AND association.role=?
+		JOIN media_items media ON media.id=association.media_id AND media.type=?
+		WHERE descendant.storage_id=? AND descendant.available=1 AND
+			(descendant.path=? OR substr(descendant.path,1,length(?)+1)=? || '/')`,
+		role, item.Type, folder.StorageID, folder.Path, folder.Path, folder.Path).
+		Scan(&identityCount, &identityID, &preferredCount, &preferredID)
+	if err != nil {
+		return err
+	}
+	if preferredCount > 0 {
+		identityCount, identityID = preferredCount, preferredID
+	}
 	if current, currentErr := c.MediaItemForEntry(ctx, folder.ID, "folder"); currentErr == nil {
-		if current.ID == item.ID || (current.MatchSource == "nfo" || current.MatchLocked) && item.MatchSource != "manual" && !item.MatchLocked {
+		if current.MatchSource == "nfo" || current.MatchLocked {
+			return nil
+		}
+		if identityCount != 1 || !identityID.Valid || identityID.String != item.ID {
+			return c.RemoveMediaFileRole(ctx, folder.ID, "folder")
+		}
+		if current.ID == item.ID {
 			return nil
 		}
 	} else if !errors.Is(currentErr, ErrNotFound) {
 		return currentErr
 	}
+	if identityCount != 1 || !identityID.Valid || identityID.String != item.ID {
+		return nil
+	}
 	if err := c.RemoveMediaFileRole(ctx, folder.ID, "folder"); err != nil {
 		return err
 	}
 	return c.AssociateMediaFile(ctx, item.ID, folder.ID, "folder")
+}
+
+// EntriesForMediaFolderReconciliation returns provider-matched videos whose
+// derived top-level folder association can be safely recalculated. It is
+// intentionally repeatable and therefore suitable for every startup.
+func (c *Catalog) EntriesForMediaFolderReconciliation(ctx context.Context, afterID string, limit int) ([]model.Entry, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := c.reader.QueryContext(ctx, `SELECT DISTINCT `+qualifiedEntryColumns+`
+		FROM entries e JOIN media_item_files association ON association.entry_id=e.id
+		JOIN media_items media ON media.id=association.media_id
+		WHERE e.available=1 AND e.id>? AND media.match_source='tmdb' AND
+			((media.type='movie' AND association.role='video') OR
+			 (media.type='series' AND association.role='series'))
+		ORDER BY e.id LIMIT ?`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]model.Entry, 0, limit)
+	for rows.Next() {
+		entry, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, entry)
+	}
+	return items, rows.Err()
 }
 
 func (c *Catalog) AssociateMediaFile(ctx context.Context, mediaID, entryID, role string) error {

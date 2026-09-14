@@ -52,6 +52,81 @@ func TestScanProgressPersistsAndInterruptedScanDoesNotNeedInitialScan(t *testing
 	}
 }
 
+func TestMediaFolderProjectionRequiresOneCanonicalIdentity(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := New(db)
+	_ = cat.RegisterStorage(ctx, "disk", "Disk", "local")
+	_ = cat.RegisterLibrary(ctx, model.Library{ID: "movies", Name: "Movies", Type: "movies", Sources: []model.LibrarySource{{StorageID: "disk", Path: "Movies"}}})
+	generation, _ := cat.BeginScan(ctx, "disk")
+	root, _ := cat.EnsureRoot(ctx, "disk", generation)
+	library := catalogInsertEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &root.ID, Name: "Movies", Path: "Movies", Type: model.EntryDirectory})
+	collection := catalogInsertEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &library.ID, Name: "Collection", Path: "Movies/Collection", Type: model.EntryDirectory})
+	partA := catalogInsertEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &collection.ID, Name: "A", Path: "Movies/Collection/A", Type: model.EntryDirectory})
+	partB := catalogInsertEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &collection.ID, Name: "B", Path: "Movies/Collection/B", Type: model.EntryDirectory})
+	videoA := catalogInsertEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &partA.ID, Name: "A.mkv", Path: "Movies/Collection/A/A.mkv", Type: model.EntryFile})
+	videoB := catalogInsertEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &partB.ID, Name: "B.mkv", Path: "Movies/Collection/B/B.mkv", Type: model.EntryFile})
+	movieA, _ := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "movie", Title: "A", ExternalID: "tmdb:1", MatchSource: "tmdb"})
+	movieB, _ := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "movie", Title: "B", ExternalID: "tmdb:2", MatchSource: "tmdb"})
+	_ = cat.AssociateMediaFile(ctx, movieA.ID, videoA.ID, "video")
+	if err := cat.AssociateMediaLibraryFolder(ctx, videoA, *movieA); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := cat.MediaItemForEntry(ctx, collection.ID, "folder"); err != nil || got.ID != movieA.ID {
+		t.Fatalf("initial projection = %#v, %v", got, err)
+	}
+	fallback, _ := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "movie", Title: "Filename fallback", ExternalID: "entry:fallback", MatchSource: "filename"})
+	_ = cat.AssociateMediaFile(ctx, fallback.ID, videoB.ID, "video")
+	if err := cat.AssociateMediaLibraryFolder(ctx, videoA, *movieA); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := cat.MediaItemForEntry(ctx, collection.ID, "folder"); err != nil || got.ID != movieA.ID {
+		t.Fatalf("fallback displaced provider identity = %#v, %v", got, err)
+	}
+	_ = cat.RemoveMediaFileRole(ctx, videoB.ID, "video")
+	_ = cat.AssociateMediaFile(ctx, movieB.ID, videoB.ID, "video")
+	if err := cat.AssociateMediaLibraryFolder(ctx, videoB, *movieB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.MediaItemForEntry(ctx, collection.ID, "folder"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("collection retained an arbitrary child projection: %v", err)
+	}
+}
+
+func TestEntriesNeedingTVFolderMetadataReturnsOneRepresentativePerFolder(t *testing.T) {
+	ctx := context.Background()
+	db, _ := database.Open(ctx, t.TempDir())
+	defer db.Close()
+	cat := New(db)
+	_ = cat.RegisterStorage(ctx, "disk", "Disk", "local")
+	_ = cat.RegisterLibrary(ctx, model.Library{ID: "tv", Name: "TV", Type: "tv", Sources: []model.LibrarySource{{StorageID: "disk", Path: "TV"}}})
+	generation, _ := cat.BeginScan(ctx, "disk")
+	root, _ := cat.EnsureRoot(ctx, "disk", generation)
+	library := catalogInsertEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &root.ID, Name: "TV", Path: "TV", Type: model.EntryDirectory})
+	show := catalogInsertEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &library.ID, Name: "Show", Path: "TV/Show", Type: model.EntryDirectory})
+	first := catalogInsertEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &show.ID, Name: "E001.mp4", Path: "TV/Show/E001.mp4", Type: model.EntryFile})
+	second := catalogInsertEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &show.ID, Name: "E002.mp4", Path: "TV/Show/E002.mp4", Type: model.EntryFile})
+	_ = cat.UpsertMediaFile(ctx, model.MediaFile{EntryID: first.ID, Kind: "video"})
+	_ = cat.UpsertMediaFile(ctx, model.MediaFile{EntryID: second.ID, Kind: "video"})
+	entries, err := cat.EntriesNeedingTVFolderMetadata(ctx, 100)
+	if err != nil || len(entries) != 1 || entries[0].ID != first.ID {
+		t.Fatalf("representatives = %#v, %v", entries, err)
+	}
+}
+
+func catalogInsertEntry(t *testing.T, cat *Catalog, generation int64, entry model.Entry) model.Entry {
+	t.Helper()
+	entries, err := cat.UpsertEntries(context.Background(), []model.Entry{entry}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entries[0]
+}
+
 func TestCanceledScanIsRecoveredAsInterrupted(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(ctx, t.TempDir())

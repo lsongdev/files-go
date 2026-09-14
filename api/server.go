@@ -1172,9 +1172,9 @@ func (s *Server) responsesFor(ctx context.Context, entries []model.Entry) ([]ent
 		if summary, ok := media[entry.ID]; ok {
 			copy := summary
 			result[index].Media = &copy
-			if entry.Type == model.EntryDirectory && summary.PrimaryEntryID != "" {
+			if summary.PrimaryEntryID != "" {
 				result[index].Links["thumbnail"] = "/api/v1/entries/" + summary.PrimaryEntryID + "/thumbnail?size=medium"
-			} else if entry.Type == model.EntryDirectory && summary.HasPoster {
+			} else if summary.HasPoster {
 				result[index].Links["thumbnail"] = "/api/v1/media/" + summary.ID + "/poster"
 			}
 		}

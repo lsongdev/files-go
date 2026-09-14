@@ -3162,6 +3162,24 @@ local NFO/artwork > locked/manual match > provider metadata > filename inference
 身份前，只有同级 `tvshow.nfo` 明确标识 Series 时才把 TV 图片绑定到 Series，避免季海报
 覆盖整部剧的主封面。
 
+### 83.2 展示图片一致性
+
+同一个 `Entry` 在列表、缩略图、目录 Header 和详情页上必须使用同一套增强图片决策，
+不能因为一个视图读取了文件缩略图、另一个视图读取了媒体海报而显示出不同封面。
+
+图片选择顺序为：
+
+```text
+同一 MediaItem 的本地 artwork-primary
+  > 同一 MediaItem 的 Provider poster
+  > Entry 自身的生成缩略图（如视频帧）
+  > 类型默认图标
+```
+
+该规则同时适用于文件和目录。已经关联 `MediaItem` 的视频文件不应因为自身存在视频帧
+缩略图就覆盖电影或剧集海报。`media_item_files` 是图片一致性的身份依据；各个 API 和
+前端视图不得各自重新推断一次。
+
 ---
 
 # 84. Frontend

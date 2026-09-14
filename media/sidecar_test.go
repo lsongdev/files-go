@@ -225,6 +225,48 @@ func TestSidecarReconcilesArtworkWhenPosterJobRunsBeforeVideo(t *testing.T) {
 	}
 }
 
+type nfoProvider struct{}
+
+func (nfoProvider) Search(context.Context, Query) ([]Candidate, error) { return nil, nil }
+func (nfoProvider) Fetch(_ context.Context, itemType, id, language string) (Candidate, error) {
+	year := 2020
+	return Candidate{ID: id, Type: itemType, Title: "Provider title", Year: &year, Overview: "Provider overview", PosterPath: "/provider.jpg"}, nil
+}
+
+func TestSidecarHydratesMissingNFOFieldsFromExactTMDBIdentity(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	filename := filepath.Join(rootPath, "Show", "tvshow.nfo")
+	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, []byte(`<tvshow><title>本地标题</title><uniqueid type="tmdb">123</uniqueid></tvshow>`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, _ := database.Open(ctx, t.TempDir())
+	t.Cleanup(func() { _ = db.Close() })
+	cat := catalog.New(db)
+	_ = cat.RegisterStorage(ctx, "disk", "Disk", "local")
+	generation, _ := cat.BeginScan(ctx, "disk")
+	root, _ := cat.EnsureRoot(ctx, "disk", generation)
+	show := insertSidecarEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &root.ID, Name: "Show", Path: "Show", Type: model.EntryDirectory})
+	nfo := insertSidecarEntry(t, cat, generation, sidecarFileEntry(t, rootPath, "disk", show.ID, "Show/tvshow.nfo"))
+	local, _ := storage.NewLocal(rootPath)
+	registry := storage.NewRegistry()
+	_ = registry.Add("disk", local)
+	if err := NewSidecarWithProvider(cat, registry, nfoProvider{}, "zh-CN").Process(ctx, nfo); err != nil {
+		t.Fatal(err)
+	}
+	got, err := cat.MediaItemForEntry(ctx, show.ID, "folder")
+	if err != nil || got.Title != "本地标题" || got.MatchSource != "nfo" {
+		t.Fatalf("media = %#v, %v", got, err)
+	}
+	var metadata Candidate
+	if err := json.Unmarshal(got.Metadata, &metadata); err != nil || metadata.PosterPath != "/provider.jpg" || metadata.Overview != "Provider overview" {
+		t.Fatalf("metadata = %#v, %v", metadata, err)
+	}
+}
+
 func insertSidecarEntry(t *testing.T, cat *catalog.Catalog, generation int64, entry model.Entry) model.Entry {
 	t.Helper()
 	items, err := cat.UpsertEntries(context.Background(), []model.Entry{entry}, generation)

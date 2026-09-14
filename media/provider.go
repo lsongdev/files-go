@@ -10,16 +10,17 @@ type Query struct {
 }
 
 type Candidate struct {
-	ID            string  `json:"id"`
-	Type          string  `json:"type"`
-	Title         string  `json:"title"`
-	OriginalTitle string  `json:"originalTitle,omitempty"`
-	Year          *int    `json:"year,omitempty"`
-	Overview      string  `json:"overview,omitempty"`
-	PosterPath    string  `json:"posterPath,omitempty"`
-	BackdropPath  string  `json:"backdropPath,omitempty"`
-	Popularity    float64 `json:"popularity,omitempty"`
-	VoteAverage   float64 `json:"voteAverage,omitempty"`
+	ID            string   `json:"id"`
+	Type          string   `json:"type"`
+	Title         string   `json:"title"`
+	OriginalTitle string   `json:"originalTitle,omitempty"`
+	Year          *int     `json:"year,omitempty"`
+	Overview      string   `json:"overview,omitempty"`
+	PosterPath    string   `json:"posterPath,omitempty"`
+	BackdropPath  string   `json:"backdropPath,omitempty"`
+	Popularity    float64  `json:"popularity,omitempty"`
+	VoteAverage   float64  `json:"voteAverage,omitempty"`
+	Aliases       []string `json:"aliases,omitempty"`
 }
 
 type MetadataProvider interface {
@@ -32,4 +33,10 @@ type MetadataProvider interface {
 // provider does not expose episode-level metadata or the request fails.
 type EpisodeMetadataProvider interface {
 	FetchEpisode(context.Context, string, int, int, string) (Candidate, error)
+}
+
+// AlternativeTitlesProvider is optional. It lets conservative matching use
+// official aliases without lowering the global confidence threshold.
+type AlternativeTitlesProvider interface {
+	FetchAlternativeTitles(context.Context, string, string) ([]string, error)
 }

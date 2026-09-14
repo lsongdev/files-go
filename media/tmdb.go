@@ -29,9 +29,37 @@ func (p *TMDB) Search(ctx context.Context, query Query) ([]Candidate, error) {
 	if query.Type != "movie" && query.Type != "tv" {
 		return nil, errors.New("TMDB search type must be movie or tv")
 	}
+	items, err := p.search(ctx, query, query.Language)
+	if err != nil {
+		return nil, err
+	}
+	// TMDB localizes title fields. Search once in English as well so an English
+	// filename can still match a Chinese/Russian/Korean localized result. Merge
+	// by provider ID and keep the configured-language metadata for display.
+	if query.Language != "" && !strings.EqualFold(query.Language, "en-US") {
+		if english, englishErr := p.search(ctx, query, "en-US"); englishErr == nil {
+			byID := make(map[string]int, len(items))
+			for index := range items {
+				byID[items[index].ID] = index
+			}
+			for _, candidate := range english {
+				if index, ok := byID[candidate.ID]; ok {
+					items[index].Aliases = appendUnique(items[index].Aliases, candidate.Title, candidate.OriginalTitle)
+					continue
+				}
+				candidate.Aliases = appendUnique(candidate.Aliases, candidate.Title, candidate.OriginalTitle)
+				byID[candidate.ID] = len(items)
+				items = append(items, candidate)
+			}
+		}
+	}
+	return items, nil
+}
+
+func (p *TMDB) search(ctx context.Context, query Query, language string) ([]Candidate, error) {
 	values := url.Values{"query": {query.Title}, "include_adult": {"false"}}
-	if query.Language != "" {
-		values.Set("language", query.Language)
+	if language != "" {
+		values.Set("language", language)
 	}
 	if query.Year != nil {
 		if query.Type == "movie" {
@@ -51,6 +79,20 @@ func (p *TMDB) Search(ctx context.Context, query Query) ([]Candidate, error) {
 		items = append(items, item.candidate(query.Type))
 	}
 	return items, nil
+}
+
+func appendUnique(values []string, additions ...string) []string {
+	seen := make(map[string]bool, len(values)+len(additions))
+	for _, value := range values {
+		seen[value] = true
+	}
+	for _, value := range additions {
+		if value = strings.TrimSpace(value); value != "" && !seen[value] {
+			values = append(values, value)
+			seen[value] = true
+		}
+	}
+	return values
 }
 
 func (p *TMDB) Fetch(ctx context.Context, itemType, id, language string) (Candidate, error) {
@@ -99,6 +141,34 @@ func (p *TMDB) FetchEpisode(ctx context.Context, seriesID string, season, episod
 		}
 	}
 	return result, nil
+}
+
+func (p *TMDB) FetchAlternativeTitles(ctx context.Context, itemType, id string) ([]string, error) {
+	if itemType != "movie" && itemType != "tv" {
+		return nil, errors.New("TMDB item type must be movie or tv")
+	}
+	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
+		return nil, errors.New("invalid TMDB ID")
+	}
+	var response struct {
+		Titles []struct {
+			Title string `json:"title"`
+		} `json:"titles"`
+		Results []struct {
+			Title string `json:"title"`
+		} `json:"results"`
+	}
+	if err := p.get(ctx, "/"+itemType+"/"+id+"/alternative_titles", url.Values{}, &response); err != nil {
+		return nil, err
+	}
+	aliases := make([]string, 0, len(response.Titles)+len(response.Results))
+	for _, item := range response.Titles {
+		aliases = appendUnique(aliases, item.Title)
+	}
+	for _, item := range response.Results {
+		aliases = appendUnique(aliases, item.Title)
+	}
+	return aliases, nil
 }
 
 func (p *TMDB) get(ctx context.Context, endpoint string, values url.Values, output any) error {

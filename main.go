@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -75,6 +73,7 @@ func main() {
 	idx := indexer.New(catalogDB, registry)
 	jobQueue := jobs.New(db, 2*time.Minute)
 	thumbnailer := processor.NewThumbnail(catalogDB, registry, cfg.CacheDir)
+	mediaCataloger := mediaengine.NewCataloger(catalogDB)
 	processors := []processor.Processor{
 		processor.NewImageMetadata(catalogDB, registry),
 		processor.NewFFProbe(catalogDB, registry, cfg.Processing.FFProbe, 30*time.Second),
@@ -84,12 +83,14 @@ func main() {
 		processor.NewVideoThumbnail(catalogDB, registry, thumbnailer, cfg.Processing.FFmpeg, 60*time.Second),
 		processor.NewPDFThumbnail(catalogDB, registry, thumbnailer, cfg.CacheDir, cfg.Processing.PDFToPPM, 60*time.Second),
 		processor.NewAudioArtwork(catalogDB, registry, thumbnailer, cfg.Processing.FFmpeg, 30*time.Second),
-		mediaengine.NewCataloger(catalogDB),
+		mediaCataloger,
 	}
 	var mediaMatcher *mediaengine.Matcher
 	var mediaPoster *mediaengine.Poster
+	var metadataProvider mediaengine.MetadataProvider
 	if cfg.Media.TMDB.Token != "" {
-		mediaMatcher = mediaengine.NewMatcher(catalogDB, mediaengine.NewTMDB(cfg.Media.TMDB.Token, nil), cfg.Media.TMDB.Language)
+		metadataProvider = mediaengine.NewTMDB(cfg.Media.TMDB.Token, nil)
+		mediaMatcher = mediaengine.NewMatcher(catalogDB, metadataProvider, cfg.Media.TMDB.Language)
 		mediaPoster = mediaengine.NewPoster(catalogDB, cfg.CacheDir, nil)
 		processors = append(processors,
 			mediaMatcher,
@@ -98,16 +99,11 @@ func main() {
 	}
 	// Local NFO and artwork are applied last so curated sidecars override
 	// filename and online-provider metadata for the containing media folder.
-	sidecarProcessor := mediaengine.NewSidecar(catalogDB, registry)
+	sidecarProcessor := mediaengine.NewSidecarWithProvider(catalogDB, registry, metadataProvider, cfg.Media.TMDB.Language)
 	processors = append(processors, sidecarProcessor)
 	processing := processor.New(catalogDB, jobQueue, processors...)
 	idx.SetEntrySink(processing)
-	runMediaBackfills := func() error {
-		const maintenanceName = "media-folders-v3"
-		completed, err := catalogDB.MaintenanceCompleted(ctx, maintenanceName)
-		if err != nil || completed {
-			return err
-		}
+	runMediaReconciliation := func() error {
 		refreshMovieMetadata := func() error {
 			if mediaMatcher == nil {
 				return nil
@@ -122,16 +118,20 @@ func main() {
 					return nil
 				}
 				for _, entry := range entries {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
 					if err := mediaMatcher.Process(ctx, entry); err != nil {
-						return fmt.Errorf("match movie %s: %w", entry.ID, err)
+						log.Printf("match movie %s: %v", entry.ID, err)
+						continue
 					}
 					if mediaPoster != nil {
 						if item, err := catalogDB.MediaItemForEntry(ctx, entry.ID, "video"); err == nil {
 							if err := catalogDB.AssociateMediaLibraryFolder(ctx, entry, *item); err != nil {
-								return err
+								log.Printf("reconcile movie folder %s: %v", entry.ID, err)
 							}
 							if err := mediaPoster.ProcessMedia(ctx, *item); err != nil {
-								return fmt.Errorf("download movie poster %s: %w", entry.ID, err)
+								log.Printf("download movie poster %s: %v", entry.ID, err)
 							}
 						}
 					}
@@ -139,15 +139,57 @@ func main() {
 				afterID = entries[len(entries)-1].ID
 			}
 		}
-		previousCompleted, err := catalogDB.MaintenanceCompleted(ctx, "media-folders-v2")
-		if err != nil {
-			return err
-		}
-		if previousCompleted {
-			if err := refreshMovieMetadata(); err != nil {
+		refreshTVFolders := func() error {
+			if mediaMatcher == nil {
+				return nil
+			}
+			entries, err := catalogDB.EntriesNeedingTVFolderMetadata(ctx, 500)
+			if err != nil {
 				return err
 			}
-			return catalogDB.CompleteMaintenance(ctx, maintenanceName)
+			for _, entry := range entries {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if err := mediaCataloger.Process(ctx, entry); err != nil {
+					log.Printf("catalog representative TV video %s: %v", entry.ID, err)
+					continue
+				}
+				if err := mediaMatcher.Process(ctx, entry); err != nil {
+					log.Printf("match representative TV video %s: %v", entry.ID, err)
+					continue
+				}
+				if err := sidecarProcessor.Process(ctx, entry); err != nil {
+					log.Printf("reconcile representative TV folder %s: %v", entry.ID, err)
+				}
+			}
+			return nil
+		}
+		// Prioritize visible folder identity before the wider, lower-priority
+		// reconciliation batches.
+		if err := refreshTVFolders(); err != nil {
+			return err
+		}
+		if mediaMatcher != nil {
+			afterID := ""
+			for {
+				entries, err := catalogDB.EntriesAutoMatchedTV(ctx, afterID, 500)
+				if err != nil {
+					return err
+				}
+				if len(entries) == 0 {
+					break
+				}
+				for _, entry := range entries {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					if err := mediaMatcher.Process(ctx, entry); err != nil {
+						log.Printf("revalidate TV match %s: %v", entry.ID, err)
+					}
+				}
+				afterID = entries[len(entries)-1].ID
+			}
 		}
 		afterID := ""
 		for {
@@ -159,12 +201,8 @@ func main() {
 				break
 			}
 			for _, entry := range entries {
-				if strings.EqualFold(entry.Extension, "nfo") &&
-					!strings.EqualFold(entry.Name, "tvshow.nfo") && !strings.EqualFold(entry.Name, "movie.nfo") {
-					if err := processing.ReprocessEntryPriority(ctx, entry, 300); err != nil {
-						return err
-					}
-					continue
+				if err := ctx.Err(); err != nil {
+					return err
 				}
 				if err := sidecarProcessor.Process(ctx, entry); err != nil && ctx.Err() == nil {
 					log.Printf("media sidecar %s: %v", entry.ID, err)
@@ -191,8 +229,20 @@ func main() {
 					break
 				}
 				for _, entry := range entries {
-					if err := processing.ReprocessEntryPriority(ctx, entry, 100); err != nil {
+					if err := ctx.Err(); err != nil {
 						return err
+					}
+					if err := mediaCataloger.Process(ctx, entry); err != nil {
+						log.Printf("catalog media %s: %v", entry.ID, err)
+						continue
+					}
+					if backfill.kind == "video" && mediaMatcher != nil {
+						if err := mediaMatcher.Process(ctx, entry); err != nil {
+							log.Printf("match video %s: %v", entry.ID, err)
+						}
+						if err := sidecarProcessor.Process(ctx, entry); err != nil {
+							log.Printf("reconcile video sidecars %s: %v", entry.ID, err)
+						}
 					}
 				}
 				afterID = entries[len(entries)-1].ID
@@ -223,21 +273,58 @@ func main() {
 					break
 				}
 				for _, entry := range entries {
-					if err := processing.ReprocessEntryPriority(ctx, entry, 100); err != nil {
+					if err := ctx.Err(); err != nil {
 						return err
+					}
+					if err := mediaMatcher.Process(ctx, entry); err != nil {
+						log.Printf("enrich episode %s: %v", entry.ID, err)
 					}
 				}
 				afterID = entries[len(entries)-1].ID
 			}
 		}
-		return catalogDB.CompleteMaintenance(ctx, maintenanceName)
+		// Recompute derived folder links even when a video's provider match was
+		// created by an older version. This also removes collection projections
+		// once multiple distinct children are known.
+		afterID = ""
+		for {
+			entries, err := catalogDB.EntriesForMediaFolderReconciliation(ctx, afterID, 500)
+			if err != nil {
+				return err
+			}
+			if len(entries) == 0 {
+				break
+			}
+			for _, entry := range entries {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				item, itemErr := catalogDB.MediaItemForEntry(ctx, entry.ID, "series")
+				if itemErr != nil {
+					item, itemErr = catalogDB.MediaItemForEntry(ctx, entry.ID, "video")
+				}
+				if itemErr != nil {
+					continue
+				}
+				if err := catalogDB.AssociateMediaLibraryFolder(ctx, entry, *item); err != nil {
+					log.Printf("reconcile media folder %s: %v", entry.ID, err)
+				}
+				if mediaPoster != nil && (item.Type == "movie" || item.Type == "series") {
+					if err := mediaPoster.ProcessMedia(ctx, *item); err != nil {
+						log.Printf("download media poster %s: %v", entry.ID, err)
+					}
+				}
+			}
+			afterID = entries[len(entries)-1].ID
+		}
+		return nil
 	}
 	workerPool := jobs.NewPool(jobQueue, cfg.Processing.Workers)
 	workerPool.Handle(processor.JobProcessEntry, processing.Handle)
 	workerPool.Start(ctx)
 	go func() {
-		if err := runMediaBackfills(); err != nil && ctx.Err() == nil {
-			log.Printf("media backfill: %v", err)
+		if err := runMediaReconciliation(); err != nil && ctx.Err() == nil {
+			log.Printf("media reconciliation: %v", err)
 		}
 	}()
 	for _, item := range cfg.Storages {
