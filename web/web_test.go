@@ -177,6 +177,9 @@ func TestScanStatusUsesSingleGlobalActivityAndPhysicalDirectoryBrowsing(t *testi
 			t.Fatalf("app.js still contains separate media catalog marker %q", removed)
 		}
 	}
+	if strings.Contains(body, "扫描存储") {
+		t.Fatal("directory header still exposes whole-storage scan")
+	}
 }
 
 func TestFileListAutomaticallyLoadsMoreWithButtonFallback(t *testing.T) {
