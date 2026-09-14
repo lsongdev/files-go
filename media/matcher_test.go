@@ -19,11 +19,68 @@ func TestBestCandidateUsesTitleAndYear(t *testing.T) {
 	}
 }
 
+func TestBestCandidateAllowsOneYearLocalizedReleaseDifference(t *testing.T) {
+	filenameYear, localizedYear := 1942, 1943
+	candidate, confidence, ok := bestCandidate(ParsedName{Title: "Casablanca", Year: &filenameYear}, []Candidate{{ID: "289", Title: "卡萨布兰卡", OriginalTitle: "Casablanca", Year: &localizedYear}})
+	if !ok || candidate.ID != "289" || confidence < .8 {
+		t.Fatalf("candidate = %#v, confidence=%f, ok=%v", candidate, confidence, ok)
+	}
+}
+
 func TestBestCandidateMatchesLocalizedResultByOriginalTitle(t *testing.T) {
 	year := 2014
 	candidate, confidence, ok := bestCandidate(ParsedName{Title: "Interstellar", Year: &year}, []Candidate{{ID: "157336", Title: "星际穿越", OriginalTitle: "Interstellar", Year: &year}})
 	if !ok || candidate.ID != "157336" || confidence < .9 {
 		t.Fatalf("candidate = %#v, %f, %v", candidate, confidence, ok)
+	}
+}
+
+func TestBestCandidateMatchesProviderAliasWithoutLoweringThreshold(t *testing.T) {
+	year := 2021
+	candidate, confidence, ok := bestCandidate(ParsedName{Title: "Squid Game", Year: &year}, []Candidate{{ID: "93405", Title: "鱿鱼游戏", OriginalTitle: "오징어 게임", Aliases: []string{"Squid Game"}, Year: &year}})
+	if !ok || candidate.ID != "93405" || confidence < 1 {
+		t.Fatalf("candidate = %#v, %f, %v", candidate, confidence, ok)
+	}
+}
+
+type fallbackAliasProvider struct{ queries []string }
+
+func (p *fallbackAliasProvider) Search(_ context.Context, query Query) ([]Candidate, error) {
+	p.queries = append(p.queries, query.Title)
+	if query.Title == "Maisy" {
+		return []Candidate{{ID: "44095", Type: "tv", Title: "小鼠波波", OriginalTitle: "Maisy"}}, nil
+	}
+	return nil, nil
+}
+func (*fallbackAliasProvider) Fetch(context.Context, string, string, string) (Candidate, error) {
+	return Candidate{}, nil
+}
+func (*fallbackAliasProvider) FetchAlternativeTitles(context.Context, string, string) ([]string, error) {
+	return []string{"Maisy Mouse"}, nil
+}
+
+func TestMatcherBroadensZeroResultSearchButStillRequiresExactAlias(t *testing.T) {
+	provider := &fallbackAliasProvider{}
+	matcher := NewMatcher(nil, provider, "zh-CN")
+	parsed := ParsedName{Title: "Maisy Mouse"}
+	candidates, err := matcher.searchCandidates(context.Background(), "tv", parsed)
+	if err != nil || len(provider.queries) != 2 || provider.queries[0] != "Maisy Mouse" || provider.queries[1] != "Maisy" {
+		t.Fatalf("queries = %#v, candidates=%#v, err=%v", provider.queries, candidates, err)
+	}
+	aliases, _ := provider.FetchAlternativeTitles(context.Background(), "tv", candidates[0].ID)
+	candidates[0].Aliases = aliases
+	_, confidence, ok := bestCandidate(parsed, candidates)
+	if !ok || confidence < matcher.threshold {
+		t.Fatalf("confidence = %f, ok=%v", confidence, ok)
+	}
+}
+
+func TestEpisodeTitleHintExtractsDescriptor(t *testing.T) {
+	if got := episodeTitleHint("E001.Farm.mp4"); got != "Farm" {
+		t.Fatalf("episode hint = %q", got)
+	}
+	if got := episodeTitleHint("Show.S01E02.Second.Part.1080p.mkv"); got != "Second Part" {
+		t.Fatalf("standard episode hint = %q", got)
 	}
 }
 

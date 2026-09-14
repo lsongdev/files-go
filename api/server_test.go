@@ -38,7 +38,7 @@ func (apiMetadataProvider) Search(_ context.Context, query mediaengine.Query) ([
 
 func (apiMetadataProvider) Fetch(_ context.Context, itemType, id, _ string) (mediaengine.Candidate, error) {
 	year := 2014
-	return mediaengine.Candidate{ID: id, Type: itemType, Title: "Interstellar", Year: &year}, nil
+	return mediaengine.Candidate{ID: id, Type: itemType, Title: "Interstellar", Year: &year, PosterPath: "/poster.jpg"}, nil
 }
 
 func TestManualMediaCandidateAPI(t *testing.T) {
@@ -82,6 +82,9 @@ func TestManualMediaCandidateAPI(t *testing.T) {
 	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/search?q=Interstellar", nil))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"media":{"id":`) || !strings.Contains(response.Body.String(), `"title":"Interstellar"`) {
 		t.Fatalf("entry media summary = %d %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"thumbnail":"/api/v1/media/`) || strings.Contains(response.Body.String(), `/thumbnail?size=medium`) {
+		t.Fatalf("matched file did not prefer its media poster: %s", response.Body.String())
 	}
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/entries/"+entries[0].ID+"/media-item", nil))

@@ -34,3 +34,21 @@ func TestParsedNameForEntryUsesSeriesDirectoryForNumberOnlyEpisode(t *testing.T)
 		t.Fatalf("non-TV name unexpectedly inferred from directory: %#v", nonTV)
 	}
 }
+
+func TestParsedNameForEntrySupportsCommonEpisodeOnlyConventions(t *testing.T) {
+	tests := []struct {
+		name, path, title string
+		season, episode   int
+	}{
+		{"E001.Farm.mp4", "TV/Maisy.Mouse/E001.Farm.mp4", "Maisy Mouse", 1, 1},
+		{"EP00 Introduction.mp4", "TV/Stranger.Talking.to.Jihadists/EP00 Introduction.mp4", "Stranger Talking to Jihadists", 1, 0},
+		{"[site]人民的名义.DVD版.01.HD1080p.mp4", "TV/In.the.Name.of.the.People/[site]人民的名义.DVD版.01.HD1080p.mp4", "人民的名义", 1, 1},
+		{"1.mp4", "TV/Zebra.English/S2/week1/1.mp4", "Zebra English", 2, 1},
+	}
+	for _, test := range tests {
+		parsed := ParsedNameForEntry(model.Entry{Name: test.name, Path: test.path}, true)
+		if parsed.Title != test.title || parsed.Season == nil || *parsed.Season != test.season || parsed.Episode == nil || *parsed.Episode != test.episode {
+			t.Errorf("%s = %#v", test.path, parsed)
+		}
+	}
+}

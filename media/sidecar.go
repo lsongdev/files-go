@@ -31,10 +31,16 @@ var errUnsupportedNFO = errors.New("unsupported NFO document")
 type Sidecar struct {
 	catalog  *catalog.Catalog
 	storages *storage.Registry
+	provider MetadataProvider
+	language string
 }
 
 func NewSidecar(catalog *catalog.Catalog, storages *storage.Registry) *Sidecar {
 	return &Sidecar{catalog: catalog, storages: storages}
+}
+
+func NewSidecarWithProvider(catalog *catalog.Catalog, storages *storage.Registry, provider MetadataProvider, language string) *Sidecar {
+	return &Sidecar{catalog: catalog, storages: storages, provider: provider, language: language}
 }
 
 func (p *Sidecar) Name() string { return "media_sidecar" }
@@ -188,6 +194,22 @@ func (p *Sidecar) applyDirectory(ctx context.Context, directory model.Entry) err
 		if item.Type != expected {
 			return nil
 		}
+		// A local NFO frequently contains only curated fields and a provider ID.
+		// Hydrate missing artwork/overview from that exact identity, then overlay
+		// existing/local metadata and finally the NFO fields themselves.
+		if tmdbID := document.providerIDs()["tmdb"]; tmdbID != "" && p.provider != nil && needsProviderHydration(metadata, *document) {
+			providerType := expected
+			if providerType == "series" {
+				providerType = "tv"
+			}
+			if candidate, fetchErr := p.provider.Fetch(ctx, providerType, tmdbID, p.language); fetchErr == nil {
+				encoded, _ := json.Marshal(candidate)
+				_ = json.Unmarshal(encoded, &metadata)
+				if item.Year == nil {
+					item.Year = candidate.Year
+				}
+			}
+		}
 		applyNFO(item, metadata, *document, nfoEntry.ID)
 		if err := p.catalog.AssociateMediaFile(ctx, item.ID, nfoEntry.ID, "metadata"); err != nil {
 			return err
@@ -225,6 +247,15 @@ func (p *Sidecar) applyDirectory(ctx context.Context, directory model.Entry) err
 		return err
 	}
 	return p.catalog.AssociateMediaFile(ctx, item.ID, directory.ID, "folder")
+}
+
+func needsProviderHydration(metadata map[string]any, document nfoDocument) bool {
+	poster, _ := metadata["posterPath"].(string)
+	localPoster, _ := metadata["localPosterEntryId"].(string)
+	overview, _ := metadata["overview"].(string)
+	hasNFOOverview := strings.TrimSpace(document.Plot) != "" || strings.TrimSpace(document.Outline) != ""
+	return strings.TrimSpace(poster) == "" && strings.TrimSpace(localPoster) == "" ||
+		strings.TrimSpace(overview) == "" && !hasNFOOverview
 }
 
 func companionArtwork(entries []model.Entry, nfo model.Entry, kind string) (model.Entry, bool) {
