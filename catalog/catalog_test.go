@@ -419,6 +419,51 @@ func TestEntriesMissingAudioArtworkOnlyReturnsTaggedAudioWithoutThumbnail(t *tes
 	}
 }
 
+func TestEntriesNeedingMovieMetadataIncludesFileUnderAuthoritativeFolder(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.RegisterLibrary(ctx, model.Library{ID: "movies", Name: "Movies", Type: "movies", Sources: []model.LibrarySource{{StorageID: "disk", Path: "Movies"}}}); err != nil {
+		t.Fatal(err)
+	}
+	generation, _ := cat.BeginScan(ctx, "disk")
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{
+		{StorageID: "disk", Name: "Movie", Path: "Movies/Movie", Type: model.EntryDirectory},
+	}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := cat.UpsertEntries(ctx, []model.Entry{
+		{StorageID: "disk", ParentID: &entries[0].ID, Name: "Movie.2020.mkv", Path: "Movies/Movie/Movie.2020.mkv", Type: model.EntryFile},
+	}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.UpsertMediaFile(ctx, model.MediaFile{EntryID: files[0].ID, Kind: "video"}); err != nil {
+		t.Fatal(err)
+	}
+	filenameItem, _ := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "movie", Title: "Movie", MatchSource: "filename"})
+	authoritativeItem, _ := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "movie", Title: "Movie", ExternalID: "tmdb:1", MatchSource: "nfo"})
+	if err := cat.AssociateMediaFile(ctx, filenameItem.ID, files[0].ID, "video"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.AssociateMediaFile(ctx, authoritativeItem.ID, entries[0].ID, "folder"); err != nil {
+		t.Fatal(err)
+	}
+
+	missing, err := cat.EntriesNeedingMovieMetadata(ctx, "", 100)
+	if err != nil || len(missing) != 1 || missing[0].ID != files[0].ID {
+		t.Fatalf("movie metadata backfill = %#v, %v", missing, err)
+	}
+}
+
 func TestEntriesNeedingEpisodeMetadataSkipsTMDBAndLockedEpisodes(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(ctx, t.TempDir())

@@ -1058,7 +1058,9 @@ func (c *Catalog) EntriesAutoMatchedTV(ctx context.Context, afterID string, limi
 
 // EntriesNeedingMovieMetadata returns movie files that never advanced beyond
 // filename parsing, allowing provider matching added or repaired later to fill
-// titles and posters without a filesystem scan.
+// titles and posters without a filesystem scan. The containing folder may
+// already point at a different, authoritative NFO/provider item; that is a
+// reason to reconcile the file, not a reason to exclude it.
 func (c *Catalog) EntriesNeedingMovieMetadata(ctx context.Context, afterID string, limit int) ([]model.Entry, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 500
@@ -1068,8 +1070,6 @@ func (c *Catalog) EntriesNeedingMovieMetadata(ctx context.Context, afterID strin
 		JOIN media_items media ON media.id=association.media_id
 		WHERE e.available=1 AND e.id>? AND media.type='movie' AND media.match_source='filename'
 			AND media.match_locked=0
-			AND EXISTS (SELECT 1 FROM media_item_files folder
-				WHERE folder.entry_id=e.parent_id AND folder.role='folder' AND folder.media_id=media.id)
 			AND NOT EXISTS (SELECT 1 FROM media_match_suppressions suppression WHERE suppression.entry_id=e.id)
 			AND EXISTS (SELECT 1 FROM library_sources source JOIN libraries library ON library.id=source.library_id
 				WHERE source.storage_id=e.storage_id AND library.type='movies' AND
