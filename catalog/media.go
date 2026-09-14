@@ -331,7 +331,7 @@ func (c *Catalog) MediaSummariesForEntries(ctx context.Context, entryIDs []strin
 			SELECT 1 FROM media_item_files art WHERE art.media_id=m.id AND art.role='artwork-primary'
 		) THEN 1 ELSE 0 END
 		FROM media_item_files mf JOIN media_items m ON m.id=mf.media_id
-		WHERE mf.entry_id IN (`+placeholders+`)
+		WHERE mf.entry_id IN (`+placeholders+`) AND mf.role NOT IN ('artwork-primary', 'artwork-backdrop', 'metadata')
 		ORDER BY mf.entry_id, CASE mf.role WHEN 'video' THEN 0 WHEN 'audio' THEN 1
 			WHEN 'photo' THEN 2 WHEN 'book' THEN 3 WHEN 'album' THEN 4
 			WHEN 'artist' THEN 5 WHEN 'season' THEN 6 WHEN 'series' THEN 7 ELSE 8 END,

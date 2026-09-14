@@ -3158,6 +3158,11 @@ local NFO/artwork > locked/manual match > provider metadata > filename inference
 主图和背景分别使用 `artwork-primary`、`artwork-backdrop`。因此列表卡片、目录 Header
 和媒体详情会消费同一个本地增强结果，而不会改变物理文件树。
 
+`artwork-primary`、`artwork-backdrop` 和 `metadata` 是辅助素材关系，不是这些
+`Entry` 自身的媒体身份。因此 `folder.jpg`、`backdrop.jpg` 和 `movie.nfo`
+在文件列表中仍显示自身文件名和类型；只有 `video`、`audio`、`book` 等
+语义内容关系，以及代表作品的 `folder` 关系，才可以覆盖条目的展示标题。
+
 电视剧季目录中的 `folder.jpg` 可能表示 Season 海报。在 Season 尚未建立独立目录 Header
 身份前，只有同级 `tvshow.nfo` 明确标识 Series 时才把 TV 图片绑定到 Series，避免季海报
 覆盖整部剧的主封面。

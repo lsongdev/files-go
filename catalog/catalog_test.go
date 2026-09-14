@@ -305,7 +305,11 @@ func TestMediaItemsAssociateFilesAndSupportManualUnmatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	entries, err := cat.UpsertEntries(ctx, []model.Entry{{StorageID: "disk", Name: "Interstellar.mkv", Path: "Interstellar.mkv", Type: model.EntryFile}}, generation)
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{
+		{StorageID: "disk", Name: "Interstellar.mkv", Path: "Interstellar.mkv", Type: model.EntryFile},
+		{StorageID: "disk", Name: "folder.jpg", Path: "folder.jpg", Type: model.EntryFile},
+		{StorageID: "disk", Name: "movie.nfo", Path: "movie.nfo", Type: model.EntryFile},
+	}, generation)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,18 +321,30 @@ func TestMediaItemsAssociateFilesAndSupportManualUnmatch(t *testing.T) {
 	if err := cat.AssociateMediaFile(ctx, item.ID, entries[0].ID, "video"); err != nil {
 		t.Fatal(err)
 	}
+	if err := cat.AssociateMediaFile(ctx, item.ID, entries[1].ID, "artwork-primary"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.AssociateMediaFile(ctx, item.ID, entries[2].ID, "metadata"); err != nil {
+		t.Fatal(err)
+	}
 	found, err := cat.MediaItemForEntry(ctx, entries[0].ID, "video")
 	if err != nil || found.ID != item.ID || !found.MatchLocked || found.Year == nil || *found.Year != year {
 		t.Fatalf("associated media item = %#v, %v", found, err)
 	}
 	loaded, err := cat.MediaItem(ctx, item.ID)
-	if err != nil || len(loaded.Files) != 1 || loaded.Files[0].EntryID != entries[0].ID {
+	if err != nil || len(loaded.Files) != 3 {
 		t.Fatalf("media files = %#v, %v", loaded, err)
 	}
-	summaries, err := cat.MediaSummariesForEntries(ctx, []string{entries[0].ID, "missing"})
+	summaries, err := cat.MediaSummariesForEntries(ctx, []string{entries[0].ID, entries[1].ID, entries[2].ID, "missing"})
 	summary, exists := summaries[entries[0].ID]
 	if err != nil || !exists || summary.ID != item.ID || summary.Title != "Interstellar" || summary.Year == nil || *summary.Year != year {
 		t.Fatalf("media summaries = %#v, %v", summaries, err)
+	}
+	if _, exists := summaries[entries[1].ID]; exists {
+		t.Fatalf("artwork entry exposed as a movie: %#v", summaries[entries[1].ID])
+	}
+	if _, exists := summaries[entries[2].ID]; exists {
+		t.Fatalf("metadata entry exposed as a movie: %#v", summaries[entries[2].ID])
 	}
 	if err := cat.UnmatchEntry(ctx, entries[0].ID); err != nil {
 		t.Fatal(err)

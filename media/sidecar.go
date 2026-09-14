@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -125,29 +126,30 @@ func (p *Sidecar) applyDirectory(ctx context.Context, directory model.Entry) err
 	}
 	var nfoEntry model.Entry
 	var document *nfoDocument
-	nfoCandidates := make([]model.Entry, 0)
+	explicitNFOs := make([]model.Entry, 0, 2)
 	for _, name := range []string{"tvshow.nfo", "movie.nfo"} {
 		if candidate, ok := byName[name]; ok {
-			nfoCandidates = append(nfoCandidates, candidate)
+			explicitNFOs = append(explicitNFOs, candidate)
 		}
 	}
+	nfoCandidates := make([]model.Entry, 0)
 	for _, candidate := range children {
 		if !strings.EqualFold(candidate.Extension, "nfo") || strings.EqualFold(candidate.Name, "tvshow.nfo") || strings.EqualFold(candidate.Name, "movie.nfo") {
 			continue
 		}
 		nfoCandidates = append(nfoCandidates, candidate)
 	}
-	for _, candidate := range nfoCandidates {
-		value, readErr := p.readNFO(ctx, candidate)
-		if readErr != nil {
-			if errors.Is(readErr, errUnsupportedNFO) {
-				continue
-			}
-			return readErr
-		}
-		nfoEntry = candidate
-		document = &value
-		break
+	selected, selectedDocument, ambiguous, err := p.selectDirectoryNFO(ctx, directory, explicitNFOs, nfoCandidates)
+	if err != nil {
+		return err
+	}
+	if ambiguous {
+		// A folder containing multiple unrelated movie sidecars is a physical
+		// collection. Never let filename ordering choose an arbitrary header.
+		return p.catalog.RemoveMediaFileRole(ctx, directory.ID, "folder")
+	}
+	if selectedDocument != nil {
+		nfoEntry, document = selected, selectedDocument
 	}
 	var item *model.MediaItem
 	if document != nil {
@@ -247,6 +249,71 @@ func (p *Sidecar) applyDirectory(ctx context.Context, directory model.Entry) err
 		return err
 	}
 	return p.catalog.AssociateMediaFile(ctx, item.ID, directory.ID, "folder")
+}
+
+type parsedDirectoryNFO struct {
+	entry    model.Entry
+	document nfoDocument
+}
+
+func (p *Sidecar) selectDirectoryNFO(ctx context.Context, directory model.Entry, explicit, candidates []model.Entry) (model.Entry, *nfoDocument, bool, error) {
+	read := func(entries []model.Entry) ([]parsedDirectoryNFO, error) {
+		result := make([]parsedDirectoryNFO, 0, len(entries))
+		for _, entry := range entries {
+			document, err := p.readNFO(ctx, entry)
+			if errors.Is(err, errUnsupportedNFO) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, parsedDirectoryNFO{entry: entry, document: document})
+		}
+		return result, nil
+	}
+	if parsed, err := read(explicit); err != nil {
+		return model.Entry{}, nil, false, err
+	} else if len(parsed) > 0 {
+		return parsed[0].entry, &parsed[0].document, false, nil
+	}
+	parsed, err := read(candidates)
+	if err != nil || len(parsed) == 0 {
+		return model.Entry{}, nil, false, err
+	}
+	if len(parsed) == 1 {
+		return parsed[0].entry, &parsed[0].document, false, nil
+	}
+	identities := make(map[string]struct{}, len(parsed))
+	for _, candidate := range parsed {
+		identities[nfoDocumentIdentity(candidate.document)] = struct{}{}
+	}
+	if len(identities) == 1 {
+		return parsed[0].entry, &parsed[0].document, false, nil
+	}
+	directoryTitle := ParseName(directory.Name).Title
+	bestIndex, bestScore, secondScore := -1, float64(0), float64(0)
+	for index, candidate := range parsed {
+		filenameTitle := ParseName(candidate.entry.Name).Title
+		score := math.Max(titleScore(directoryTitle, candidate.document.Title), titleScore(filenameTitle, candidate.document.Title))
+		if score > bestScore {
+			secondScore, bestScore, bestIndex = bestScore, score, index
+		} else if score > secondScore {
+			secondScore = score
+		}
+	}
+	if bestIndex >= 0 && bestScore >= .8 && bestScore-secondScore >= .1 {
+		return parsed[bestIndex].entry, &parsed[bestIndex].document, false, nil
+	}
+	return model.Entry{}, nil, true, nil
+}
+
+func nfoDocumentIdentity(document nfoDocument) string {
+	for _, provider := range []string{"tmdb", "imdb", "tvdb"} {
+		if value := document.providerIDs()[provider]; value != "" {
+			return provider + ":" + value
+		}
+	}
+	return document.XMLName.Local + ":" + normalizedTitle(document.Title) + ":" + strings.TrimSpace(document.Year)
 }
 
 func needsProviderHydration(metadata map[string]any, document nfoDocument) bool {
