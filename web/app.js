@@ -348,7 +348,6 @@ function App() {
   const entryRequestRef = useRef(0);
 
   const activeLibrary = useMemo(() => libraries.find((item) => item.id === activeLibraryID), [libraries, activeLibraryID]);
-  const storageByID = useMemo(() => Object.fromEntries(storages.map((item) => [item.id, item])), [storages]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -908,18 +907,6 @@ function App() {
     }
   };
 
-  const rescan = async () => {
-    const source = activeLibrary?.sources?.[0];
-    if (!source) return;
-    if (storageByID[source.storageId]?.state === 'scanning') return;
-    try {
-      await request(`${API}/storages/${encodeURIComponent(source.storageId)}/scan`, { method: 'POST' });
-      await loadNavigation();
-    } catch (reason) {
-      setError(reason.message || '无法开始扫描');
-    }
-  };
-
   const setViewMode = (mode) => {
     setView(mode);
     localStorage.setItem('files-go-view', mode);
@@ -931,9 +918,7 @@ function App() {
     localStorage.setItem('files-go-theme', next);
   };
 
-  const activeStorage = activeLibrary?.sources?.[0] ? storageByID[activeLibrary.sources[0].storageId] : null;
-  const scanActive = activeStorage?.state === 'scanning';
-  const directoryActions = entry?.type === 'directory' && !searchTerm && html`<div class="head-meta"><span>${`${items.length}${cursor ? '+' : ''}`} 个项目</span><label class=${`scan-button upload-button ${uploading ? 'disabled' : ''}`}><${Icon} name="upload" size=${16}/>${uploading ? '正在上传…' : '上传'}<input type="file" multiple disabled=${uploading} onChange=${uploadFiles}/></label><button class="scan-button" onClick=${() => { setFolderName(''); setActionError(''); setCreateFolderOpen(true); }}><${Icon} name="plus" size=${16}/>新建文件夹</button><button class="scan-button" disabled=${scanActive} onClick=${rescan} title="重新读取磁盘并更新目录"><${Icon} name="refresh" size=${16}/>${scanActive ? '正在扫描…' : '扫描存储'}</button></div>`;
+  const directoryActions = entry?.type === 'directory' && !searchTerm && html`<div class="head-meta"><span>${`${items.length}${cursor ? '+' : ''}`} 个项目</span><label class=${`scan-button upload-button ${uploading ? 'disabled' : ''}`}><${Icon} name="upload" size=${16}/>${uploading ? '正在上传…' : '上传'}<input type="file" multiple disabled=${uploading} onChange=${uploadFiles}/></label><button class="scan-button" onClick=${() => { setFolderName(''); setActionError(''); setCreateFolderOpen(true); }}><${Icon} name="plus" size=${16}/>新建文件夹</button></div>`;
 
   return html`<div class="app-shell">
     <div class=${`nav-scrim ${navOpen ? 'visible' : ''}`} onClick=${() => setNavOpen(false)}></div>
