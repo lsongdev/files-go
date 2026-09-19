@@ -14,6 +14,18 @@ type ParsedName struct {
 	Year    *int
 	Season  *int
 	Episode *int
+	Release ReleaseInfo
+}
+
+// ReleaseInfo keeps filename release tags separate from the title submitted
+// to TMDB. The recognizers are adapted from fileinfo-go's MediaInfo fields;
+// title and episode parsing retain this project's existing edge-case rules.
+type ReleaseInfo struct {
+	Source     string `json:"source,omitempty"`
+	Resolution string `json:"resolution,omitempty"`
+	VideoCodec string `json:"videoCodec,omitempty"`
+	AudioCodec string `json:"audioCodec,omitempty"`
+	Version    string `json:"version,omitempty"`
 }
 
 var (
@@ -28,7 +40,32 @@ var (
 	bracketPattern = regexp.MustCompile(`\[[^\]]*\]`)
 	spacePattern   = regexp.MustCompile(`\s+`)
 	releaseToken   = regexp.MustCompile(`(?i)\b(?:2160p|1080p|720p|576p|4k|uhd|bluray|blu-ray|web[ ._-]?dl|webrip|hdtv|dvdrip|remux|x26[45]|h[ ._-]?26[45]|hevc|av1|hdr10|hdr|dolby[ ._-]?vision|dts|aac|flac)\b`)
+	releaseSource  = regexp.MustCompile(`(?i)(?:^|[ ._-])(blu[ ._-]?ray|web[ ._-]?dl|webrip|hdtv|dvdrip|uhd)(?:$|[ ._-])`)
+	releaseSize    = regexp.MustCompile(`(?i)(?:^|[ ._-])(2160p|1080p|720p|576p|4k)(?:$|[ ._-])`)
+	releaseVideo   = regexp.MustCompile(`(?i)(?:^|[ ._-])(x264|x265|h[ ._-]?264|h[ ._-]?265|hevc|av1|vp9)(?:$|[ ._-])`)
+	releaseAudio   = regexp.MustCompile(`(?i)(?:^|[ ._-])(dts[ ._-]?hd|dts|ddp[ ._-]?5[ ._-]?1|ddp|ac3|aac|flac)(?:$|[ ._-])`)
+	releaseVersion = regexp.MustCompile(`(?i)(?:^|[ ._-])(remastered|extended[ ._-]?edition)(?:$|[ ._-])`)
 )
+
+func parseReleaseInfo(stem string) ReleaseInfo {
+	value := ReleaseInfo{}
+	if match := releaseSource.FindStringSubmatch(stem); len(match) > 1 {
+		value.Source = match[1]
+	}
+	if match := releaseSize.FindStringSubmatch(stem); len(match) > 1 {
+		value.Resolution = match[1]
+	}
+	if match := releaseVideo.FindStringSubmatch(stem); len(match) > 1 {
+		value.VideoCodec = match[1]
+	}
+	if match := releaseAudio.FindStringSubmatch(stem); len(match) > 1 {
+		value.AudioCodec = match[1]
+	}
+	if match := releaseVersion.FindStringSubmatch(stem); len(match) > 1 {
+		value.Version = match[1]
+	}
+	return value
+}
 
 // ParsedNameForEntry uses the containing series directory when an episode is
 // named only by its season/episode number, for example
@@ -127,9 +164,10 @@ func fallbackSeriesTitle(path string) string {
 
 func ParseName(filename string) ParsedName {
 	name := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
+	release := parseReleaseInfo(name)
 	name = bracketPattern.ReplaceAllString(name, " ")
 	name = strings.NewReplacer(".", " ", "_", " ").Replace(name)
-	result := ParsedName{}
+	result := ParsedName{Release: release}
 	if match := tvPattern.FindStringSubmatch(name); match != nil {
 		seasonText, episodeText := match[1], match[2]
 		if seasonText == "" {

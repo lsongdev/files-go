@@ -135,6 +135,24 @@ type MediaSummary struct {
 	HasPoster       bool    `json:"hasPoster,omitempty"`
 }
 
+// Media is the resolved, file-centric display enhancement. FileID may refer
+// to either a file or a directory; a missing row means no enhancement.
+type Media struct {
+	FileID      string          `json:"fileId"`
+	Kind        string          `json:"kind"`
+	Title       string          `json:"title"`
+	Icon        string          `json:"icon"`
+	Backdrop    string          `json:"backdrop"`
+	Year        *int            `json:"year,omitempty"`
+	Line1       string          `json:"line1"`
+	Line2       string          `json:"line2"`
+	Line3       string          `json:"line3"`
+	Data        json.RawMessage `json:"data,omitempty"`
+	Sources     json.RawMessage `json:"-"`
+	MatchLocked bool            `json:"matchLocked,omitempty"`
+	UpdatedAt   time.Time       `json:"updatedAt"`
+}
+
 type PlaybackState struct {
 	UserID     string     `json:"-"`
 	MediaID    string     `json:"mediaId"`
