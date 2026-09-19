@@ -47,7 +47,7 @@ func NewSidecarWithProvider(catalog *catalog.Catalog, storages *storage.Registry
 func (p *Sidecar) Name() string { return "media_sidecar" }
 
 func (p *Sidecar) Match(entry model.Entry) bool {
-	if entry.Type != model.EntryFile || strings.HasPrefix(entry.Name, "._") {
+	if entry.Type != model.EntryFile || strings.HasPrefix(entry.Name, "._") || strings.HasSuffix(strings.ToLower(entry.Name), ".d.ts") {
 		return false
 	}
 	if isFolderArtwork(entry.Name) || strings.EqualFold(entry.Extension, "nfo") {

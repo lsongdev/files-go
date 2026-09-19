@@ -15,7 +15,7 @@ import (
 )
 
 const JobProcessEntry = "process_entry"
-const pipelineVersion = 6
+const pipelineVersion = 7
 
 type Processor interface {
 	Name() string
@@ -23,20 +23,62 @@ type Processor interface {
 	Process(context.Context, model.Entry) error
 }
 
+// Plugin owns one media family's ordered enrichment steps. A file may match
+// more than one plugin (for example, a folder.jpg also matches sidecars).
+// Plugins run in registration order; steps within a plugin run in order.
+type Plugin interface {
+	Name() string
+	Match(model.Entry) bool
+	Steps() []Processor
+}
+
+type pipeline struct {
+	name  string
+	match func(model.Entry) bool
+	steps []Processor
+}
+
+func NewPlugin(name string, match func(model.Entry) bool, steps ...Processor) Plugin {
+	if name == "" || match == nil || len(steps) == 0 {
+		panic("enrichment plugin requires a name, matcher and steps")
+	}
+	for _, step := range steps {
+		if step == nil {
+			panic("enrichment plugin contains a nil step")
+		}
+	}
+	return &pipeline{name: name, match: match, steps: append([]Processor(nil), steps...)}
+}
+
+func (p *pipeline) Name() string                 { return p.name }
+func (p *pipeline) Match(entry model.Entry) bool { return p.match(entry) }
+func (p *pipeline) Steps() []Processor           { return append([]Processor(nil), p.steps...) }
+
 type Engine struct {
 	catalog     *catalog.Catalog
 	queue       *jobs.Queue
-	processors  []Processor
+	plugins     []registeredPlugin
 	fingerprint string
 }
 
-func New(catalog *catalog.Catalog, queue *jobs.Queue, processors ...Processor) *Engine {
-	names := make([]string, 0, len(processors))
-	for _, item := range processors {
-		names = append(names, item.Name())
+type registeredPlugin struct {
+	plugin Plugin
+	steps  []Processor
+}
+
+func New(catalog *catalog.Catalog, queue *jobs.Queue, plugins ...Plugin) *Engine {
+	names := make([]string, 0, len(plugins))
+	registered := make([]registeredPlugin, 0, len(plugins))
+	for _, plugin := range plugins {
+		steps := plugin.Steps()
+		registered = append(registered, registeredPlugin{plugin: plugin, steps: steps})
+		names = append(names, plugin.Name())
+		for _, step := range steps {
+			names = append(names, step.Name())
+		}
 	}
 	sum := sha256.Sum256([]byte(strings.Join(names, ",")))
-	return &Engine{catalog: catalog, queue: queue, processors: append([]Processor(nil), processors...), fingerprint: fmt.Sprintf("v%d-%x", pipelineVersion, sum[:4])}
+	return &Engine{catalog: catalog, queue: queue, plugins: registered, fingerprint: fmt.Sprintf("v%d-%x", pipelineVersion, sum[:4])}
 }
 
 type entryPayload struct {
@@ -56,8 +98,8 @@ func (e *Engine) EnqueueEntries(ctx context.Context, entries []model.Entry) erro
 }
 
 func (e *Engine) matches(entry model.Entry) bool {
-	for _, item := range e.processors {
-		if item.Match(entry) {
+	for _, plugin := range e.plugins {
+		if plugin.plugin.Match(entry) {
 			return true
 		}
 	}
@@ -105,12 +147,17 @@ func (e *Engine) Handle(ctx context.Context, job *jobs.Job) error {
 		return storage.ErrOffline
 	}
 	var failures []error
-	for _, item := range e.processors {
-		if !item.Match(*entry) {
+	for _, plugin := range e.plugins {
+		if !plugin.plugin.Match(*entry) {
 			continue
 		}
-		if err := item.Process(ctx, *entry); err != nil {
-			failures = append(failures, fmt.Errorf("processor %s: %w", item.Name(), err))
+		for _, step := range plugin.steps {
+			if !step.Match(*entry) {
+				continue
+			}
+			if err := step.Process(ctx, *entry); err != nil {
+				failures = append(failures, fmt.Errorf("plugin %s step %s: %w", plugin.plugin.Name(), step.Name(), err))
+			}
 		}
 	}
 	return errors.Join(failures...)
