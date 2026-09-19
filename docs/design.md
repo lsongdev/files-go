@@ -1,5 +1,9 @@
 # files-go NAS File Engine 设计文档
 
+> 媒体增强的数据模型和目录判定正在重新设计；新的目标方案见
+> [文件中心的媒体增强 v2](media-enrichment-v2.md)。本文既有媒体表结构描述
+> 仍用于说明当前实现，不能视为 v2 的最终表结构。
+
 Status: Draft
 Target: v1 architecture
 Language: Go
