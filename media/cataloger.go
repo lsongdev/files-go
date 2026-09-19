@@ -12,10 +12,29 @@ import (
 	"github.com/lsongdev/files-go/model"
 )
 
-type Cataloger struct{ catalog *catalog.Catalog }
+type Cataloger struct {
+	catalog *catalog.Catalog
+	kind    string
+}
 
 func NewCataloger(catalog *catalog.Catalog) *Cataloger { return &Cataloger{catalog: catalog} }
-func (p *Cataloger) Name() string                      { return "media_catalog" }
+
+// NewCatalogerForKind limits a plugin's catalog step to its own media kind.
+// The unrestricted constructor remains for targeted repair/reconciliation.
+func NewCatalogerForKind(catalog *catalog.Catalog, kind string) *Cataloger {
+	switch kind {
+	case "photo", "book", "audio", "video":
+		return &Cataloger{catalog: catalog, kind: kind}
+	default:
+		panic("unsupported media catalog kind: " + kind)
+	}
+}
+func (p *Cataloger) Name() string {
+	if p.kind != "" {
+		return "media_catalog_" + p.kind
+	}
+	return "media_catalog"
+}
 func (p *Cataloger) Match(entry model.Entry) bool {
 	if entry.Type != model.EntryFile || strings.HasPrefix(entry.Name, "._") || strings.HasSuffix(strings.ToLower(entry.Name), ".d.ts") {
 		return false
@@ -23,13 +42,23 @@ func (p *Cataloger) Match(entry model.Entry) bool {
 	if isFolderArtwork(entry.Name) {
 		return false
 	}
-	switch strings.ToLower(entry.Extension) {
-	case "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "wma", "aiff", "ape", "jpg", "jpeg", "png", "gif", "epub", "pdf",
-		"mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "wmv", "rmvb":
-		return true
-	default:
-		return false
+	extension := strings.ToLower(entry.Extension)
+	for kind, extensions := range map[string][]string{
+		"audio": {"mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "wma", "aiff", "ape"},
+		"photo": {"jpg", "jpeg", "png", "gif"},
+		"book":  {"epub", "pdf"},
+		"video": {"mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "wmv", "rmvb"},
+	} {
+		if p.kind != "" && p.kind != kind {
+			continue
+		}
+		for _, candidate := range extensions {
+			if extension == candidate {
+				return true
+			}
+		}
 	}
+	return false
 }
 
 func (p *Cataloger) Process(ctx context.Context, entry model.Entry) error {
@@ -39,6 +68,9 @@ func (p *Cataloger) Process(ctx context.Context, entry model.Entry) error {
 	}
 	if err != nil {
 		return err
+	}
+	if p.kind != "" && technical.Kind != p.kind {
+		return nil
 	}
 	if technical.Kind == "audio" {
 		return p.catalogAudio(ctx, entry, *technical)

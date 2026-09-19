@@ -11,6 +11,23 @@ import (
 	"github.com/lsongdev/files-go/model"
 )
 
+func TestCatalogerForKindMatchesOnlyItsMediaFamily(t *testing.T) {
+	for _, test := range []struct {
+		kind, extension string
+	}{
+		{"photo", "jpg"}, {"book", "epub"}, {"book", "pdf"},
+		{"audio", "flac"}, {"video", "mkv"},
+	} {
+		entry := model.Entry{Type: model.EntryFile, Name: "sample." + test.extension, Extension: test.extension}
+		for _, kind := range []string{"photo", "book", "audio", "video"} {
+			got := NewCatalogerForKind(nil, kind).Match(entry)
+			if got != (kind == test.kind) {
+				t.Errorf("kind %s, extension %s: match = %v", kind, test.extension, got)
+			}
+		}
+	}
+}
+
 func TestCatalogerCreatesLocalMovieAndTVFallbacks(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(ctx, t.TempDir())

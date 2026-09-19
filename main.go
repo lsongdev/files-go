@@ -15,6 +15,7 @@ import (
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/config"
 	"github.com/lsongdev/files-go/database"
+	"github.com/lsongdev/files-go/enrichment"
 	"github.com/lsongdev/files-go/indexer"
 	"github.com/lsongdev/files-go/jobs"
 	mediaengine "github.com/lsongdev/files-go/media"
@@ -74,17 +75,6 @@ func main() {
 	jobQueue := jobs.New(db, 2*time.Minute)
 	thumbnailer := processor.NewThumbnail(catalogDB, registry, cfg.CacheDir)
 	mediaCataloger := mediaengine.NewCataloger(catalogDB)
-	processors := []processor.Processor{
-		processor.NewImageMetadata(catalogDB, registry),
-		processor.NewFFProbe(catalogDB, registry, cfg.Processing.FFProbe, 30*time.Second),
-		processor.NewEPUBMetadata(catalogDB, registry),
-		processor.NewPDFMetadata(catalogDB, registry, cfg.Processing.PDFInfo, 30*time.Second),
-		thumbnailer,
-		processor.NewVideoThumbnail(catalogDB, registry, thumbnailer, cfg.Processing.FFmpeg, 60*time.Second),
-		processor.NewPDFThumbnail(catalogDB, registry, thumbnailer, cfg.CacheDir, cfg.Processing.PDFToPPM, 60*time.Second),
-		processor.NewAudioArtwork(catalogDB, registry, thumbnailer, cfg.Processing.FFmpeg, 30*time.Second),
-		mediaCataloger,
-	}
 	var mediaMatcher *mediaengine.Matcher
 	var mediaPoster *mediaengine.Poster
 	var metadataProvider mediaengine.MetadataProvider
@@ -92,16 +82,16 @@ func main() {
 		metadataProvider = mediaengine.NewTMDB(cfg.Media.TMDB.Token, nil)
 		mediaMatcher = mediaengine.NewMatcher(catalogDB, metadataProvider, cfg.Media.TMDB.Language)
 		mediaPoster = mediaengine.NewPoster(catalogDB, cfg.CacheDir, nil)
-		processors = append(processors,
-			mediaMatcher,
-			mediaPoster,
-		)
 	}
-	// Local NFO and artwork are applied last so curated sidecars override
-	// filename and online-provider metadata for the containing media folder.
 	sidecarProcessor := mediaengine.NewSidecarWithProvider(catalogDB, registry, metadataProvider, cfg.Media.TMDB.Language)
-	processors = append(processors, sidecarProcessor)
-	processing := processor.New(catalogDB, jobQueue, processors...)
+	processing := processor.New(catalogDB, jobQueue,
+		enrichment.Image(catalogDB, registry, thumbnailer),
+		enrichment.Ebook(catalogDB, registry, thumbnailer),
+		enrichment.Document(catalogDB, registry, thumbnailer, cfg.CacheDir, cfg.Processing.PDFInfo, cfg.Processing.PDFToPPM),
+		enrichment.Audio(catalogDB, registry, thumbnailer, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
+		enrichment.Video(catalogDB, registry, thumbnailer, mediaMatcher, mediaPoster, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
+		enrichment.Sidecar(sidecarProcessor),
+	)
 	idx.SetEntrySink(processing)
 	runMediaReconciliation := func() error {
 		refreshMovieMetadata := func() error {

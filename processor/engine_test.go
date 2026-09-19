@@ -3,6 +3,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,19 @@ type recordingProcessor struct {
 	matched bool
 	entries []string
 	err     error
+}
+
+type orderedProcessor struct {
+	name  string
+	calls *[]string
+	match bool
+}
+
+func (p orderedProcessor) Name() string           { return p.name }
+func (p orderedProcessor) Match(model.Entry) bool { return p.match }
+func (p orderedProcessor) Process(_ context.Context, _ model.Entry) error {
+	*p.calls = append(*p.calls, p.name)
+	return nil
 }
 
 func (p *recordingProcessor) Name() string           { return "recording" }
@@ -50,7 +64,7 @@ func TestEngineEnqueuesDeduplicatedFileJobsAndRunsMatchingProcessors(t *testing.
 	queue := jobs.New(db, time.Minute)
 	matched := &recordingProcessor{matched: true}
 	unmatched := &recordingProcessor{}
-	engine := New(cat, queue, matched, unmatched)
+	engine := New(cat, queue, NewPlugin("test", func(model.Entry) bool { return true }, matched, unmatched))
 	if err := engine.EnqueueEntries(ctx, entries); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +89,7 @@ func TestEngineEnqueuesDeduplicatedFileJobsAndRunsMatchingProcessors(t *testing.
 	}
 	failing := &recordingProcessor{matched: true, err: errors.New("thumbnail failed")}
 	after := &recordingProcessor{matched: true}
-	continued := New(cat, queue, failing, after)
+	continued := New(cat, queue, NewPlugin("failure", func(model.Entry) bool { return true }, failing, after))
 	if err := continued.ReprocessEntry(ctx, entries[0]); err != nil {
 		t.Fatal(err)
 	}
@@ -89,5 +103,48 @@ func TestEngineEnqueuesDeduplicatedFileJobsAndRunsMatchingProcessors(t *testing.
 	err = continued.Handle(ctx, job)
 	if err == nil || len(failing.entries) != 1 || len(after.entries) != 1 {
 		t.Fatalf("processor isolation = failing %v, after %v, err %v", failing.entries, after.entries, err)
+	}
+}
+
+func TestEngineRunsMatchingPluginsAndStepsInOrder(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := cat.BeginScan(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{{StorageID: "disk", Name: "folder.jpg", Path: "folder.jpg", Type: model.EntryFile, Extension: "jpg", ModifiedAt: time.Now().UTC()}}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	engine := New(cat, jobs.New(db, time.Minute),
+		NewPlugin("image", func(model.Entry) bool { return true },
+			orderedProcessor{name: "metadata", calls: &calls, match: true},
+			orderedProcessor{name: "skipped", calls: &calls},
+			orderedProcessor{name: "catalog", calls: &calls, match: true}),
+		NewPlugin("video", func(model.Entry) bool { return false }, orderedProcessor{name: "video", calls: &calls, match: true}),
+		NewPlugin("sidecar", func(model.Entry) bool { return true }, orderedProcessor{name: "sidecar", calls: &calls, match: true}),
+	)
+	if err := engine.EnqueueEntries(ctx, entries); err != nil {
+		t.Fatal(err)
+	}
+	job, err := engine.queue.Claim(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Handle(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(calls, ","), "metadata,catalog,sidecar"; got != want {
+		t.Fatalf("steps = %s, want %s", got, want)
 	}
 }

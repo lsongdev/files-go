@@ -1468,6 +1468,20 @@ enqueue ProcessEntry
 
 Worker 才执行 processor。
 
+媒体增强在 Worker 内按 `Plugin` 注册，而不是在入口平铺所有处理器：
+
+```text
+Entry → 类型匹配 → Image / Ebook / Document / Audio / Video → Sidecar
+                    (各插件内部按步骤顺序执行)       (最后覆盖)
+```
+
+插件声明名称、适用条目与有序 `Processor` 步骤。一个条目可以匹配多个插件；
+例如 `folder.jpg` 先由图片插件生成缩略图，再由侧车插件用于其所在目录，
+但不作为独立照片媒体关联。视频插件依次提取技术信息、截图、建立目录关联、
+匹配在线元数据和下载海报。电子书、PDF、音频和图片各自维护对应的步骤。
+各插件仍写入现有 `media_files`、`media_items` 和 `artifacts`，不产生第二套内容树。
+注册顺序和步骤名称参与任务指纹；调整管线后，下次索引发现条目时会用新指纹入队。
+
 ---
 
 # 33. Job Engine
