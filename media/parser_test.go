@@ -21,6 +21,19 @@ func TestParseMovieAndTVNames(t *testing.T) {
 	}
 }
 
+func TestParseNameSeparatesFileinfoReleaseTagsBeforeTMDB(t *testing.T) {
+	movie := ParseName("Harry.Potter.and.the.Deathly.Hallows.Part.II.2011.1080p.BluRay.x264.DTS-WiKi.mkv")
+	if movie.Title != "Harry Potter and the Deathly Hallows Part II" || movie.Year == nil || *movie.Year != 2011 ||
+		movie.Release.Source != "BluRay" || movie.Release.Resolution != "1080p" || movie.Release.VideoCodec != "x264" || movie.Release.AudioCodec != "DTS" {
+		t.Fatalf("fileinfo movie = %#v", movie)
+	}
+	tv := ParseName("The.Mandalorian.S01E05.1080p.WEB-DL.DDP5.1.H.265-NTb.mp4")
+	if tv.Title != "The Mandalorian" || tv.Season == nil || *tv.Season != 1 || tv.Episode == nil || *tv.Episode != 5 ||
+		tv.Release.Source != "WEB-DL" || tv.Release.Resolution != "1080p" || tv.Release.AudioCodec != "DDP5.1" || tv.Release.VideoCodec != "H.265" {
+		t.Fatalf("fileinfo TV = %#v", tv)
+	}
+}
+
 func TestParsedNameForEntryUsesSeriesDirectoryForNumberOnlyEpisode(t *testing.T) {
 	parsed := ParsedNameForEntry(model.Entry{
 		Name: "S01E03.mp4",
