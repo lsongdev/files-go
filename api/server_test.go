@@ -96,6 +96,54 @@ func TestManualMediaCandidateAPI(t *testing.T) {
 	}
 }
 
+func TestSidecarFileDetailDoesNotInheritMovieIdentity(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := cat.BeginScan(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{
+		{StorageID: "disk", Name: "Movie.mkv", Path: "Movie.mkv", Type: model.EntryFile},
+		{StorageID: "disk", Name: "folder.jpg", Path: "folder.jpg", Type: model.EntryFile},
+		{StorageID: "disk", Name: "movie.nfo", Path: "movie.nfo", Type: model.EntryFile},
+	}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "movie", Title: "Movie", MatchSource: "nfo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, role := range []string{"video", "artwork-primary", "metadata"} {
+		if err := cat.AssociateMediaFile(ctx, item.ID, entries[index].ID, role); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry := storage.NewRegistry()
+	server := New(ctx, cat, registry, indexer.New(cat, registry), log.Default(), t.TempDir())
+	for _, entry := range entries[1:] {
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+entry.ID+"/media-item?optional=1", nil))
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("%s inherited movie detail: %d %s", entry.Name, response.Code, response.Body.String())
+		}
+	}
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+entries[0].ID+"/media-item?optional=1", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"title":"Movie"`) {
+		t.Fatalf("video movie detail = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestSystemStatusReportsProcessingQueue(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(ctx, t.TempDir())

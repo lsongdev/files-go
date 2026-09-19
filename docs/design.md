@@ -3160,7 +3160,7 @@ local NFO/artwork > locked/manual match > provider metadata > filename inference
 
 `artwork-primary`、`artwork-backdrop` 和 `metadata` 是辅助素材关系，不是这些
 `Entry` 自身的媒体身份。因此 `folder.jpg`、`backdrop.jpg` 和 `movie.nfo`
-在文件列表中仍显示自身文件名和类型；只有 `video`、`audio`、`book` 等
+在文件列表和文件详情中仍显示自身文件名和类型；只有 `video`、`audio`、`book` 等
 语义内容关系，以及代表作品的 `folder` 关系，才可以覆盖条目的展示标题。
 
 电视剧季目录中的 `folder.jpg` 可能表示 Season 海报。在 Season 尚未建立独立目录 Header

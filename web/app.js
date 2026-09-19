@@ -405,8 +405,10 @@ function App() {
       if (sourceIndex >= 0) library = sourceMap.get(ancestors[sourceIndex].id);
     }
     if (sourceIndex < 0) sourceIndex = 0;
-    if (library) setActiveLibraryID(library.id);
-    return ancestors.slice(sourceIndex).map((item, index) => ({ ...item, label: index === 0 && library ? library.name : (item.name || '存储根目录') }));
+    return {
+      libraryID: library?.id,
+      items: ancestors.slice(sourceIndex).map((item, index) => ({ ...item, label: index === 0 && library ? library.name : (item.name || '存储根目录') })),
+    };
   }, []);
 
   const stopPlayback = useCallback(() => {
@@ -463,25 +465,32 @@ function App() {
           request(`${API}/entries/${encodeURIComponent(id)}/media-item?optional=1`).then((value) => value?.id ? value : null).catch(() => null),
           technicalRequest,
         ]);
+        if (requestID !== entryRequestRef.current) return false;
         setEntryMedia(media);
         setTechnicalMedia(technical);
         if (current.available && kind === 'text') {
           setDetailLoading(true);
           try {
             const response = await fetch(`${API}/entries/${encodeURIComponent(id)}/text`);
+            if (requestID !== entryRequestRef.current) return false;
             if (!response.ok) {
               const body = await response.json().catch(() => ({}));
               throw new Error(body.error?.message || `请求失败 (${response.status})`);
             }
-            setDetailText(await response.text());
+            const contents = await response.text();
+            if (requestID !== entryRequestRef.current) return false;
+            setDetailText(contents);
           } catch (reason) {
-            setDetailError(reason.message || '无法读取文本');
+            if (requestID === entryRequestRef.current) setDetailError(reason.message || '无法读取文本');
           } finally {
-            setDetailLoading(false);
+            if (requestID === entryRequestRef.current) setDetailLoading(false);
           }
         }
       }
-      setTrail(await buildTrail(current, libraryList, libraryID));
+      const nextTrail = await buildTrail(current, libraryList, libraryID);
+      if (requestID !== entryRequestRef.current) return false;
+      if (nextTrail.libraryID) setActiveLibraryID(nextTrail.libraryID);
+      setTrail(nextTrail.items);
       if (history) window.history.pushState({ entryID: id, libraryID }, '', `/files/${encodeURIComponent(id)}`);
       return true;
     } catch (reason) {
@@ -845,7 +854,7 @@ function App() {
       ]);
       setDestination(folder);
       setDestinationFolders((children.items || []).filter((item) => item.type === 'directory' && item.id !== excludedID));
-      setDestinationTrail(await buildTrail(folder, libraries, activeLibraryID));
+      setDestinationTrail((await buildTrail(folder, libraries, activeLibraryID)).items);
     } catch (reason) {
       setActionError(reason.message || '无法读取目标目录');
     } finally {

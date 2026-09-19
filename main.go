@@ -322,11 +322,6 @@ func main() {
 	workerPool := jobs.NewPool(jobQueue, cfg.Processing.Workers)
 	workerPool.Handle(processor.JobProcessEntry, processing.Handle)
 	workerPool.Start(ctx)
-	go func() {
-		if err := runMediaReconciliation(); err != nil && ctx.Err() == nil {
-			log.Printf("media reconciliation: %v", err)
-		}
-	}()
 	for _, item := range cfg.Storages {
 		var priority []string
 		for _, library := range cfg.Libraries {
@@ -338,6 +333,26 @@ func main() {
 		}
 		idx.SetPriority(item.ID, priority)
 	}
+	requestScan := func(storageID string) {
+		if idx.IsScanning(storageID) {
+			return
+		}
+		go func() {
+			if err := idx.Scan(ctx, storageID); err != nil && !errors.Is(err, indexer.ErrScanInProgress) && ctx.Err() == nil {
+				log.Printf("storage reconciliation %s: %v", storageID, err)
+			}
+		}()
+	}
+	for _, item := range cfg.Storages {
+		if err := probeStorageAvailability(ctx, catalogDB, registry, item.ID, requestScan); err != nil {
+			log.Printf("probe storage %s: %v", item.ID, err)
+		}
+	}
+	go func() {
+		if err := runMediaReconciliation(); err != nil && ctx.Err() == nil {
+			log.Printf("media reconciliation: %v", err)
+		}
+	}()
 	for _, item := range cfg.Storages {
 		storageID := item.ID
 		needsScan, err := catalogDB.NeedsInitialScan(ctx, storageID)
@@ -348,15 +363,14 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		if storageState.State == "offline" {
+			continue
+		}
 		resumeScan := storageState.State == "interrupted"
 		if !needsScan && !resumeScan {
 			continue
 		}
-		go func() {
-			if err := idx.Scan(ctx, storageID); err != nil && ctx.Err() == nil {
-				log.Printf("startup scan %s: %v", storageID, err)
-			}
-		}()
+		requestScan(storageID)
 	}
 	go func() {
 		filesystemWatcher, err := indexer.NewWatcher(catalogDB, registry, idx, log.Default())
@@ -373,17 +387,23 @@ func main() {
 		}
 	}()
 	go func() {
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
+		availability := time.NewTicker(time.Minute)
+		defer availability.Stop()
+		reconciliation := time.NewTicker(24 * time.Hour)
+		defer reconciliation.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-availability.C:
 				for _, item := range cfg.Storages {
-					if err := idx.Scan(ctx, item.ID); err != nil && !errors.Is(err, indexer.ErrScanInProgress) && ctx.Err() == nil {
-						log.Printf("scheduled reconciliation %s: %v", item.ID, err)
+					if err := probeStorageAvailability(ctx, catalogDB, registry, item.ID, requestScan); err != nil && ctx.Err() == nil {
+						log.Printf("probe storage %s: %v", item.ID, err)
 					}
+				}
+			case <-reconciliation.C:
+				for _, item := range cfg.Storages {
+					requestScan(item.ID)
 				}
 			}
 		}

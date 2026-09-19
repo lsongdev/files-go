@@ -470,7 +470,9 @@ func (c *Catalog) BeginScanSession(ctx context.Context, storageID string) (ScanS
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM scan_checkpoints WHERE storage_id=? AND generation=?`, storageID, generation).Scan(&checkpointCount); err != nil {
 		return ScanSession{}, err
 	}
-	resumed := state == "interrupted" && checkpointCount > 0
+	// A drive may disappear after an interrupted scan. Its checkpoints remain
+	// valid while the catalog marks the storage offline; resume when it returns.
+	resumed := (state == "interrupted" || state == "offline") && checkpointCount > 0
 	now := time.Now().UTC()
 	if resumed {
 		if _, err := tx.ExecContext(ctx, `UPDATE storages SET state='scanning', scan_updated_at=?, scan_error=NULL, updated_at=? WHERE id=?`, now, now, storageID); err != nil {

@@ -68,7 +68,7 @@ func (l *Local) resolve(path string, followFinalSymlink bool) (string, error) {
 	}
 	full := filepath.Join(l.root, clean)
 	check := full
-	if !followFinalSymlink {
+	if !followFinalSymlink && clean != "" {
 		check = filepath.Dir(full)
 	}
 	resolved, err := filepath.EvalSymlinks(check)
