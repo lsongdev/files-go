@@ -52,6 +52,36 @@ func TestScanProgressPersistsAndInterruptedScanDoesNotNeedInitialScan(t *testing
 	}
 }
 
+func TestScanResumesCheckpointsAfterStorageGoesOffline(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	session, err := cat.BeginScanSession(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.MarkScanDirectoryComplete(ctx, "disk", session.Generation, "Movies"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.UpdateScanProgress(ctx, "disk", 42, 35, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.FailScan(ctx, "disk", "offline", "mount missing"); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := cat.BeginScanSession(ctx, "disk")
+	if err != nil || !resumed.Resumed || resumed.Generation != session.Generation || resumed.Entries != 42 {
+		t.Fatalf("resumed session = %#v, %v", resumed, err)
+	}
+}
+
 func TestMediaFolderProjectionRequiresOneCanonicalIdentity(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(ctx, t.TempDir())
@@ -345,6 +375,14 @@ func TestMediaItemsAssociateFilesAndSupportManualUnmatch(t *testing.T) {
 	}
 	if _, exists := summaries[entries[2].ID]; exists {
 		t.Fatalf("metadata entry exposed as a movie: %#v", summaries[entries[2].ID])
+	}
+	for _, sidecar := range entries[1:] {
+		if _, err := cat.MediaItemForEntry(ctx, sidecar.ID, ""); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("sidecar %s has display media: %v", sidecar.Name, err)
+		}
+	}
+	if linked, err := cat.MediaItemForEntry(ctx, entries[1].ID, "artwork-primary"); err != nil || linked.ID != item.ID {
+		t.Fatalf("explicit artwork relation = %#v, %v", linked, err)
 	}
 	if err := cat.UnmatchEntry(ctx, entries[0].ID); err != nil {
 		t.Fatal(err)

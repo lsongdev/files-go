@@ -31,10 +31,10 @@ than a claim that every section is implemented.
 - capability-based direct play, remux, and single-profile HLS transcoding;
 - per-user resume state and a Continue Watching media shelf.
 
-Important design work that is still outstanding includes filesystem watchers
-and scheduled reconciliation, authentication/permissions/sharing, health and
-metrics endpoints, cache GC and supported SQLite backup tooling, mount identity
-verification, and optional extensions such as archive browsing, waveform
+Important design work that is still outstanding includes authentication,
+permissions and sharing, health and metrics endpoints, cache GC and supported
+SQLite backup tooling, mount identity verification beyond root availability,
+and optional extensions such as archive browsing, waveform
 generation, and non-local storage adapters.
 
 ## Configuration

@@ -301,6 +301,10 @@ func (c *Catalog) MediaItemForEntry(ctx context.Context, entryID, role string) (
 		args = append(args, role)
 		order = `m.match_locked DESC, CASE m.match_source WHEN 'tmdb' THEN 0 WHEN 'manual' THEN 1 ELSE 2 END,
 			mf.created_at DESC, m.id`
+	} else {
+		// Artwork and NFO files contribute to a media item, but are not
+		// themselves the movie/series shown in the file detail view.
+		where += " AND mf.role NOT IN ('artwork-primary', 'artwork-backdrop', 'metadata')"
 	}
 	item, err := scanMediaItem(c.reader.QueryRowContext(ctx, `SELECT m.id, m.type, m.title, m.sort_title,
 		m.year, m.parent_id, m.index_number, m.external_id, m.match_source, m.match_confidence,
