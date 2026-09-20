@@ -29,7 +29,7 @@ type MediaCandidate struct {
 // The ordering is deliberately shared by every plugin. Source payloads are
 // kept so removal of an NFO or manual override can reveal the next candidate.
 var mediaSourcePriority = []string{
-	"manual", "local_nfo", "local_artwork", "embedded", "tmdb", "legacy", "filename", "screenshot",
+	"manual", "local_nfo", "local_artwork", "embedded", "tmdb", "filename", "screenshot",
 }
 
 func validMediaSource(source string) bool {
@@ -43,36 +43,87 @@ func validMediaSource(source string) bool {
 
 func validMediaReference(ref string) bool {
 	return ref == "" || strings.HasPrefix(ref, "file:") && len(ref) > len("file:") ||
-		strings.HasPrefix(ref, "cache:") && len(ref) > len("cache:") ||
-		strings.HasPrefix(ref, "legacy-poster:") && len(ref) > len("legacy-poster:")
+		strings.HasPrefix(ref, "cache:") && len(ref) > len("cache:")
 }
 
 // SetMediaCandidate atomically replaces one source's proposal and resolves
 // the single display row. It never mutates another source's candidate.
 func (c *Catalog) SetMediaCandidate(ctx context.Context, fileID, source string, candidate MediaCandidate) (*model.Media, error) {
-	if !validMediaSource(source) || !validMediaReference(candidate.Icon) || !validMediaReference(candidate.Backdrop) ||
-		len(candidate.Data) > 0 && !json.Valid(candidate.Data) {
-		return nil, errors.New("invalid media candidate")
-	}
-	return c.changeMediaCandidate(ctx, fileID, source, &candidate)
+	return c.SetMediaCandidates(ctx, fileID, map[string]*MediaCandidate{source: &candidate})
 }
 
 func (c *Catalog) ClearMediaCandidate(ctx context.Context, fileID, source string) (*model.Media, error) {
-	if !validMediaSource(source) {
-		return nil, errors.New("invalid media source")
-	}
-	return c.changeMediaCandidate(ctx, fileID, source, nil)
+	return c.SetMediaCandidates(ctx, fileID, map[string]*MediaCandidate{source: nil})
 }
 
-func (c *Catalog) changeMediaCandidate(ctx context.Context, fileID, source string, candidate *MediaCandidate) (*model.Media, error) {
+// SetMediaCandidates applies all of one entry's changed sources in one
+// transaction. A nil candidate removes that source.
+func (c *Catalog) SetMediaCandidates(ctx context.Context, fileID string, updates map[string]*MediaCandidate) (*model.Media, error) {
+	if err := validateMediaCandidates(updates); err != nil {
+		return nil, err
+	}
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
+	item, err := applyMediaCandidates(ctx, tx, fileID, updates)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+type MediaUpdate struct {
+	FileID     string
+	Candidates map[string]*MediaCandidate
+}
+
+// SetMediaCandidatesBatch amortizes SQLite's commit cost when a scanner
+// submits several resolved entries. The batch succeeds or rolls back together.
+func (c *Catalog) SetMediaCandidatesBatch(ctx context.Context, updates []MediaUpdate) error {
+	if len(updates) == 0 || len(updates) > 500 {
+		return errors.New("media batch must contain 1..500 entries")
+	}
+	for _, update := range updates {
+		if err := validateMediaCandidates(update.Candidates); err != nil {
+			return err
+		}
+	}
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, update := range updates {
+		if _, err := applyMediaCandidates(ctx, tx, update.FileID, update.Candidates); err != nil {
+			return fmt.Errorf("update media %s: %w", update.FileID, err)
+		}
+	}
+	return tx.Commit()
+}
+
+func validateMediaCandidates(updates map[string]*MediaCandidate) error {
+	if len(updates) == 0 {
+		return errors.New("empty media candidate update")
+	}
+	for source, candidate := range updates {
+		if !validMediaSource(source) || candidate != nil &&
+			(!validMediaReference(candidate.Icon) || !validMediaReference(candidate.Backdrop) ||
+				len(candidate.Data) > 0 && !json.Valid(candidate.Data)) {
+			return errors.New("invalid media candidate")
+		}
+	}
+	return nil
+}
+
+func applyMediaCandidates(ctx context.Context, tx *sql.Tx, fileID string, updates map[string]*MediaCandidate) (*model.Media, error) {
 	var name string
 	var existing sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT e.name, m.sources FROM entries e LEFT JOIN medias m ON m.file_id=e.id WHERE e.id=?`, fileID).Scan(&name, &existing)
+	err := tx.QueryRowContext(ctx, `SELECT e.name, m.sources FROM entries e LEFT JOIN medias m ON m.file_id=e.id WHERE e.id=?`, fileID).Scan(&name, &existing)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -85,16 +136,18 @@ func (c *Catalog) changeMediaCandidate(ctx context.Context, fileID, source strin
 			return nil, fmt.Errorf("decode media sources: %w", err)
 		}
 	}
-	if candidate == nil {
-		delete(sources, source)
-	} else {
-		sources[source] = *candidate
+	for source, candidate := range updates {
+		if candidate == nil {
+			delete(sources, source)
+		} else {
+			sources[source] = *candidate
+		}
 	}
 	if len(sources) == 0 {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM medias WHERE file_id=?`, fileID); err != nil {
 			return nil, err
 		}
-		return nil, tx.Commit()
+		return nil, nil
 	}
 	item := resolveMedia(fileID, name, sources)
 	encoded, err := json.Marshal(sources)
@@ -121,9 +174,6 @@ func (c *Catalog) changeMediaCandidate(ctx context.Context, fileID, source strin
 		updated_at=excluded.updated_at`, fileID, item.Kind, item.Title, item.Icon, item.Backdrop,
 		year, item.Line1, item.Line2, item.Line3, string(item.Data), string(item.Sources), locked, item.UpdatedAt)
 	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &item, nil

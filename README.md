@@ -96,18 +96,17 @@ HEAD /api/v1/entries/{id}/content
 GET  /api/v1/entries/{id}/text
 GET  /api/v1/entries/{id}/media
 GET  /api/v1/entries/{id}/thumbnail?size=medium
-GET  /api/v1/media?type=movie&library=movies
-GET  /api/v1/media/{id}
-GET  /api/v1/media/{id}/poster
-GET  /api/v1/entries/{id}/media-item
-PUT  /api/v1/entries/{id}/media-item
-DELETE /api/v1/entries/{id}/media-item
-POST /api/v1/entries/{id}/media-item/rematch
+GET  /api/v1/entries/{id}/icon
+GET  /api/v1/entries/{id}/backdrop
+GET  /api/v1/entries/{id}/media-candidates
+PUT  /api/v1/entries/{id}/media
+DELETE /api/v1/entries/{id}/media
+POST /api/v1/entries/{id}/media/rematch
 POST /api/v1/playback/{id}
 GET  /api/v1/playback/sessions/{session}/{file}
 DELETE /api/v1/playback/sessions/{session}
-GET  /api/v1/media/{id}/playback-state
-PUT  /api/v1/media/{id}/playback-state
+GET  /api/v1/entries/{id}/playback-state
+PUT  /api/v1/entries/{id}/playback-state
 GET  /api/v1/playback/continue
 ```
 

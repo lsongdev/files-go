@@ -38,32 +38,40 @@ func (p *EPUBMetadata) Match(entry model.Entry) bool {
 }
 
 func (p *EPUBMetadata) Process(ctx context.Context, entry model.Entry) error {
+	mediaFile, err := p.inspect(ctx, entry)
+	if err != nil {
+		return err
+	}
+	return writeBookMedia(ctx, p.catalog, entry, mediaFile)
+}
+
+func (p *EPUBMetadata) inspect(ctx context.Context, entry model.Entry) (model.ParsedMedia, error) {
 	if entry.Size <= 0 || entry.Size > maxEPUBSize {
-		return fmt.Errorf("EPUB size exceeds processing limit: %d", entry.Size)
+		return model.ParsedMedia{}, fmt.Errorf("EPUB size exceeds processing limit: %d", entry.Size)
 	}
 	backend, ok := p.storages.Get(entry.StorageID)
 	if !ok {
-		return storage.ErrOffline
+		return model.ParsedMedia{}, storage.ErrOffline
 	}
 	file, err := backend.Open(ctx, entry.Path)
 	if err != nil {
-		return err
+		return model.ParsedMedia{}, err
 	}
 	defer file.Close()
 	readerAt, ok := file.(io.ReaderAt)
 	if !ok {
-		return storage.ErrUnsupported
+		return model.ParsedMedia{}, storage.ErrUnsupported
 	}
 	reader, err := zip.NewReader(readerAt, entry.Size)
 	if err != nil {
-		return fmt.Errorf("open EPUB: %w", err)
+		return model.ParsedMedia{}, fmt.Errorf("open EPUB: %w", err)
 	}
 	if len(reader.File) > maxEPUBFiles {
-		return errors.New("EPUB contains too many files")
+		return model.ParsedMedia{}, errors.New("EPUB contains too many files")
 	}
 	rootData, err := readZIPFile(ctx, reader.File, "META-INF/container.xml", maxEPUBXML)
 	if err != nil {
-		return err
+		return model.ParsedMedia{}, err
 	}
 	var container struct {
 		Rootfiles []struct {
@@ -71,15 +79,15 @@ func (p *EPUBMetadata) Process(ctx context.Context, entry model.Entry) error {
 		} `xml:"rootfiles>rootfile"`
 	}
 	if err := xml.Unmarshal(rootData, &container); err != nil || len(container.Rootfiles) == 0 {
-		return errors.New("EPUB container has no rootfile")
+		return model.ParsedMedia{}, errors.New("EPUB container has no rootfile")
 	}
 	opfPath, err := safeArchivePath(container.Rootfiles[0].FullPath)
 	if err != nil {
-		return err
+		return model.ParsedMedia{}, err
 	}
 	opfData, err := readZIPFile(ctx, reader.File, opfPath, maxEPUBXML)
 	if err != nil {
-		return err
+		return model.ParsedMedia{}, err
 	}
 	var publication struct {
 		Metadata struct {
@@ -104,7 +112,7 @@ func (p *EPUBMetadata) Process(ctx context.Context, entry model.Entry) error {
 		} `xml:"manifest>item"`
 	}
 	if err := xml.Unmarshal(opfData, &publication); err != nil {
-		return fmt.Errorf("decode EPUB package: %w", err)
+		return model.ParsedMedia{}, fmt.Errorf("decode EPUB package: %w", err)
 	}
 	metadata := map[string]any{
 		"title":       strings.TrimSpace(publication.Metadata.Title),
@@ -130,9 +138,9 @@ func (p *EPUBMetadata) Process(ctx context.Context, entry model.Entry) error {
 	}
 	encoded, err := json.Marshal(metadata)
 	if err != nil {
-		return err
+		return model.ParsedMedia{}, err
 	}
-	return p.catalog.UpsertMediaFile(ctx, model.MediaFile{EntryID: entry.ID, Kind: "book", Container: "epub", Metadata: encoded})
+	return model.ParsedMedia{EntryID: entry.ID, Kind: "book", Container: "epub", Metadata: encoded}, nil
 }
 
 func resolveEPUBResource(opfPath, href string) (string, error) {

@@ -46,14 +46,14 @@ func (p *PDFThumbnail) Process(ctx context.Context, entry model.Entry) error {
 	} else if !errors.Is(err, catalog.ErrNotFound) {
 		return err
 	}
-	mediaFile, err := p.catalog.MediaFile(ctx, entry.ID)
+	mediaItem, err := p.catalog.MediaForEntry(ctx, entry.ID)
 	if errors.Is(err, catalog.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if mediaFile.Kind != "book" || mediaFile.Container != "pdf" {
+	if mediaItem.Kind != "book" {
 		return nil
 	}
 	backend, ok := p.storages.Get(entry.StorageID)

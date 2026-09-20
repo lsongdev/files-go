@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -20,12 +21,14 @@ import (
 )
 
 type Indexer struct {
-	catalog  *catalog.Catalog
-	storages *storage.Registry
-	mu       sync.Mutex
-	scanning map[string]bool
-	priority map[string][]string
-	sink     EntrySink
+	catalog          *catalog.Catalog
+	storages         *storage.Registry
+	mu               sync.Mutex
+	scanning         map[string]bool
+	priority         map[string][]string
+	scope            map[string][]string
+	sink             EntrySink
+	reconcileRemoved func(context.Context, model.Entry) error
 }
 
 type EntrySink interface {
@@ -45,13 +48,45 @@ type scanProgress struct {
 }
 
 func New(catalog *catalog.Catalog, storages *storage.Registry) *Indexer {
-	return &Indexer{catalog: catalog, storages: storages, scanning: make(map[string]bool), priority: make(map[string][]string)}
+	return &Indexer{catalog: catalog, storages: storages, scanning: make(map[string]bool), priority: make(map[string][]string), scope: make(map[string][]string)}
 }
 
 func (i *Indexer) SetEntrySink(sink EntrySink) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.sink = sink
+}
+
+// SetRemovedEntryReconciler rebuilds a parent directory's enhancement after
+// an indexed sidecar, video, or season directory disappears.
+func (i *Indexer) SetRemovedEntryReconciler(reconcile func(context.Context, model.Entry) error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.reconcileRemoved = reconcile
+}
+
+func (i *Indexer) reconcileRemovedEntry(ctx context.Context, entry model.Entry) error {
+	if !affectsDirectoryMedia(entry) {
+		return nil
+	}
+	i.mu.Lock()
+	reconcile := i.reconcileRemoved
+	i.mu.Unlock()
+	if reconcile == nil {
+		return nil
+	}
+	return reconcile(ctx, entry)
+}
+
+func affectsDirectoryMedia(entry model.Entry) bool {
+	if entry.Type == model.EntryDirectory {
+		return true
+	}
+	switch strings.ToLower(entry.Extension) {
+	case "nfo", "jpg", "jpeg", "png", "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "wmv", "rmvb":
+		return true
+	}
+	return false
 }
 
 func (i *Indexer) EnqueueEntries(ctx context.Context, entries []model.Entry) error {
@@ -104,6 +139,9 @@ func (i *Indexer) SyncPath(ctx context.Context, storageID, entryPath string) (*m
 	if entryPath == "" || entryPath == ".." || strings.HasPrefix(entryPath, "../") {
 		return nil, storage.ErrPathTraversal
 	}
+	if !i.inScanScope(storageID, entryPath) {
+		return nil, nil
+	}
 	backend, ok := i.storages.Get(storageID)
 	if !ok {
 		return nil, storage.ErrOffline
@@ -118,6 +156,9 @@ func (i *Indexer) SyncPath(ctx context.Context, storageID, entryPath string) (*m
 			return nil, findErr
 		}
 		if err := i.catalog.MarkEntryTreeUnavailable(ctx, *existing); err != nil && !errors.Is(err, catalog.ErrNotFound) {
+			return nil, err
+		}
+		if err := i.reconcileRemovedEntry(ctx, *existing); err != nil {
 			return nil, err
 		}
 		return existing, nil
@@ -181,8 +222,58 @@ func (i *Indexer) SetPriority(storageID string, paths []string) {
 	i.priority[storageID] = copyPaths
 }
 
+// SetScanScope limits a storage scan to selected library roots and their
+// ancestors. Unlike priority, it excludes unrelated subtrees entirely.
+// Passing an empty slice deliberately disables scanning this storage.
+func (i *Indexer) SetScanScope(storageID string, paths []string) error {
+	normalized := make([]string, 0, len(paths))
+	for _, value := range paths {
+		value = strings.Trim(path.Clean(filepath.ToSlash(value)), "/")
+		if value == "." {
+			value = ""
+		}
+		if value == ".." || strings.HasPrefix(value, "../") {
+			return storage.ErrPathTraversal
+		}
+		normalized = append(normalized, value)
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.scope[storageID] = normalized
+	return nil
+}
+
+func (i *Indexer) inScanScope(storageID, value string) bool {
+	i.mu.Lock()
+	paths, scoped := i.scope[storageID]
+	i.mu.Unlock()
+	if !scoped {
+		return true
+	}
+	for _, root := range paths {
+		if root == "" {
+			return true
+		}
+		if value == root || strings.HasPrefix(value, root+"/") || strings.HasPrefix(root, value+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func (i *Indexer) CanScanStorage(storageID string) bool {
+	i.mu.Lock()
+	paths, scoped := i.scope[storageID]
+	i.mu.Unlock()
+	return !scoped || len(paths) > 0
+}
+
 func (i *Indexer) Scan(ctx context.Context, storageID string) error {
 	i.mu.Lock()
+	if paths, scoped := i.scope[storageID]; scoped && len(paths) == 0 {
+		i.mu.Unlock()
+		return errors.New("storage has no selected library scan paths")
+	}
 	if i.scanning[storageID] {
 		i.mu.Unlock()
 		return ErrScanInProgress
@@ -198,7 +289,20 @@ func (i *Indexer) Scan(ctx context.Context, storageID string) error {
 	if !ok {
 		return fmt.Errorf("storage %q is not configured", storageID)
 	}
-	session, err := i.catalog.BeginScanSession(ctx, storageID)
+	i.mu.Lock()
+	selected, scoped := i.scope[storageID]
+	selected = append([]string(nil), selected...)
+	i.mu.Unlock()
+	scopeKey := ""
+	if scoped {
+		sort.Strings(selected)
+		encoded, err := json.Marshal(selected)
+		if err != nil {
+			return err
+		}
+		scopeKey = "libraries:" + string(encoded)
+	}
+	session, err := i.catalog.BeginScanSession(ctx, storageID, scopeKey)
 	if err != nil {
 		return err
 	}
@@ -224,7 +328,7 @@ func (i *Indexer) Scan(ctx context.Context, storageID string) error {
 	}
 	if err != nil {
 		state := "error"
-		if errors.Is(err, context.Canceled) {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			state = "interrupted"
 		} else if errors.Is(err, storage.ErrOffline) || errors.Is(err, storage.ErrNotFound) {
 			state = "offline"
@@ -234,7 +338,19 @@ func (i *Indexer) Scan(ctx context.Context, storageID string) error {
 		}
 		return err
 	}
-	return i.catalog.CompleteScan(ctx, storageID, generation)
+	removed, err := i.catalog.StaleDirectoryEvidence(ctx, storageID, generation)
+	if err != nil {
+		return err
+	}
+	if err := i.catalog.CompleteScan(ctx, storageID, generation); err != nil {
+		return err
+	}
+	for _, entry := range removed {
+		if err := i.reconcileRemovedEntry(ctx, entry); err != nil {
+			return fmt.Errorf("reconcile removed entry %s: %w", entry.ID, err)
+		}
+	}
+	return nil
 }
 
 func (i *Indexer) scanDirectory(ctx context.Context, backend storage.Storage, storageID string, parent *model.Entry, generation int64, progress *scanProgress) error {
@@ -253,6 +369,9 @@ func (i *Indexer) scanDirectory(ctx context.Context, backend storage.Storage, st
 	const batchSize = 500
 	entries := make([]model.Entry, 0, len(infos))
 	for _, info := range infos {
+		if !i.inScanScope(storageID, info.Path) {
+			continue
+		}
 		ext := strings.TrimPrefix(strings.ToLower(path.Ext(info.Name)), ".")
 		mimeType := ""
 		if ext != "" {

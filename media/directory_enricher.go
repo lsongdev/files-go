@@ -18,7 +18,8 @@ import (
 // not copy a child's movie identity to the parent directory.
 type DirectoryEnricher struct {
 	catalog  *catalog.Catalog
-	sidecar  *Sidecar
+	nfo      nfoReader
+	artwork  *Artwork
 	provider MetadataProvider
 	language string
 }
@@ -31,12 +32,17 @@ func NewDirectoryEnricherWithProvider(catalog *catalog.Catalog, storages *storag
 	if language == "" {
 		language = "zh-CN"
 	}
-	return &DirectoryEnricher{catalog: catalog, sidecar: NewSidecar(catalog, storages), provider: provider, language: language}
+	return &DirectoryEnricher{catalog: catalog, nfo: nfoReader{storages: storages}, provider: provider, language: language}
 }
+
+func (p *DirectoryEnricher) SetArtwork(artwork *Artwork) { p.artwork = artwork }
 
 func (p *DirectoryEnricher) Name() string { return "directory_enrichment" }
 func (p *DirectoryEnricher) Match(entry model.Entry) bool {
-	return p.sidecar.Match(entry)
+	if entry.Type != model.EntryFile || strings.HasPrefix(entry.Name, "._") || strings.HasSuffix(strings.ToLower(entry.Name), ".d.ts") {
+		return false
+	}
+	return isFolderArtwork(entry.Name) || strings.EqualFold(entry.Extension, "nfo") || movieVideoExtension(entry.Extension)
 }
 
 func (p *DirectoryEnricher) Process(ctx context.Context, entry model.Entry) error {
@@ -50,7 +56,17 @@ func (p *DirectoryEnricher) Process(ctx context.Context, entry model.Entry) erro
 	if err != nil {
 		return err
 	}
-	return p.ProcessDirectory(ctx, *directory)
+	if err := p.ProcessDirectory(ctx, *directory); err != nil {
+		return err
+	}
+	if seasonDir.MatchString(directory.Name) && directory.ParentID != nil {
+		show, err := p.catalog.Entry(ctx, *directory.ParentID)
+		if err != nil {
+			return err
+		}
+		return p.ProcessDirectory(ctx, *show)
+	}
+	return nil
 }
 
 func (p *DirectoryEnricher) ProcessDirectory(ctx context.Context, directory model.Entry) error {
@@ -91,7 +107,7 @@ func (p *DirectoryEnricher) ProcessDirectory(ctx context.Context, directory mode
 	} else if _, err := p.catalog.SetMediaCandidate(ctx, directory.ID, "local_artwork", artwork); err != nil {
 		return err
 	}
-	nfoEntry, document, ambiguous, err := p.sidecar.selectDirectoryNFO(ctx, directory, explicit, candidates)
+	nfoEntry, document, ambiguous, err := p.nfo.selectDirectoryNFO(ctx, directory, explicit, candidates)
 	if err != nil {
 		return err
 	}
@@ -103,7 +119,7 @@ func (p *DirectoryEnricher) ProcessDirectory(ctx context.Context, directory mode
 			_, err = p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
 			return err
 		}
-		return p.enrichMovieDirectory(ctx, directory)
+		return p.enrichInferredDirectory(ctx, directory)
 	}
 	kind := "movie"
 	if document.XMLName.Local == "tvshow" {
@@ -124,6 +140,137 @@ func (p *DirectoryEnricher) ProcessDirectory(ctx context.Context, directory mode
 	}
 	_, err = p.catalog.SetMediaCandidate(ctx, directory.ID, "local_nfo", nfo)
 	return err
+}
+
+func (p *DirectoryEnricher) enrichInferredDirectory(ctx context.Context, directory model.Entry) error {
+	types, err := p.catalog.LibraryTypesForEntry(ctx, directory)
+	if err != nil {
+		return err
+	}
+	if contains(types, "tv") {
+		return p.enrichTVDirectory(ctx, directory)
+	}
+	return p.enrichMovieDirectory(ctx, directory)
+}
+
+func (p *DirectoryEnricher) enrichTVDirectory(ctx context.Context, directory model.Entry) error {
+	if p.provider == nil {
+		return nil
+	}
+	root, err := p.catalog.IsLibrarySourceRoot(ctx, directory)
+	if err != nil {
+		return err
+	}
+	if root || seasonDir.MatchString(directory.Name) {
+		_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
+		return err
+	}
+	parsed := ParseName(directory.Name)
+	// Directory names are not release filenames. In particular, a show title
+	// ending in "Saul" must not be interpreted as an Sxx season token.
+	parsed.Title = strings.TrimSpace(strings.NewReplacer(".", " ", "_", " ").Replace(directory.Name))
+	if parsed.Year != nil {
+		parsed.Title = strings.TrimSpace(strings.Replace(parsed.Title, strconv.Itoa(*parsed.Year), "", 1))
+	}
+	if parsed.Title == "" {
+		_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
+		return err
+	}
+	children, err := p.catalog.Children(ctx, directory.ID, catalog.ListOptions{Limit: 500})
+	if err != nil {
+		return err
+	}
+	if len(children) >= 500 {
+		_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
+		return err
+	}
+	episodes := 0
+	for _, child := range children {
+		if child.Type == model.EntryDirectory && seasonDir.MatchString(child.Name) {
+			files, err := p.catalog.Children(ctx, child.ID, catalog.ListOptions{Limit: 500})
+			if err != nil {
+				return err
+			}
+			if len(files) >= 500 {
+				_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
+				return err
+			}
+			for _, file := range files {
+				if file.Type == model.EntryFile && movieVideoExtension(file.Extension) && !isAuxiliaryVideo(file.Name) {
+					if !episodeBelongsToSeries(file, parsed.Title) {
+						_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
+						return err
+					}
+					episodes++
+				}
+			}
+		} else if child.Type == model.EntryFile && movieVideoExtension(child.Extension) && !isAuxiliaryVideo(child.Name) {
+			if !episodeBelongsToSeries(child, parsed.Title) {
+				_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
+				return err
+			}
+			episodes++
+		}
+	}
+	if episodes == 0 {
+		_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
+		return err
+	}
+	if current, err := p.catalog.MediaForEntry(ctx, directory.ID); err == nil {
+		if current.MatchLocked {
+			return nil
+		}
+		var sources map[string]catalog.MediaCandidate
+		if json.Unmarshal(current.Sources, &sources) == nil {
+			if previous, ok := sources["tmdb"]; ok && previous.Kind == "tv" {
+				var candidate Candidate
+				if json.Unmarshal(previous.Data, &candidate) == nil {
+					if _, score, matched := bestCandidate(parsed, []Candidate{candidate}); matched && score >= .8 {
+						if p.artwork != nil {
+							return p.artwork.ProcessEntry(ctx, directory.ID)
+						}
+						return nil
+					}
+				}
+			}
+		}
+	} else if !errors.Is(err, catalog.ErrNotFound) {
+		return err
+	}
+	results, err := p.provider.Search(ctx, Query{Type: "tv", Title: parsed.Title, Year: parsed.Year, Language: p.language})
+	if err != nil {
+		return err
+	}
+	match, score, ok := bestCandidate(parsed, results)
+	if !ok || score < .8 {
+		_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
+		return err
+	}
+	if details, err := p.provider.Fetch(ctx, "tv", match.ID, p.language); err == nil {
+		match = details
+	}
+	encoded, err := json.Marshal(match)
+	if err != nil {
+		return err
+	}
+	if _, err := p.catalog.SetMediaCandidate(ctx, directory.ID, "tmdb", catalog.MediaCandidate{
+		Kind: "tv", Title: match.Title, Year: match.Year, Data: encoded,
+	}); err != nil {
+		return err
+	}
+	if p.artwork != nil {
+		return p.artwork.ProcessEntry(ctx, directory.ID)
+	}
+	return nil
+}
+
+func episodeBelongsToSeries(entry model.Entry, title string) bool {
+	parsed := ParsedNameForEntry(entry, true)
+	if parsed.Season == nil || parsed.Episode == nil {
+		return false
+	}
+	showName, episodeName := normalizedTitle(title), normalizedTitle(parsed.Title)
+	return showName != "" && (showName == episodeName || len([]rune(showName)) >= 6 && strings.Contains(episodeName, showName))
 }
 
 // A matching filename alone is insufficient to assign a movie identity to a
@@ -149,7 +296,7 @@ func (p *DirectoryEnricher) enrichMovieDirectory(ctx context.Context, directory 
 	if err != nil {
 		return err
 	}
-	if len(children) > 500 { // Never infer identity from a truncated directory.
+	if len(children) >= 500 { // The query is capped at 500; never infer from a possibly truncated directory.
 		_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
 		return err
 	}
@@ -204,7 +351,13 @@ func (p *DirectoryEnricher) enrichMovieDirectory(ctx context.Context, directory 
 	_, err = p.catalog.SetMediaCandidate(ctx, directory.ID, "tmdb", catalog.MediaCandidate{
 		Kind: "movie", Title: match.Title, Year: match.Year, Data: encoded,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if p.artwork != nil {
+		return p.artwork.ProcessEntry(ctx, directory.ID)
+	}
+	return nil
 }
 
 func movieVideoExtension(extension string) bool {

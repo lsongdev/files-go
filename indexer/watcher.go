@@ -86,6 +86,9 @@ func (w *Watcher) Start(ctx context.Context, storageIDs []string) error {
 	if libraries, err := w.catalog.Libraries(ctx); err == nil {
 		for _, library := range libraries {
 			for _, source := range library.Sources {
+				if !w.indexer.inScanScope(source.StorageID, source.Path) {
+					continue
+				}
 				root := w.roots[source.StorageID]
 				if root == "" {
 					continue
@@ -160,6 +163,9 @@ func (w *Watcher) handle(ctx context.Context, item watchedPath) {
 		return
 	}
 	relative = filepath.ToSlash(relative)
+	if !w.indexer.inScanScope(item.storageID, relative) {
+		return
+	}
 	// A create event is often followed by a write event before the debounce
 	// timer fires. Inspect the current object instead of relying on the final
 	// event flag so copied directories always get their descendants indexed.
@@ -178,6 +184,16 @@ func (w *Watcher) syncCreatedTree(ctx context.Context, storageID, root, absolute
 		if walkErr != nil {
 			return walkErr
 		}
+		relative, err := filepath.Rel(root, current)
+		if err != nil {
+			return err
+		}
+		if current != root && !w.indexer.inScanScope(storageID, filepath.ToSlash(relative)) {
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
 		if entry.IsDir() {
 			if err := w.add(current); err != nil && !errors.Is(err, ErrWatchLimit) {
 				return err
@@ -185,10 +201,6 @@ func (w *Watcher) syncCreatedTree(ctx context.Context, storageID, root, absolute
 		}
 		if current == root {
 			return nil
-		}
-		relative, err := filepath.Rel(root, current)
-		if err != nil {
-			return err
 		}
 		_, err = w.indexer.SyncPath(ctx, storageID, filepath.ToSlash(relative))
 		if errors.Is(err, ErrScanInProgress) {
@@ -213,6 +225,9 @@ func (w *Watcher) refreshCatalogDirectories(ctx context.Context) {
 				break
 			}
 			for _, value := range paths {
+				if !w.indexer.inScanScope(storageID, value) {
+					continue
+				}
 				if err := w.add(filepath.Join(root, filepath.FromSlash(value))); errors.Is(err, ErrWatchLimit) {
 					w.warnWatchLimit()
 					return

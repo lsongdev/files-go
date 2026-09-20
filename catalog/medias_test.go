@@ -73,3 +73,35 @@ func TestMediaCandidateKeepsHighestPriorityTitleEvenIfEqualToFilename(t *testing
 		t.Fatalf("manual candidate lost priority: %#v", item)
 	}
 }
+
+func TestMediaCandidateBatchRollsBackOnMissingEntry(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := cat.BeginScan(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{{StorageID: "disk", Name: "movie.mkv", Path: "movie.mkv", Type: model.EntryFile}}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := MediaCandidate{Kind: "movie", Title: "Movie"}
+	err = cat.SetMediaCandidatesBatch(ctx, []MediaUpdate{
+		{FileID: entries[0].ID, Candidates: map[string]*MediaCandidate{"filename": &valid}},
+		{FileID: "missing", Candidates: map[string]*MediaCandidate{"filename": &valid}},
+	})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("batch error = %v", err)
+	}
+	if _, err := cat.MediaForEntry(ctx, entries[0].ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("first entry was committed despite rollback: %v", err)
+	}
+}

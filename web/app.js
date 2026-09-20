@@ -133,13 +133,13 @@ function VideoPlayer({ url, startPositionMS = 0, onProgress }) {
 }
 
 function mediaMetadata(media) {
-  if (!media?.metadata) return {};
-  if (typeof media.metadata === 'object') return media.metadata;
-  try { return JSON.parse(media.metadata); } catch (_) { return {}; }
+	const data = media?.data || {};
+	const embedded = data.embedded || {};
+	return { ...embedded, music: embedded.probe?.music, ...data.tmdb, ...data.local_nfo, ...data.manual };
 }
 
 function mediaTypeLabel(type) {
-  return ({ movie: '电影', series: '电视剧', season: '季', episode: '剧集', artist: '艺人', album: '专辑', track: '歌曲', photo: '照片', book: '图书' }[type] || '媒体');
+  return ({ movie: '电影', tv: '电视剧', episode: '剧集', audio: '音乐', photo: '照片', book: '图书', folder: '文件夹' }[type] || '媒体');
 }
 
 function entryDisplayTitle(item) {
@@ -149,7 +149,7 @@ function entryDisplayTitle(item) {
 
 function entrySecondaryLabel(item) {
   if (!item?.media) return item?.type === 'directory' ? '文件夹' : (item?.extension?.toUpperCase() || '文件');
-  const details = [mediaTypeLabel(item.media.type), item.media.year].filter(Boolean);
+  const details = [item.media.line1 || mediaTypeLabel(item.media.kind), item.media.line2, item.media.year && !item.media.line1?.includes(String(item.media.year)) ? item.media.year : ''].filter(Boolean);
   if (entryDisplayTitle(item) !== item.name) details.push(item.name);
   return details.join(' · ');
 }
@@ -161,8 +161,7 @@ function durationLabel(durationMS) {
 }
 
 function MediaPoster({ media, thumbnailURL, preferThumbnail }) {
-  const metadata = mediaMetadata(media);
-  const posterURL = preferThumbnail ? thumbnailURL : (metadata.posterPath ? `${API}/media/${encodeURIComponent(media.id)}/poster` : thumbnailURL);
+  const posterURL = media?.icon || thumbnailURL;
   const hasPoster = Boolean(posterURL);
   const [attempt, setAttempt] = useState(0);
   const [ready, setReady] = useState(false);
@@ -180,14 +179,14 @@ function MediaPoster({ media, thumbnailURL, preferThumbnail }) {
   const missing = !hasPoster || failed;
   return html`<div class=${`media-poster ${missing ? 'missing' : ''} ${hasPoster && !ready && !failed ? 'pending' : ''}`}>
     ${hasPoster && !failed && html`<img src=${`${posterURL}${posterURL.includes('?') ? '&' : '?'}v=${attempt}`} alt="" onLoad=${() => setReady(true)} onError=${retry}/>`}
-    <span><${Icon} name=${media.type === 'album' || media.type === 'track' || media.type === 'artist' ? 'music' : media.type === 'photo' ? 'photos' : media.type === 'book' ? 'files' : media.type === 'series' || media.type === 'season' || media.type === 'episode' ? 'tv' : 'movies'} size=${32}/></span>
+    <span><${Icon} name=${media.kind === 'audio' ? 'music' : media.kind === 'photo' ? 'photos' : media.kind === 'book' ? 'files' : media.kind === 'tv' || media.kind === 'episode' ? 'tv' : 'movies'} size=${32}/></span>
   </div>`;
 }
 
 function thumbnailShape(item) {
-  const type = item.media?.type || '';
-  if (type === 'movie' || type === 'series' || type === 'tvshow') return 'poster';
-  if (type === 'artist' || type === 'album' || type === 'track' || type === 'music') return 'square';
+  const type = item.media?.kind || '';
+  if (type === 'movie' || type === 'tv') return 'poster';
+  if (type === 'audio') return 'square';
   return 'landscape';
 }
 
@@ -216,15 +215,14 @@ function ThumbnailImage({ item, compact = false }) {
 function MediaHeader({ item, media, technical, actions }) {
   if (!media) return null;
   const metadata = mediaMetadata(media);
-  const details = [mediaTypeLabel(media.type), media.year, metadata.voteAverage ? `TMDB ${metadata.voteAverage.toFixed(1)}` : '', durationLabel(technical?.durationMs)].filter(Boolean);
+  const details = [media.line1 || mediaTypeLabel(media.kind), media.line2, media.line3, durationLabel(technical?.durationMs)].filter(Boolean);
   const overview = metadata.overview || metadata.description;
-  const localPosterURL = metadata.localPosterEntryId ? `${API}/entries/${encodeURIComponent(metadata.localPosterEntryId)}/thumbnail?size=large` : '';
-  const backdropURL = metadata.localBackdropEntryId ? `${API}/entries/${encodeURIComponent(metadata.localBackdropEntryId)}/thumbnail?size=large` : '';
-  const thumbnailURL = localPosterURL || item?.links?.thumbnail || (media.primaryEntryId ? `${API}/entries/${encodeURIComponent(media.primaryEntryId)}/thumbnail?size=large` : '');
+  const backdropURL = media.backdrop;
+  const thumbnailURL = media.icon || item?.links?.thumbnail || '';
   return html`<section class="media-header">
     ${backdropURL && html`<div class="media-backdrop" style=${{ backgroundImage: `url(${backdropURL})` }}></div>`}
-    <${MediaPoster} key=${`${media.id}:${localPosterURL || metadata.posterPath || thumbnailURL}`} media=${media} thumbnailURL=${thumbnailURL} preferThumbnail=${Boolean(localPosterURL)}/>
-    <div class="media-copy"><p>${details.join(' · ')}</p><h1>${media.title || item.name}</h1>${metadata.originalTitle && metadata.originalTitle !== media.title && html`<small>${metadata.originalTitle}</small>`}${overview && html`<div class="media-overview">${overview}</div>`}<div class="media-match">${media.matchSource === 'nfo' ? '来自本地 NFO' : media.matchSource === 'tmdb' ? 'TMDB 已匹配' : media.matchSource === 'embedded' ? '来自文件标签' : '根据文件名识别'}${media.matchConfidence ? ` · ${Math.round(media.matchConfidence * 100)}%` : ''}</div></div>
+    <${MediaPoster} key=${`${item.id}:${thumbnailURL}`} media=${media} thumbnailURL=${thumbnailURL}/>
+    <div class="media-copy"><p>${details.join(' · ')}</p><h1>${media.title || item.name}</h1>${metadata.originalTitle && metadata.originalTitle !== media.title && html`<small>${metadata.originalTitle}</small>`}${overview && html`<div class="media-overview">${overview}</div>`}<div class="media-match">${media.matchLocked ? '手工锁定' : media.data?.local_nfo ? '来自本地 NFO' : media.data?.tmdb ? 'TMDB 已匹配' : media.data?.embedded ? '来自文件信息' : '根据文件名识别'}</div></div>
     ${actions && html`<div class="media-actions">${actions}</div>`}
   </section>`;
 }
@@ -249,7 +247,7 @@ function FileDetail({ item, media, technical, text, loading, error, playbackURL,
     ${media ? html`<${MediaHeader} item=${item} media=${media} technical=${technical} actions=${actions}/>` : html`<header class="plain-detail-head"><div><p>${item.extension?.toUpperCase() || 'FILE'}</p><h1>${item.name}</h1><span>${item.mime || '未知文件类型'}</span></div><div class="media-actions">${actions}</div></header>`}
     <div class="detail-layout">
       <section class=${`detail-preview ${kind}`} aria-label="文件内容">
-        ${!item.available ? html`<div class="preview-message"><h2>文件当前不可用</h2><p>重新连接存储并扫描后即可查看。</p></div>` : kind === 'image' ? html`<img src=${contentURL} alt=${item.name}/>` : kind === 'audio' ? html`<audio src=${contentURL} controls preload="metadata"></audio>` : kind === 'video' ? (playbackURL ? html`<${VideoPlayer} url=${playbackURL} startPositionMS=${startPositionMS} onProgress=${(video, played) => onPlaybackProgress?.({...item, mediaID: media?.id}, video, played)}/>` : html`<button class="play-button" onClick=${onPlay}><span>▶</span>${error || '播放视频'}</button>`) : kind === 'pdf' ? html`<iframe src=${contentURL} title=${item.name}></iframe>` : kind === 'text' ? (loading ? html`<div class="preview-message">正在读取文本…</div>` : error ? html`<div class="preview-message"><h2>无法预览文本</h2><p>${error}</p></div>` : html`<pre>${text}</pre>`) : html`<div class="preview-message"><div class="empty-icon"><${Icon} name="file" size=${30}/></div><h2>此格式没有内置预览</h2><p>仍可下载或管理这个文件。</p></div>`}
+        ${!item.available ? html`<div class="preview-message"><h2>文件当前不可用</h2><p>重新连接存储并扫描后即可查看。</p></div>` : kind === 'image' ? html`<img src=${contentURL} alt=${item.name}/>` : kind === 'audio' ? html`<audio src=${contentURL} controls preload="metadata"></audio>` : kind === 'video' ? (playbackURL ? html`<${VideoPlayer} url=${playbackURL} startPositionMS=${startPositionMS} onProgress=${(video, played) => onPlaybackProgress?.(item, video, played)}/>` : html`<button class="play-button" onClick=${onPlay}><span>▶</span>${error || '播放视频'}</button>`) : kind === 'pdf' ? html`<iframe src=${contentURL} title=${item.name}></iframe>` : kind === 'text' ? (loading ? html`<div class="preview-message">正在读取文本…</div>` : error ? html`<div class="preview-message"><h2>无法预览文本</h2><p>${error}</p></div>` : html`<pre>${text}</pre>`) : html`<div class="preview-message"><div class="empty-icon"><${Icon} name="file" size=${30}/></div><h2>此格式没有内置预览</h2><p>仍可下载或管理这个文件。</p></div>`}
       </section>
       <aside class="detail-facts"><h2>文件信息</h2>${facts.map(([label, value]) => html`<div key=${label}><span>${label}</span><strong>${value}</strong></div>`)}</aside>
     </div>
@@ -446,28 +444,17 @@ function App() {
       const current = await request(`${API}/entries/${encodeURIComponent(id)}`);
       if (requestID !== entryRequestRef.current) return false;
       setEntry(current);
+      setEntryMedia(current.media || null);
+      setTechnicalMedia(current.media?.data?.embedded || null);
       if (current.type === 'directory') {
         const children = await request(`${API}/entries/${encodeURIComponent(id)}/children?limit=100`);
         if (requestID !== entryRequestRef.current) return false;
         setItems(children.items || []);
         setCursor(children.cursor || null);
-        request(`${API}/entries/${encodeURIComponent(id)}/media-item?optional=1`)
-          .then((value) => { if (requestID === entryRequestRef.current) setEntryMedia(value?.id ? value : null); })
-          .catch(() => {});
       } else {
         setItems([]);
         setCursor(null);
         const kind = previewKind(current);
-        const technicalRequest = ['image', 'audio', 'video', 'pdf'].includes(kind)
-          ? request(`${API}/entries/${encodeURIComponent(id)}/media?optional=1`).then((value) => value?.entryId ? value : null).catch(() => null)
-          : Promise.resolve(null);
-        const [media, technical] = await Promise.all([
-          request(`${API}/entries/${encodeURIComponent(id)}/media-item?optional=1`).then((value) => value?.id ? value : null).catch(() => null),
-          technicalRequest,
-        ]);
-        if (requestID !== entryRequestRef.current) return false;
-        setEntryMedia(media);
-        setTechnicalMedia(technical);
         if (current.available && kind === 'text') {
           setDetailLoading(true);
           try {
@@ -651,10 +638,8 @@ function App() {
       const playbackResult = await request(`${API}/playback/${encodeURIComponent(entry.id)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ containers: ['mp4', 'webm', 'ogg'], videoCodecs: ['h264', 'vp8', 'vp9', 'av1'], audioCodecs: ['aac', 'mp3', 'opus', 'vorbis'], hls: true }) });
       const match = playbackResult.url?.match(/\/playback\/sessions\/([^/]+)\//);
       if (match) playbackSessionRef.current = match[1];
-      if (entryMedia) {
-        const state = await request(`${API}/media/${encodeURIComponent(entryMedia.id)}/playback-state`).catch(() => null);
-        setStartPositionMS(state?.positionMs || 0);
-      }
+      const state = await request(`${API}/entries/${encodeURIComponent(entry.id)}/playback-state`).catch(() => null);
+      setStartPositionMS(state?.positionMs || 0);
       setPlaybackURL(playbackResult.url);
     } catch (reason) {
       setDetailError(reason.message || '无法开始播放');
@@ -662,11 +647,11 @@ function App() {
   };
 
   const updatePlaybackProgress = (item, video, played) => {
-    if (!item.mediaID || !Number.isFinite(video.currentTime)) return;
+    if (!item.id || !Number.isFinite(video.currentTime)) return;
     const now = Date.now();
     if (!played && now - Number(video.dataset.savedAt || 0) < 5000) return;
     video.dataset.savedAt = String(now);
-    fetch(`${API}/media/${encodeURIComponent(item.mediaID)}/playback-state`, {
+    fetch(`${API}/entries/${encodeURIComponent(item.id)}/playback-state`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, keepalive: true,
       body: JSON.stringify({ positionMs: Math.round(video.currentTime * 1000), played }),
     }).catch(() => {});
@@ -692,7 +677,7 @@ function App() {
 
   const openMatchDialog = () => {
     let query = entryMedia?.title || '';
-    if (entryMedia?.type === 'episode') {
+    if (entryMedia?.kind === 'episode') {
       const parents = trail.slice(0, -1).map((item) => item.label).reverse();
       const series = parents.find((label) => !/^(?:s(?:eason)?[ ._-]*\d{1,2}|第[一二三四五六七八九十百0-9]+季)$/i.test(label));
       if (series && series !== activeLibrary?.name) query = series.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -714,11 +699,12 @@ function App() {
     setMatchSaving(true);
     setMatchError('');
     try {
-      const media = await request(`${API}/entries/${encodeURIComponent(entry.id)}/media-item`, {
+      const media = await request(`${API}/entries/${encodeURIComponent(entry.id)}/media`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ candidateId: candidate.id, candidateType: candidate.type }),
       });
       setEntryMedia(media);
+      setEntry((current) => current?.id === entry.id ? { ...current, media } : current);
       setMatchOpen(false);
     } catch (reason) {
       setMatchError(reason.message || '无法保存媒体匹配');
@@ -732,8 +718,10 @@ function App() {
     setMatchSaving(true);
     setMatchError('');
     try {
-      await request(`${API}/entries/${encodeURIComponent(entry.id)}/media-item`, { method: 'DELETE' });
-      setEntryMedia(null);
+      await request(`${API}/entries/${encodeURIComponent(entry.id)}/media`, { method: 'DELETE' });
+      const refreshed = await request(`${API}/entries/${encodeURIComponent(entry.id)}`);
+      setEntry(refreshed);
+      setEntryMedia(refreshed.media || null);
       setMatchOpen(false);
     } catch (reason) {
       setMatchError(reason.message || '无法移除媒体匹配');

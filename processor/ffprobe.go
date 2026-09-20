@@ -101,7 +101,7 @@ func (p *FFProbe) Process(ctx context.Context, entry model.Entry) error {
 	if err != nil {
 		return err
 	}
-	return p.catalog.UpsertMediaFile(ctx, media)
+	return writeAVMedia(ctx, p.catalog, entry, media)
 }
 
 func looksLikeMPEGTransportStream(filename string) (bool, error) {
@@ -146,13 +146,12 @@ type ffprobeOutput struct {
 	} `json:"format"`
 }
 
-func parseFFProbe(entryID string, data []byte) (model.MediaFile, error) {
+func parseFFProbe(entryID string, data []byte) (model.ParsedMedia, error) {
 	var output ffprobeOutput
 	if err := json.Unmarshal(data, &output); err != nil {
-		return model.MediaFile{}, fmt.Errorf("decode ffprobe output: %w", err)
+		return model.ParsedMedia{}, fmt.Errorf("decode ffprobe output: %w", err)
 	}
-	metadata := append(json.RawMessage(nil), data...)
-	item := model.MediaFile{EntryID: entryID, Container: output.Format.FormatName, Metadata: metadata}
+	item := model.ParsedMedia{EntryID: entryID, Container: output.Format.FormatName, Metadata: json.RawMessage(`{}`)}
 	hasAlbumArt := false
 	for _, stream := range output.Streams {
 		if stream.Disposition.AttachedPic != 0 {
@@ -183,7 +182,7 @@ func parseFFProbe(entryID string, data []byte) (model.MediaFile, error) {
 		}
 	}
 	if item.Kind == "" {
-		return model.MediaFile{}, errors.New("ffprobe found no audio or video streams")
+		return model.ParsedMedia{}, errors.New("ffprobe found no audio or video streams")
 	}
 	if seconds, err := strconv.ParseFloat(output.Format.Duration, 64); err == nil && seconds >= 0 {
 		duration := int64(seconds*1000 + 0.5)
@@ -194,13 +193,11 @@ func parseFFProbe(entryID string, data []byte) (model.MediaFile, error) {
 	}
 	if item.Kind == "audio" {
 		music := normalizedMusicMetadata(output.Format.Tags, output.Streams, hasAlbumArt)
-		var document map[string]any
-		if err := json.Unmarshal(data, &document); err == nil {
-			document["music"] = music
-			if encoded, err := json.Marshal(document); err == nil {
-				item.Metadata = encoded
-			}
+		encoded, err := json.Marshal(map[string]any{"music": music})
+		if err != nil {
+			return model.ParsedMedia{}, err
 		}
+		item.Metadata = encoded
 	}
 	return item, nil
 }

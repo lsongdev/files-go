@@ -131,7 +131,7 @@ func (p *Thumbnail) sourceImage(ctx context.Context, entry model.Entry) (image.I
 		if !ok {
 			return nil, storage.ErrUnsupported
 		}
-		mediaFile, err := p.catalog.MediaFile(ctx, entry.ID)
+		mediaItem, err := p.catalog.MediaForEntry(ctx, entry.ID)
 		if errors.Is(err, catalog.ErrNotFound) {
 			return nil, nil
 		}
@@ -139,18 +139,20 @@ func (p *Thumbnail) sourceImage(ctx context.Context, entry model.Entry) (image.I
 			return nil, err
 		}
 		var metadata struct {
-			Cover struct {
-				Path string `json:"path"`
-			} `json:"cover"`
+			Embedded struct {
+				Cover struct {
+					Path string `json:"path"`
+				} `json:"cover"`
+			} `json:"embedded"`
 		}
-		if json.Unmarshal(mediaFile.Metadata, &metadata) != nil || metadata.Cover.Path == "" {
+		if json.Unmarshal(mediaItem.Data, &metadata) != nil || metadata.Embedded.Cover.Path == "" {
 			return nil, nil
 		}
 		reader, err := zip.NewReader(readerAt, entry.Size)
 		if err != nil {
 			return nil, fmt.Errorf("open EPUB for cover: %w", err)
 		}
-		cover, err := readZIPFile(ctx, reader.File, metadata.Cover.Path, 32<<20)
+		cover, err := readZIPFile(ctx, reader.File, metadata.Embedded.Cover.Path, 32<<20)
 		if err != nil {
 			return nil, err
 		}

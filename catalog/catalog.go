@@ -3,7 +3,6 @@ package catalog
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -201,6 +200,26 @@ func (c *Catalog) Children(ctx context.Context, parentID string, opts ListOption
 		items = append(items, entry)
 	}
 	return items, rows.Err()
+}
+
+// AvailableChildren returns the direct indexed children of one directory for
+// scoped reconciliation. Unlike the paginated UI query, it must see every
+// child so a removed file cannot be left marked available.
+func (c *Catalog) AvailableChildren(ctx context.Context, parentID string) ([]model.Entry, error) {
+	rows, err := c.reader.QueryContext(ctx, `SELECT `+entryColumns+` FROM entries WHERE parent_id=? AND available=1`, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var entries []model.Entry
+	for rows.Next() {
+		entry, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
 }
 
 // ChildrenByNames returns direct children matching a small, case-insensitive
@@ -428,6 +447,9 @@ func (c *Catalog) RegisterLibrary(ctx context.Context, library model.Library) er
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name, type=excluded.type, updated_at=excluded.updated_at`, library.ID, library.Name, library.Type, now, now); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM library_sources WHERE library_id=?`, library.ID); err != nil {
+		return err
+	}
 	for _, source := range library.Sources {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO library_sources(library_id, storage_id, path, created_at) VALUES (?, ?, ?, ?)
 			ON CONFLICT(library_id, storage_id, path) DO NOTHING`, library.ID, source.StorageID, source.Path, now); err != nil {
@@ -435,6 +457,21 @@ func (c *Catalog) RegisterLibrary(ctx context.Context, library model.Library) er
 		}
 	}
 	return tx.Commit()
+}
+
+// PruneUnconfiguredLibraries keeps the catalog's library list in sync with
+// user configuration. It never deletes indexed entries or media data.
+func (c *Catalog) PruneUnconfiguredLibraries(ctx context.Context, configuredIDs []string) error {
+	if len(configuredIDs) == 0 {
+		_, err := c.db.ExecContext(ctx, `DELETE FROM libraries`)
+		return err
+	}
+	args := make([]any, len(configuredIDs))
+	for index, id := range configuredIDs {
+		args[index] = id
+	}
+	_, err := c.db.ExecContext(ctx, `DELETE FROM libraries WHERE id NOT IN (`+strings.TrimSuffix(strings.Repeat("?,", len(configuredIDs)), ",")+`)`, args...)
+	return err
 }
 
 func (c *Catalog) EnsureRoot(ctx context.Context, storageID string, generation int64) (*model.Entry, error) {
@@ -451,16 +488,20 @@ func (c *Catalog) BeginScan(ctx context.Context, storageID string) (int64, error
 	return session.Generation, err
 }
 
-func (c *Catalog) BeginScanSession(ctx context.Context, storageID string) (ScanSession, error) {
+func (c *Catalog) BeginScanSession(ctx context.Context, storageID string, scope ...string) (ScanSession, error) {
+	requestedScope := ""
+	if len(scope) > 0 {
+		requestedScope = scope[0]
+	}
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ScanSession{}, err
 	}
 	defer tx.Rollback()
 	var currentGeneration, entries, files, directories int64
-	var state string
-	if err := tx.QueryRowContext(ctx, `SELECT scan_generation, state, scan_entries, scan_files, scan_directories
-		FROM storages WHERE id=?`, storageID).Scan(&currentGeneration, &state, &entries, &files, &directories); errors.Is(err, sql.ErrNoRows) {
+	var state, previousScope string
+	if err := tx.QueryRowContext(ctx, `SELECT scan_generation, state, scan_entries, scan_files, scan_directories, scan_scope
+		FROM storages WHERE id=?`, storageID).Scan(&currentGeneration, &state, &entries, &files, &directories, &previousScope); errors.Is(err, sql.ErrNoRows) {
 		return ScanSession{}, fmt.Errorf("storage %q is not registered", storageID)
 	} else if err != nil {
 		return ScanSession{}, err
@@ -472,10 +513,22 @@ func (c *Catalog) BeginScanSession(ctx context.Context, storageID string) (ScanS
 	}
 	// A drive may disappear after an interrupted scan. Its checkpoints remain
 	// valid while the catalog marks the storage offline; resume when it returns.
-	resumed := (state == "interrupted" || state == "offline") && checkpointCount > 0
+	resumed := (state == "interrupted" || state == "offline") && checkpointCount > 0 && previousScope == requestedScope
+	var estimate int64
+	err = tx.QueryRowContext(ctx, `SELECT CASE WHEN EXISTS(SELECT 1 FROM library_sources WHERE storage_id=?) THEN
+		(SELECT COUNT(*) FROM entries e WHERE e.storage_id=? AND EXISTS (
+			SELECT 1 FROM library_sources s WHERE s.storage_id=e.storage_id AND
+			(s.path='' OR e.path='' OR e.path=s.path
+			 OR substr(e.path,1,length(s.path)+1)=s.path || '/'
+			 OR substr(s.path,1,length(e.path)+1)=e.path || '/')))
+		ELSE (SELECT COUNT(*) FROM entries WHERE storage_id=?) END`, storageID, storageID, storageID).Scan(&estimate)
+	if err != nil {
+		return ScanSession{}, err
+	}
 	now := time.Now().UTC()
 	if resumed {
-		if _, err := tx.ExecContext(ctx, `UPDATE storages SET state='scanning', scan_updated_at=?, scan_error=NULL, updated_at=? WHERE id=?`, now, now, storageID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE storages SET state='scanning', scan_updated_at=?,
+			scan_estimate=?, scan_error=NULL, updated_at=? WHERE id=?`, now, estimate, now, storageID); err != nil {
 			return ScanSession{}, err
 		}
 	} else {
@@ -485,7 +538,8 @@ func (c *Catalog) BeginScanSession(ctx context.Context, storageID string) (ScanS
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE storages SET state='scanning', scan_started_at=?, scan_updated_at=?,
 			scan_entries=0, scan_files=0, scan_directories=0,
-			scan_estimate=(SELECT COUNT(*) FROM entries WHERE storage_id=?), scan_error=NULL, updated_at=? WHERE id=?`, now, now, storageID, now, storageID); err != nil {
+			scan_estimate=?, scan_scope=?, scan_error=NULL, updated_at=? WHERE id=?`,
+			now, now, estimate, requestedScope, now, storageID); err != nil {
 			return ScanSession{}, err
 		}
 	}
@@ -724,7 +778,7 @@ func (c *Catalog) RecoverInterruptedScans(ctx context.Context) error {
 	now := time.Now().UTC()
 	_, err := c.db.ExecContext(ctx, `UPDATE storages SET state='interrupted', scan_updated_at=?,
 		scan_error='service stopped before scan completed', updated_at=?
-		WHERE state='scanning' OR (state='error' AND scan_error='context canceled')`, now, now)
+		WHERE state='scanning' OR (state='error' AND scan_error IN ('context canceled', 'interrupted (9)'))`, now, now)
 	return err
 }
 
@@ -780,318 +834,6 @@ func (c *Catalog) librarySources(ctx context.Context, libraryID string) ([]model
 	return items, rows.Err()
 }
 
-func (c *Catalog) UpsertMediaFile(ctx context.Context, item model.MediaFile) error {
-	if item.EntryID == "" || item.Kind == "" {
-		return errors.New("media file entry ID and kind are required")
-	}
-	if len(item.Metadata) == 0 {
-		item.Metadata = json.RawMessage(`{}`)
-	}
-	if !json.Valid(item.Metadata) {
-		return errors.New("media file metadata must be valid JSON")
-	}
-	item.UpdatedAt = time.Now().UTC()
-	_, err := c.db.ExecContext(ctx, `INSERT INTO media_files
-		(entry_id, kind, duration_ms, container, width, height, video_codec, audio_codec, bitrate,
-		 taken_at, camera, latitude, longitude, metadata, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(entry_id) DO UPDATE SET kind=excluded.kind, duration_ms=excluded.duration_ms,
-			container=excluded.container, width=excluded.width, height=excluded.height,
-			video_codec=excluded.video_codec, audio_codec=excluded.audio_codec,
-			bitrate=excluded.bitrate, taken_at=excluded.taken_at, camera=excluded.camera,
-			latitude=excluded.latitude, longitude=excluded.longitude,
-			metadata=excluded.metadata, updated_at=excluded.updated_at`,
-		item.EntryID, item.Kind, item.DurationMS, item.Container, item.Width, item.Height,
-		item.VideoCodec, item.AudioCodec, item.Bitrate, item.TakenAt, item.Camera,
-		item.Latitude, item.Longitude, string(item.Metadata), item.UpdatedAt)
-	return err
-}
-
-func (c *Catalog) MediaFile(ctx context.Context, entryID string) (*model.MediaFile, error) {
-	var item model.MediaFile
-	var duration, bitrate sql.NullInt64
-	var width, height sql.NullInt64
-	var takenAt sql.NullTime
-	var latitude, longitude sql.NullFloat64
-	var metadata string
-	err := c.reader.QueryRowContext(ctx, `SELECT entry_id, kind, duration_ms, container, width, height,
-		video_codec, audio_codec, bitrate, taken_at, camera, latitude, longitude, metadata, updated_at FROM media_files WHERE entry_id=?`, entryID).
-		Scan(&item.EntryID, &item.Kind, &duration, &item.Container, &width, &height,
-			&item.VideoCodec, &item.AudioCodec, &bitrate, &takenAt, &item.Camera,
-			&latitude, &longitude, &metadata, &item.UpdatedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	if duration.Valid {
-		item.DurationMS = &duration.Int64
-	}
-	if bitrate.Valid {
-		item.Bitrate = &bitrate.Int64
-	}
-	if takenAt.Valid {
-		item.TakenAt = &takenAt.Time
-	}
-	if latitude.Valid {
-		item.Latitude = &latitude.Float64
-	}
-	if longitude.Valid {
-		item.Longitude = &longitude.Float64
-	}
-	if width.Valid {
-		value := int(width.Int64)
-		item.Width = &value
-	}
-	if height.Valid {
-		value := int(height.Int64)
-		item.Height = &value
-	}
-	item.Metadata = json.RawMessage(metadata)
-	return &item, nil
-}
-
-// EntriesMissingMediaAssociation pages through files whose extracted metadata
-// can support a hierarchy but which have not yet received the requested role.
-// It is used for small, versioned startup backfills without rescanning storage.
-func (c *Catalog) EntriesMissingMediaAssociation(ctx context.Context, kind, role, afterID string, limit int) ([]model.Entry, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 500
-	}
-	rows, err := c.reader.QueryContext(ctx, `SELECT `+qualifiedEntryColumns+`
-		FROM entries e JOIN media_files technical ON technical.entry_id=e.id
-		WHERE technical.kind=? AND e.available=1 AND e.id>? AND
-			(?!='photo' OR lower(e.name) NOT IN ('folder.jpg','folder.jpeg','folder.png','poster.jpg','poster.jpeg','poster.png','cover.jpg','cover.jpeg','cover.png','backdrop.jpg','backdrop.jpeg','backdrop.png','fanart.jpg','fanart.jpeg','fanart.png','background.jpg','background.jpeg','background.png')) AND
-			(?!='album' OR trim(COALESCE(json_extract(technical.metadata, '$.music.album'), ''))!='') AND
-			(?!='video' OR EXISTS (
-				SELECT 1 FROM library_sources source JOIN libraries library ON library.id=source.library_id
-				WHERE source.storage_id=e.storage_id AND library.type IN ('movies','tv') AND
-					(source.path='' OR e.path=source.path OR substr(e.path,1,length(source.path)+1)=source.path || '/')
-			)) AND
-			NOT EXISTS (SELECT 1 FROM media_item_files association
-				WHERE association.entry_id=e.id AND association.role=?)
-		ORDER BY e.id LIMIT ?`, kind, afterID, role, role, kind, role, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := make([]model.Entry, 0, limit)
-	for rows.Next() {
-		entry, err := scanEntry(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, entry)
-	}
-	return items, rows.Err()
-}
-
-// EntriesMissingAudioArtwork finds tagged audio that advertises embedded cover
-// art but has no cached thumbnail yet. It lets a newly-added artwork processor
-// backfill an existing catalog without walking the storage again.
-func (c *Catalog) EntriesMissingAudioArtwork(ctx context.Context, afterID string, limit int) ([]model.Entry, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 500
-	}
-	rows, err := c.reader.QueryContext(ctx, `SELECT `+qualifiedEntryColumns+`
-		FROM entries e JOIN media_files technical ON technical.entry_id=e.id
-		WHERE technical.kind='audio' AND e.available=1 AND e.id>? AND
-			json_extract(technical.metadata, '$.music.hasAlbumArt')=1 AND
-			NOT EXISTS (SELECT 1 FROM artifacts artifact
-				WHERE artifact.entry_id=e.id AND artifact.type='thumbnail')
-		ORDER BY e.id LIMIT ?`, afterID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := make([]model.Entry, 0, limit)
-	for rows.Next() {
-		entry, err := scanEntry(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, entry)
-	}
-	return items, rows.Err()
-}
-
-// EntriesMediaSidecars pages through conventional directory-level NFO and
-// artwork files so a new sidecar processor can backfill an existing catalog
-// without a storage scan.
-func (c *Catalog) EntriesMediaSidecars(ctx context.Context, afterID string, limit int) ([]model.Entry, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 500
-	}
-	rows, err := c.reader.QueryContext(ctx, `SELECT `+qualifiedEntryColumns+` FROM entries e
-		WHERE e.type='file' AND e.available=1 AND e.id>? AND (
-			(lower(e.extension)='nfo' AND EXISTS (
-				SELECT 1 FROM library_sources source JOIN libraries library ON library.id=source.library_id
-				WHERE library.type='movies' AND source.storage_id=e.storage_id AND
-					(source.path='' OR e.path=source.path OR substr(e.path,1,length(source.path)+1)=source.path || '/')
-			)) OR lower(e.name) IN (
-			'tvshow.nfo','movie.nfo',
-			'folder.jpg','folder.jpeg','folder.png','poster.jpg','poster.jpeg','poster.png',
-			'cover.jpg','cover.jpeg','cover.png','backdrop.jpg','backdrop.jpeg','backdrop.png',
-			'fanart.jpg','fanart.jpeg','fanart.png','background.jpg','background.jpeg','background.png'
-		) OR (lower(e.extension) IN ('jpg','jpeg','png') AND (
-			lower(e.name) GLOB '*-poster.*' OR lower(e.name) GLOB '*-cover.*' OR
-			lower(e.name) GLOB '*-fanart.*' OR lower(e.name) GLOB '*-backdrop.*' OR
-			lower(e.name) GLOB '*-background.*') AND EXISTS (
-				SELECT 1 FROM library_sources source JOIN libraries library ON library.id=source.library_id
-				WHERE library.type IN ('movies','tv') AND source.storage_id=e.storage_id AND
-					(source.path='' OR e.path=source.path OR substr(e.path,1,length(source.path)+1)=source.path || '/')
-			))) ORDER BY e.id LIMIT ?`, afterID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := make([]model.Entry, 0, limit)
-	for rows.Next() {
-		entry, err := scanEntry(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, entry)
-	}
-	return items, rows.Err()
-}
-
-// EntriesNeedingEpisodeMetadata returns unlocked TV episodes that still use
-// the filename fallback. A pipeline-versioned job can enrich them with the
-// provider's episode title, overview, and still without a filesystem rescan.
-func (c *Catalog) EntriesNeedingEpisodeMetadata(ctx context.Context, afterID string, limit int) ([]model.Entry, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 500
-	}
-	rows, err := c.reader.QueryContext(ctx, `SELECT `+qualifiedEntryColumns+`
-		FROM entries e JOIN media_item_files association ON association.entry_id=e.id AND association.role='video'
-		JOIN media_items media ON media.id=association.media_id
-		WHERE e.available=1 AND e.id>? AND media.type='episode' AND media.match_source!='tmdb'
-			AND media.match_locked=0
-			AND NOT EXISTS (SELECT 1 FROM media_match_suppressions suppression WHERE suppression.entry_id=e.id)
-			AND EXISTS (SELECT 1 FROM library_sources source JOIN libraries library ON library.id=source.library_id
-				WHERE source.storage_id=e.storage_id AND library.type='tv' AND
-					(source.path='' OR e.path=source.path OR substr(e.path,1,length(source.path)+1)=source.path || '/'))
-		ORDER BY e.id LIMIT ?`, afterID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := make([]model.Entry, 0, limit)
-	for rows.Next() {
-		entry, err := scanEntry(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, entry)
-	}
-	return items, rows.Err()
-}
-
-// EntriesNeedingTVFolderMetadata selects one representative technical video
-// from each top-level TV folder that still has no usable poster. Folder-level
-// identity becomes visible promptly while episode detail enrichment continues
-// independently in the background.
-func (c *Catalog) EntriesNeedingTVFolderMetadata(ctx context.Context, limit int) ([]model.Entry, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 500
-	}
-	rows, err := c.reader.QueryContext(ctx, `SELECT `+qualifiedEntryColumns+` FROM entries e
-		WHERE e.id IN (
-			SELECT (
-				SELECT video.id FROM entries video
-				JOIN media_files technical ON technical.entry_id=video.id AND technical.kind='video'
-				WHERE video.storage_id=folder.storage_id AND video.available=1 AND
-					substr(video.path,1,length(folder.path)+1)=folder.path || '/'
-				ORDER BY video.path LIMIT 1
-			)
-			FROM libraries library JOIN library_sources source ON source.library_id=library.id
-			JOIN entries library_root ON library_root.storage_id=source.storage_id AND
-				library_root.path=source.path AND library_root.available=1
-			JOIN entries folder ON folder.parent_id=library_root.id AND folder.type='directory' AND folder.available=1
-			LEFT JOIN media_item_files folder_link ON folder_link.entry_id=folder.id AND folder_link.role='folder'
-			LEFT JOIN media_items media ON media.id=folder_link.media_id
-			WHERE library.type='tv' AND COALESCE(
-				json_extract(media.metadata, '$.localPosterEntryId'),
-				json_extract(media.metadata, '$.posterPath'), '')=''
-		) ORDER BY e.id LIMIT ?`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := make([]model.Entry, 0, limit)
-	for rows.Next() {
-		entry, err := scanEntry(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, entry)
-	}
-	return items, rows.Err()
-}
-
-// EntriesAutoMatchedTV returns episode files attached to an unlocked automatic
-// provider series. Re-validating these against current parsing rules repairs
-// earlier false positives without touching manual or NFO-authoritative matches.
-func (c *Catalog) EntriesAutoMatchedTV(ctx context.Context, afterID string, limit int) ([]model.Entry, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 500
-	}
-	rows, err := c.reader.QueryContext(ctx, `SELECT DISTINCT `+qualifiedEntryColumns+`
-		FROM entries e JOIN media_item_files association ON association.entry_id=e.id AND association.role='series'
-		JOIN media_items series ON series.id=association.media_id
-		WHERE e.available=1 AND e.id>? AND series.type='series' AND series.match_source='tmdb' AND series.match_locked=0
-		ORDER BY e.id LIMIT ?`, afterID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := make([]model.Entry, 0, limit)
-	for rows.Next() {
-		entry, err := scanEntry(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, entry)
-	}
-	return items, rows.Err()
-}
-
-// EntriesNeedingMovieMetadata returns movie files that never advanced beyond
-// filename parsing, allowing provider matching added or repaired later to fill
-// titles and posters without a filesystem scan. The containing folder may
-// already point at a different, authoritative NFO/provider item; that is a
-// reason to reconcile the file, not a reason to exclude it.
-func (c *Catalog) EntriesNeedingMovieMetadata(ctx context.Context, afterID string, limit int) ([]model.Entry, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 500
-	}
-	rows, err := c.reader.QueryContext(ctx, `SELECT DISTINCT `+qualifiedEntryColumns+`
-		FROM entries e JOIN media_item_files association ON association.entry_id=e.id AND association.role='video'
-		JOIN media_items media ON media.id=association.media_id
-		WHERE e.available=1 AND e.id>? AND media.type='movie' AND media.match_source='filename'
-			AND media.match_locked=0
-			AND NOT EXISTS (SELECT 1 FROM media_match_suppressions suppression WHERE suppression.entry_id=e.id)
-			AND EXISTS (SELECT 1 FROM library_sources source JOIN libraries library ON library.id=source.library_id
-				WHERE source.storage_id=e.storage_id AND library.type='movies' AND
-					(source.path='' OR e.path=source.path OR substr(e.path,1,length(source.path)+1)=source.path || '/'))
-		ORDER BY e.id LIMIT ?`, afterID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := make([]model.Entry, 0, limit)
-	for rows.Next() {
-		entry, err := scanEntry(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, entry)
-	}
-	return items, rows.Err()
-}
-
 func (c *Catalog) UpsertArtifact(ctx context.Context, item model.Artifact) (*model.Artifact, error) {
 	if item.ID == "" {
 		item.ID = uuid.Must(uuid.NewV7()).String()
@@ -1101,45 +843,29 @@ func (c *Catalog) UpsertArtifact(ctx context.Context, item model.Artifact) (*mod
 		item.CreatedAt = now
 	}
 	item.LastAccessedAt = now
-	var entryID, mediaID any
+	var entryID any
 	if item.EntryID != "" {
 		entryID = item.EntryID
 	}
-	if item.MediaID != "" {
-		mediaID = item.MediaID
-	}
 	err := c.db.QueryRowContext(ctx, `INSERT INTO artifacts
-		(id, entry_id, media_id, type, variant, key, mime, size, created_at, last_accessed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(type, key) DO UPDATE SET entry_id=excluded.entry_id, media_id=excluded.media_id,
+		(id, entry_id, type, variant, key, mime, size, created_at, last_accessed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(type, key) DO UPDATE SET entry_id=excluded.entry_id,
 			variant=excluded.variant, mime=excluded.mime, size=excluded.size, last_accessed_at=excluded.last_accessed_at
-		RETURNING id, COALESCE(entry_id, ''), COALESCE(media_id, ''), type, variant, key,
+		RETURNING id, COALESCE(entry_id, ''), type, variant, key,
 			COALESCE(mime, ''), size, created_at, last_accessed_at`,
-		item.ID, entryID, mediaID, item.Type, item.Variant, item.Key, item.MIME, item.Size,
-		item.CreatedAt, item.LastAccessedAt).Scan(&item.ID, &item.EntryID, &item.MediaID, &item.Type,
+		item.ID, entryID, item.Type, item.Variant, item.Key, item.MIME, item.Size,
+		item.CreatedAt, item.LastAccessedAt).Scan(&item.ID, &item.EntryID, &item.Type,
 		&item.Variant, &item.Key, &item.MIME, &item.Size, &item.CreatedAt, &item.LastAccessedAt)
 	return &item, err
 }
 
 func (c *Catalog) ArtifactForEntry(ctx context.Context, entryID, artifactType, variant string) (*model.Artifact, error) {
 	var item model.Artifact
-	err := c.reader.QueryRowContext(ctx, `SELECT id, COALESCE(entry_id, ''), COALESCE(media_id, ''), type,
+	err := c.reader.QueryRowContext(ctx, `SELECT id, COALESCE(entry_id, ''), type,
 		variant, key, COALESCE(mime, ''), size, created_at, last_accessed_at
 		FROM artifacts WHERE entry_id=? AND type=? AND variant=? ORDER BY created_at DESC LIMIT 1`,
-		entryID, artifactType, variant).Scan(&item.ID, &item.EntryID, &item.MediaID, &item.Type,
-		&item.Variant, &item.Key, &item.MIME, &item.Size, &item.CreatedAt, &item.LastAccessedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
-	return &item, err
-}
-
-func (c *Catalog) ArtifactForMedia(ctx context.Context, mediaID, artifactType, variant string) (*model.Artifact, error) {
-	var item model.Artifact
-	err := c.reader.QueryRowContext(ctx, `SELECT id, COALESCE(entry_id, ''), COALESCE(media_id, ''), type,
-		variant, key, COALESCE(mime, ''), size, created_at, last_accessed_at
-		FROM artifacts WHERE media_id=? AND type=? AND variant=? ORDER BY created_at DESC LIMIT 1`,
-		mediaID, artifactType, variant).Scan(&item.ID, &item.EntryID, &item.MediaID, &item.Type,
+		entryID, artifactType, variant).Scan(&item.ID, &item.EntryID, &item.Type,
 		&item.Variant, &item.Key, &item.MIME, &item.Size, &item.CreatedAt, &item.LastAccessedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

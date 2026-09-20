@@ -21,7 +21,7 @@ type Capabilities struct {
 	HLS         bool     `json:"hls"`
 }
 
-func Decide(file model.MediaFile, capabilities Capabilities) Mode {
+func Decide(file model.ParsedMedia, capabilities Capabilities) Mode {
 	if supportsContainer(capabilities.Containers, file.Container) && supports(capabilities.VideoCodecs, file.VideoCodec) && supports(capabilities.AudioCodecs, file.AudioCodec) {
 		return ModeDirect
 	}
