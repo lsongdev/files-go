@@ -20,7 +20,7 @@ import (
 type MovieDirectory struct {
 	catalog  *catalog.Catalog
 	nfo      nfoReader
-	artwork  *tmdb.Artwork
+	afterMatch func(context.Context, string) error
 	provider tmdb.Provider
 	language string
 }
@@ -36,7 +36,7 @@ func NewMovieDirectoryWithProvider(catalog *catalog.Catalog, storages *storage.R
 	return &MovieDirectory{catalog: catalog, nfo: nfoReader{storages: storages}, provider: provider, language: language}
 }
 
-func (p *MovieDirectory) SetArtwork(artwork *tmdb.Artwork) { p.artwork = artwork }
+func (p *MovieDirectory) SetMatchedHook(hook func(context.Context, string) error) { p.afterMatch = hook }
 
 func (p *MovieDirectory) Name() string { return "movie_directory" }
 func (p *MovieDirectory) Match(entry model.Entry) bool {
@@ -231,8 +231,8 @@ func (p *MovieDirectory) enrichTVDirectory(ctx context.Context, directory model.
 				var candidate tmdb.Candidate
 				if json.Unmarshal(previous.Data, &candidate) == nil {
 					if _, score, matched := bestCandidate(parsed, []tmdb.Candidate{candidate}); matched && score >= .8 {
-						if p.artwork != nil {
-							return p.artwork.ProcessEntry(ctx, directory.ID)
+						if p.afterMatch != nil {
+							return p.afterMatch(ctx, directory.ID)
 						}
 						return nil
 					}
@@ -265,8 +265,8 @@ func (p *MovieDirectory) enrichTVDirectory(ctx context.Context, directory model.
 	}); err != nil {
 		return err
 	}
-	if p.artwork != nil {
-		return p.artwork.ProcessEntry(ctx, directory.ID)
+	if p.afterMatch != nil {
+		return p.afterMatch(ctx, directory.ID)
 	}
 	return nil
 }
@@ -363,8 +363,8 @@ func (p *MovieDirectory) enrichMovieDirectory(ctx context.Context, directory mod
 	if err != nil {
 		return err
 	}
-	if p.artwork != nil {
-		return p.artwork.ProcessEntry(ctx, directory.ID)
+	if p.afterMatch != nil {
+		return p.afterMatch(ctx, directory.ID)
 	}
 	return nil
 }
