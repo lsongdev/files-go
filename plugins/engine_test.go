@@ -1,4 +1,4 @@
-package processor
+package plugins
 
 import (
 	"context"

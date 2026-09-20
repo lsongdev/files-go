@@ -24,11 +24,12 @@ import (
 	"github.com/lsongdev/files-go/database"
 	"github.com/lsongdev/files-go/indexer"
 	"github.com/lsongdev/files-go/jobs"
-	mediaengine "github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/model"
 	"github.com/lsongdev/files-go/playback"
+	"github.com/lsongdev/files-go/plugins"
 	"github.com/lsongdev/files-go/processor"
 	"github.com/lsongdev/files-go/storage"
+	"github.com/lsongdev/files-go/tmdb"
 )
 
 type apiMetadataProvider struct{}
@@ -60,7 +61,7 @@ func TestScanEntryQueuesOnlyConfiguredFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	queue := jobs.New(db, time.Minute)
-	idx.SetEntrySink(processor.New(cat, queue))
+	idx.SetEntrySink(plugins.New(cat, queue))
 	server := New(ctx, cat, storage.NewRegistry(), idx, log.Default(), t.TempDir())
 	for _, check := range []struct {
 		entry model.Entry
@@ -110,7 +111,7 @@ func TestMediaImageEndpointsResolvePublicFields(t *testing.T) {
 		t.Fatalf("icon response = %d, location %q", response.Code, response.Header().Get("Location"))
 	}
 	key := strings.Repeat("a", 64)
-	filename, err := mediaengine.ArtifactPath(cacheDir, "posters", key, "jpg")
+	filename, err := tmdb.ArtifactPath(cacheDir, "posters", key, "jpg")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,14 +188,14 @@ func TestEntryMediaProjectionMatchesListAndDetail(t *testing.T) {
 	}
 }
 
-func (apiMetadataProvider) Search(_ context.Context, query mediaengine.Query) ([]mediaengine.Candidate, error) {
+func (apiMetadataProvider) Search(_ context.Context, query tmdb.Query) ([]tmdb.Candidate, error) {
 	year := 2014
-	return []mediaengine.Candidate{{ID: "157336", Type: query.Type, Title: "Interstellar", Year: &year}}, nil
+	return []tmdb.Candidate{{ID: "157336", Type: query.Type, Title: "Interstellar", Year: &year}}, nil
 }
 
-func (apiMetadataProvider) Fetch(_ context.Context, itemType, id, _ string) (mediaengine.Candidate, error) {
+func (apiMetadataProvider) Fetch(_ context.Context, itemType, id, _ string) (tmdb.Candidate, error) {
 	year := 2014
-	return mediaengine.Candidate{ID: id, Type: itemType, Title: "Interstellar", Year: &year, PosterPath: "/poster.jpg"}, nil
+	return tmdb.Candidate{ID: id, Type: itemType, Title: "Interstellar", Year: &year, PosterPath: "/poster.jpg"}, nil
 }
 
 func TestManualMediaCandidateAPI(t *testing.T) {
@@ -299,7 +300,7 @@ func TestSystemStatusReportsProcessingQueue(t *testing.T) {
 	}
 	defer db.Close()
 	queue := jobs.New(db, time.Minute)
-	if _, _, err := queue.Enqueue(ctx, processor.JobProcessEntry, map[string]string{"entryId": "one"}, jobs.EnqueueOptions{Key: "one"}); err != nil {
+	if _, _, err := queue.Enqueue(ctx, plugins.JobProcessEntry, map[string]string{"entryId": "one"}, jobs.EnqueueOptions{Key: "one"}); err != nil {
 		t.Fatal(err)
 	}
 	cat := catalog.New(db)

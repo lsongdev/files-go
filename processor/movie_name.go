@@ -1,4 +1,4 @@
-package media
+package processor
 
 import (
 	"path/filepath"
@@ -9,7 +9,7 @@ import (
 	"github.com/lsongdev/files-go/model"
 )
 
-type ParsedName struct {
+type MovieName struct {
 	Title   string
 	Year    *int
 	Season  *int
@@ -67,12 +67,12 @@ func parseReleaseInfo(stem string) ReleaseInfo {
 	return value
 }
 
-// ParsedNameForEntry uses the containing series directory when an episode is
+// ParseMovieEntryName uses the containing series directory when an episode is
 // named only by its season/episode number, for example
 // Attack.On.Titan/S01/S01E01.mp4. The filesystem hierarchy remains the source
 // of the fallback title; no separate media browsing tree is introduced.
-func ParsedNameForEntry(entry model.Entry, isTV bool) ParsedName {
-	result := ParseName(entry.Name)
+func ParseMovieEntryName(entry model.Entry, isTV bool) MovieName {
+	result := ParseMovieName(entry.Name)
 	if isTV && (result.Season == nil || result.Episode == nil) {
 		if season, episode, ok := fallbackTVNumbers(entry); ok {
 			result.Season, result.Episode = &season, &episode
@@ -162,12 +162,12 @@ func fallbackSeriesTitle(path string) string {
 	return ""
 }
 
-func ParseName(filename string) ParsedName {
+func ParseMovieName(filename string) MovieName {
 	name := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
 	release := parseReleaseInfo(name)
 	name = bracketPattern.ReplaceAllString(name, " ")
 	name = strings.NewReplacer(".", " ", "_", " ").Replace(name)
-	result := ParsedName{Release: release}
+	result := MovieName{Release: release}
 	if match := tvPattern.FindStringSubmatch(name); match != nil {
 		seasonText, episodeText := match[1], match[2]
 		if seasonText == "" {

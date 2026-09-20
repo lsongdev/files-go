@@ -1,15 +1,17 @@
-package media
+package processor
 
 import (
 	"math"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/lsongdev/files-go/tmdb"
 )
 
-func bestCandidate(parsed ParsedName, candidates []Candidate) (Candidate, float64, bool) {
+func bestCandidate(parsed MovieName, candidates []tmdb.Candidate) (tmdb.Candidate, float64, bool) {
 	type scored struct {
-		candidate Candidate
+		candidate tmdb.Candidate
 		score     float64
 	}
 	items := make([]scored, 0, len(candidates))
@@ -38,7 +40,7 @@ func bestCandidate(parsed ParsedName, candidates []Candidate) (Candidate, float6
 	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].score > items[j].score })
 	if len(items) == 0 {
-		return Candidate{}, 0, false
+		return tmdb.Candidate{}, 0, false
 	}
 	return items[0].candidate, items[0].score, true
 }

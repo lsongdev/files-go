@@ -30,7 +30,7 @@ type MediaCandidate struct {
 // The ordering is deliberately shared by every plugin. Source payloads are
 // kept so removal of an NFO or manual override can reveal the next candidate.
 var mediaSourcePriority = []string{
-	"manual", "local_nfo", "local_artwork", "embedded", "tmdb", "filename", "screenshot",
+	"manual", "local_nfo", "local_artwork", "tmdb", "filename", "embedded", "screenshot",
 }
 
 func validMediaSource(source string) bool {

@@ -1,6 +1,6 @@
-// Package enrichment assembles media-specific processing plugins. Each plugin
-// owns its file matcher and ordered steps; the engine only schedules entries.
-package enrichment
+// Package plugins composes reusable processors into product-level media plugins.
+// Each plugin owns its matcher and ordered capabilities; Engine only schedules work.
+package plugins
 
 import (
 	"strings"

@@ -1,4 +1,4 @@
-package enrichment
+package plugins
 
 import (
 	"time"
@@ -10,8 +10,8 @@ import (
 )
 
 // Music extracts audio metadata and embedded cover art.
-func Music(catalog *catalog.Catalog, storages *storage.Registry, thumbnail *processor.Thumbnail, ffprobe, ffmpeg string) processor.Plugin {
-	return processor.NewPlugin("music", func(entry model.Entry) bool {
+func Music(catalog *catalog.Catalog, storages *storage.Registry, thumbnail *processor.Thumbnail, ffprobe, ffmpeg string) Plugin {
+	return NewPlugin("music", func(entry model.Entry) bool {
 		return extensionIn(entry, "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "wma", "aiff", "ape")
 	},
 		processor.NewFFProbe(catalog, storages, ffprobe, 30*time.Second),

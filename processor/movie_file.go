@@ -1,44 +1,44 @@
-package media
+package processor
 
 import (
 	"context"
 	"encoding/json"
-	"strconv"
 	"strings"
 
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/model"
+	"github.com/lsongdev/files-go/tmdb"
 )
 
-// VideoEnricher writes the file's own display candidate. It parses the
+// MovieFile writes the file's own display candidate. It parses the
 // filename before consulting TMDB and never changes its parent directory.
-type VideoEnricher struct {
+type MovieFile struct {
 	catalog   *catalog.Catalog
-	provider  MetadataProvider
+	provider  tmdb.Provider
 	language  string
 	threshold float64
 }
 
-func NewVideoEnricher(catalog *catalog.Catalog, provider MetadataProvider, language string) *VideoEnricher {
+func NewMovieFile(catalog *catalog.Catalog, provider tmdb.Provider, language string) *MovieFile {
 	if language == "" {
 		language = "zh-CN"
 	}
-	return &VideoEnricher{catalog: catalog, provider: provider, language: language, threshold: .8}
+	return &MovieFile{catalog: catalog, provider: provider, language: language, threshold: .8}
 }
 
-func (p *VideoEnricher) Name() string { return "video_enrichment" }
-func (p *VideoEnricher) Match(entry model.Entry) bool {
+func (p *MovieFile) Name() string { return "movie_metadata" }
+func (p *MovieFile) Match(entry model.Entry) bool {
 	return entry.Type == model.EntryFile && !strings.HasPrefix(entry.Name, "._") &&
 		!strings.HasSuffix(strings.ToLower(entry.Name), ".d.ts") && movieVideoExtension(entry.Extension)
 }
 
-func (p *VideoEnricher) Process(ctx context.Context, entry model.Entry) error {
+func (p *MovieFile) Process(ctx context.Context, entry model.Entry) error {
 	libraryTypes, err := p.catalog.LibraryTypesForEntry(ctx, entry)
 	if err != nil {
 		return err
 	}
 	isTV := contains(libraryTypes, "tv")
-	parsed := ParsedNameForEntry(entry, isTV)
+	parsed := ParseMovieEntryName(entry, isTV)
 	kind := ""
 	if isTV && parsed.Season != nil && parsed.Episode != nil {
 		kind = "episode"
@@ -49,13 +49,7 @@ func (p *VideoEnricher) Process(ctx context.Context, entry model.Entry) error {
 		_, err := p.catalog.ClearMediaCandidate(ctx, entry.ID, "filename")
 		return err
 	}
-	line1 := "电影"
-	if kind == "episode" {
-		line1 = "电视剧"
-	}
-	if parsed.Year != nil {
-		line1 += " · " + strconv.Itoa(*parsed.Year)
-	}
+	line1, line2, line3 := MovieDisplay(kind, parsed, nil)
 	data, err := json.Marshal(map[string]any{
 		"season": parsed.Season, "episode": parsed.Episode, "release": parsed.Release,
 	})
@@ -63,7 +57,7 @@ func (p *VideoEnricher) Process(ctx context.Context, entry model.Entry) error {
 		return err
 	}
 	if _, err := p.catalog.SetMediaCandidate(ctx, entry.ID, "filename", catalog.MediaCandidate{
-		Kind: kind, Title: parsed.Title, Year: parsed.Year, Line1: line1, Data: data,
+		Kind: kind, Title: parsed.Title, Year: parsed.Year, Line1: line1, Line2: line2, Line3: line3, Data: data,
 	}); err != nil {
 		return err
 	}
@@ -81,7 +75,7 @@ func (p *VideoEnricher) Process(ctx context.Context, entry model.Entry) error {
 	if kind == "episode" {
 		providerType = "tv"
 	}
-	results, err := p.provider.Search(ctx, Query{Type: providerType, Title: parsed.Title, Year: parsed.Year, Language: p.language})
+	results, err := p.provider.Search(ctx, tmdb.Query{Type: providerType, Title: parsed.Title, Year: parsed.Year, Language: p.language})
 	if err != nil {
 		return err // Do not erase a previous match on a network error.
 	}
@@ -97,8 +91,10 @@ func (p *VideoEnricher) Process(ctx context.Context, entry model.Entry) error {
 	if err != nil {
 		return err
 	}
+	line1, line2, line3 = MovieDisplay(kind, parsed, &match)
 	_, err = p.catalog.SetMediaCandidate(ctx, entry.ID, "tmdb", catalog.MediaCandidate{
-		Kind: kind, Title: match.Title, Year: match.Year, Summary: strings.TrimSpace(match.Overview), Data: encoded,
+		Kind: kind, Title: match.Title, Year: match.Year, Line1: line1, Line2: line2, Line3: line3,
+		Summary: strings.TrimSpace(match.Overview), Data: encoded,
 	})
 	return err
 }

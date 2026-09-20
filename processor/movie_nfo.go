@@ -1,4 +1,4 @@
-package media
+package processor
 
 import (
 	"context"
@@ -171,10 +171,10 @@ func (p nfoReader) selectDirectoryNFO(ctx context.Context, directory model.Entry
 	if len(identities) == 1 {
 		return parsed[0].entry, &parsed[0].document, false, nil
 	}
-	directoryTitle := ParseName(directory.Name).Title
+	directoryTitle := ParseMovieName(directory.Name).Title
 	bestIndex, bestScore, secondScore := -1, float64(0), float64(0)
 	for index, candidate := range parsed {
-		filenameTitle := ParseName(candidate.entry.Name).Title
+		filenameTitle := ParseMovieName(candidate.entry.Name).Title
 		score := math.Max(titleScore(directoryTitle, candidate.document.Title), titleScore(filenameTitle, candidate.document.Title))
 		if score > bestScore {
 			secondScore, bestScore, bestIndex = bestScore, score, index

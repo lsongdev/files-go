@@ -1,4 +1,4 @@
-package media
+package tmdb
 
 import "context"
 
@@ -23,20 +23,7 @@ type Candidate struct {
 	Aliases       []string `json:"aliases,omitempty"`
 }
 
-type MetadataProvider interface {
+type Provider interface {
 	Search(context.Context, Query) ([]Candidate, error)
 	Fetch(context.Context, string, string, string) (Candidate, error)
-}
-
-// EpisodeMetadataProvider is optional so other providers can still implement
-// only series/movie lookup. Matchers degrade to a numbered episode when the
-// provider does not expose episode-level metadata or the request fails.
-type EpisodeMetadataProvider interface {
-	FetchEpisode(context.Context, string, int, int, string) (Candidate, error)
-}
-
-// AlternativeTitlesProvider is optional. It lets conservative matching use
-// official aliases without lowering the global confidence threshold.
-type AlternativeTitlesProvider interface {
-	FetchAlternativeTitles(context.Context, string, string) ([]string, error)
 }

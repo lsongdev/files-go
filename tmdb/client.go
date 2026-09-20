@@ -1,4 +1,4 @@
-package media
+package tmdb
 
 import (
 	"context"
@@ -13,19 +13,19 @@ import (
 	"time"
 )
 
-type TMDB struct {
+type Client struct {
 	token, baseURL string
 	client         *http.Client
 }
 
-func NewTMDB(token string, client *http.Client) *TMDB {
+func New(token string, client *http.Client) *Client {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	return &TMDB{token: strings.TrimSpace(token), baseURL: "https://api.themoviedb.org/3", client: client}
+	return &Client{token: strings.TrimSpace(token), baseURL: "https://api.themoviedb.org/3", client: client}
 }
 
-func (p *TMDB) Search(ctx context.Context, query Query) ([]Candidate, error) {
+func (p *Client) Search(ctx context.Context, query Query) ([]Candidate, error) {
 	if query.Type != "movie" && query.Type != "tv" {
 		return nil, errors.New("TMDB search type must be movie or tv")
 	}
@@ -56,7 +56,7 @@ func (p *TMDB) Search(ctx context.Context, query Query) ([]Candidate, error) {
 	return items, nil
 }
 
-func (p *TMDB) search(ctx context.Context, query Query, language string) ([]Candidate, error) {
+func (p *Client) search(ctx context.Context, query Query, language string) ([]Candidate, error) {
 	values := url.Values{"query": {query.Title}, "include_adult": {"false"}}
 	if language != "" {
 		values.Set("language", language)
@@ -95,7 +95,7 @@ func appendUnique(values []string, additions ...string) []string {
 	return values
 }
 
-func (p *TMDB) Fetch(ctx context.Context, itemType, id, language string) (Candidate, error) {
+func (p *Client) Fetch(ctx context.Context, itemType, id, language string) (Candidate, error) {
 	if itemType != "movie" && itemType != "tv" {
 		return Candidate{}, errors.New("TMDB item type must be movie or tv")
 	}
@@ -113,7 +113,7 @@ func (p *TMDB) Fetch(ctx context.Context, itemType, id, language string) (Candid
 	return item.candidate(itemType), nil
 }
 
-func (p *TMDB) FetchEpisode(ctx context.Context, seriesID string, season, episode int, language string) (Candidate, error) {
+func (p *Client) FetchEpisode(ctx context.Context, seriesID string, season, episode int, language string) (Candidate, error) {
 	if _, err := strconv.ParseInt(seriesID, 10, 64); err != nil || season < 0 || episode < 0 {
 		return Candidate{}, errors.New("invalid TMDB episode identity")
 	}
@@ -143,7 +143,7 @@ func (p *TMDB) FetchEpisode(ctx context.Context, seriesID string, season, episod
 	return result, nil
 }
 
-func (p *TMDB) FetchAlternativeTitles(ctx context.Context, itemType, id string) ([]string, error) {
+func (p *Client) FetchAlternativeTitles(ctx context.Context, itemType, id string) ([]string, error) {
 	if itemType != "movie" && itemType != "tv" {
 		return nil, errors.New("TMDB item type must be movie or tv")
 	}
@@ -171,7 +171,7 @@ func (p *TMDB) FetchAlternativeTitles(ctx context.Context, itemType, id string) 
 	return aliases, nil
 }
 
-func (p *TMDB) get(ctx context.Context, endpoint string, values url.Values, output any) error {
+func (p *Client) get(ctx context.Context, endpoint string, values url.Values, output any) error {
 	if p.token == "" {
 		return errors.New("TMDB token is not configured")
 	}

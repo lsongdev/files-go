@@ -1,4 +1,4 @@
-package media
+package processor
 
 import (
 	"context"
@@ -12,40 +12,41 @@ import (
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/model"
 	"github.com/lsongdev/files-go/storage"
+	"github.com/lsongdev/files-go/tmdb"
 )
 
-// DirectoryEnricher assigns local sidecars to the directory itself. It does
+// MovieDirectory assigns local sidecars to the directory itself. It does
 // not copy a child's movie identity to the parent directory.
-type DirectoryEnricher struct {
+type MovieDirectory struct {
 	catalog  *catalog.Catalog
 	nfo      nfoReader
-	artwork  *Artwork
-	provider MetadataProvider
+	afterMatch func(context.Context, string) error
+	provider tmdb.Provider
 	language string
 }
 
-func NewDirectoryEnricher(catalog *catalog.Catalog, storages *storage.Registry) *DirectoryEnricher {
-	return NewDirectoryEnricherWithProvider(catalog, storages, nil, "")
+func NewMovieDirectory(catalog *catalog.Catalog, storages *storage.Registry) *MovieDirectory {
+	return NewMovieDirectoryWithProvider(catalog, storages, nil, "")
 }
 
-func NewDirectoryEnricherWithProvider(catalog *catalog.Catalog, storages *storage.Registry, provider MetadataProvider, language string) *DirectoryEnricher {
+func NewMovieDirectoryWithProvider(catalog *catalog.Catalog, storages *storage.Registry, provider tmdb.Provider, language string) *MovieDirectory {
 	if language == "" {
 		language = "zh-CN"
 	}
-	return &DirectoryEnricher{catalog: catalog, nfo: nfoReader{storages: storages}, provider: provider, language: language}
+	return &MovieDirectory{catalog: catalog, nfo: nfoReader{storages: storages}, provider: provider, language: language}
 }
 
-func (p *DirectoryEnricher) SetArtwork(artwork *Artwork) { p.artwork = artwork }
+func (p *MovieDirectory) SetMatchedHook(hook func(context.Context, string) error) { p.afterMatch = hook }
 
-func (p *DirectoryEnricher) Name() string { return "directory_enrichment" }
-func (p *DirectoryEnricher) Match(entry model.Entry) bool {
+func (p *MovieDirectory) Name() string { return "movie_directory" }
+func (p *MovieDirectory) Match(entry model.Entry) bool {
 	if entry.Type != model.EntryFile || strings.HasPrefix(entry.Name, "._") || strings.HasSuffix(strings.ToLower(entry.Name), ".d.ts") {
 		return false
 	}
 	return isFolderArtwork(entry.Name) || strings.EqualFold(entry.Extension, "nfo") || movieVideoExtension(entry.Extension)
 }
 
-func (p *DirectoryEnricher) Process(ctx context.Context, entry model.Entry) error {
+func (p *MovieDirectory) Process(ctx context.Context, entry model.Entry) error {
 	if entry.ParentID == nil {
 		return nil
 	}
@@ -69,7 +70,7 @@ func (p *DirectoryEnricher) Process(ctx context.Context, entry model.Entry) erro
 	return nil
 }
 
-func (p *DirectoryEnricher) ProcessDirectory(ctx context.Context, directory model.Entry) error {
+func (p *MovieDirectory) ProcessDirectory(ctx context.Context, directory model.Entry) error {
 	if directory.Type != model.EntryDirectory || !directory.Available {
 		return nil
 	}
@@ -131,6 +132,10 @@ func (p *DirectoryEnricher) ProcessDirectory(ctx context.Context, directory mode
 			nfo.Year = &year
 		}
 	}
+	nfo.Line1, nfo.Line2, nfo.Line3 = MovieDisplay(kind, MovieName{Title: nfo.Title, Year: nfo.Year}, nil)
+	if original := strings.TrimSpace(document.OriginalTitle); original != "" && !strings.EqualFold(original, nfo.Title) {
+		nfo.Line2 = original
+	}
 	nfo.Data, err = json.Marshal(map[string]any{
 		"entryId": nfoEntry.ID, "overview": strings.TrimSpace(document.Plot),
 		"originalTitle": strings.TrimSpace(document.OriginalTitle), "providerIds": document.providerIDs(),
@@ -142,7 +147,7 @@ func (p *DirectoryEnricher) ProcessDirectory(ctx context.Context, directory mode
 	return err
 }
 
-func (p *DirectoryEnricher) enrichInferredDirectory(ctx context.Context, directory model.Entry) error {
+func (p *MovieDirectory) enrichInferredDirectory(ctx context.Context, directory model.Entry) error {
 	types, err := p.catalog.LibraryTypesForEntry(ctx, directory)
 	if err != nil {
 		return err
@@ -153,7 +158,7 @@ func (p *DirectoryEnricher) enrichInferredDirectory(ctx context.Context, directo
 	return p.enrichMovieDirectory(ctx, directory)
 }
 
-func (p *DirectoryEnricher) enrichTVDirectory(ctx context.Context, directory model.Entry) error {
+func (p *MovieDirectory) enrichTVDirectory(ctx context.Context, directory model.Entry) error {
 	if p.provider == nil {
 		return nil
 	}
@@ -165,7 +170,7 @@ func (p *DirectoryEnricher) enrichTVDirectory(ctx context.Context, directory mod
 		_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
 		return err
 	}
-	parsed := ParseName(directory.Name)
+	parsed := ParseMovieName(directory.Name)
 	// Directory names are not release filenames. In particular, a show title
 	// ending in "Saul" must not be interpreted as an Sxx season token.
 	parsed.Title = strings.TrimSpace(strings.NewReplacer(".", " ", "_", " ").Replace(directory.Name))
@@ -223,11 +228,11 @@ func (p *DirectoryEnricher) enrichTVDirectory(ctx context.Context, directory mod
 		var sources map[string]catalog.MediaCandidate
 		if json.Unmarshal(current.Sources, &sources) == nil {
 			if previous, ok := sources["tmdb"]; ok && previous.Kind == "tv" {
-				var candidate Candidate
+				var candidate tmdb.Candidate
 				if json.Unmarshal(previous.Data, &candidate) == nil {
-					if _, score, matched := bestCandidate(parsed, []Candidate{candidate}); matched && score >= .8 {
-						if p.artwork != nil {
-							return p.artwork.ProcessEntry(ctx, directory.ID)
+					if _, score, matched := bestCandidate(parsed, []tmdb.Candidate{candidate}); matched && score >= .8 {
+						if p.afterMatch != nil {
+							return p.afterMatch(ctx, directory.ID)
 						}
 						return nil
 					}
@@ -237,7 +242,7 @@ func (p *DirectoryEnricher) enrichTVDirectory(ctx context.Context, directory mod
 	} else if !errors.Is(err, catalog.ErrNotFound) {
 		return err
 	}
-	results, err := p.provider.Search(ctx, Query{Type: "tv", Title: parsed.Title, Year: parsed.Year, Language: p.language})
+	results, err := p.provider.Search(ctx, tmdb.Query{Type: "tv", Title: parsed.Title, Year: parsed.Year, Language: p.language})
 	if err != nil {
 		return err
 	}
@@ -253,19 +258,21 @@ func (p *DirectoryEnricher) enrichTVDirectory(ctx context.Context, directory mod
 	if err != nil {
 		return err
 	}
+	line1, line2, line3 := MovieDisplay("tv", parsed, &match)
 	if _, err := p.catalog.SetMediaCandidate(ctx, directory.ID, "tmdb", catalog.MediaCandidate{
-		Kind: "tv", Title: match.Title, Year: match.Year, Summary: strings.TrimSpace(match.Overview), Data: encoded,
+		Kind: "tv", Title: match.Title, Year: match.Year, Line1: line1, Line2: line2, Line3: line3,
+		Summary: strings.TrimSpace(match.Overview), Data: encoded,
 	}); err != nil {
 		return err
 	}
-	if p.artwork != nil {
-		return p.artwork.ProcessEntry(ctx, directory.ID)
+	if p.afterMatch != nil {
+		return p.afterMatch(ctx, directory.ID)
 	}
 	return nil
 }
 
 func episodeBelongsToSeries(entry model.Entry, title string) bool {
-	parsed := ParsedNameForEntry(entry, true)
+	parsed := ParseMovieEntryName(entry, true)
 	if parsed.Season == nil || parsed.Episode == nil {
 		return false
 	}
@@ -276,7 +283,7 @@ func episodeBelongsToSeries(entry model.Entry, title string) bool {
 // A matching filename alone is insufficient to assign a movie identity to a
 // directory. The directory name and every primary video must agree with the
 // same provider candidate; collections and library roots remain unenhanced.
-func (p *DirectoryEnricher) enrichMovieDirectory(ctx context.Context, directory model.Entry) error {
+func (p *MovieDirectory) enrichMovieDirectory(ctx context.Context, directory model.Entry) error {
 	if p.provider == nil {
 		return nil
 	}
@@ -300,13 +307,13 @@ func (p *DirectoryEnricher) enrichMovieDirectory(ctx context.Context, directory 
 		_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
 		return err
 	}
-	var parsed ParsedName
+	var parsed MovieName
 	videoCount := 0
 	for _, child := range children {
 		if child.Type != model.EntryFile || !child.Available || !movieVideoExtension(child.Extension) || isAuxiliaryVideo(child.Name) {
 			continue
 		}
-		candidate := ParseName(child.Name)
+		candidate := ParseMovieName(child.Name)
 		if candidate.Title == "" {
 			_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
 			return err
@@ -325,12 +332,12 @@ func (p *DirectoryEnricher) enrichMovieDirectory(ctx context.Context, directory 
 		return err
 	}
 	parsed.Title = moviePartTitle(parsed.Title)
-	parentName := ParseName(directory.Name)
+	parentName := ParseMovieName(directory.Name)
 	if parentName.Title == "" {
 		_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
 		return err
 	}
-	results, err := p.provider.Search(ctx, Query{Type: "movie", Title: parsed.Title, Year: parsed.Year, Language: p.language})
+	results, err := p.provider.Search(ctx, tmdb.Query{Type: "movie", Title: parsed.Title, Year: parsed.Year, Language: p.language})
 	if err != nil {
 		return err // Network failure must not clear a previously resolved match.
 	}
@@ -339,7 +346,7 @@ func (p *DirectoryEnricher) enrichMovieDirectory(ctx context.Context, directory 
 		_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
 		return err
 	}
-	_, folderScore, folderOK := bestCandidate(parentName, []Candidate{match})
+	_, folderScore, folderOK := bestCandidate(parentName, []tmdb.Candidate{match})
 	if !folderOK || folderScore < .8 {
 		_, err := p.catalog.ClearMediaCandidate(ctx, directory.ID, "tmdb")
 		return err
@@ -348,14 +355,16 @@ func (p *DirectoryEnricher) enrichMovieDirectory(ctx context.Context, directory 
 	if err != nil {
 		return err
 	}
+	line1, line2, line3 := MovieDisplay("movie", parsed, &match)
 	_, err = p.catalog.SetMediaCandidate(ctx, directory.ID, "tmdb", catalog.MediaCandidate{
-		Kind: "movie", Title: match.Title, Year: match.Year, Summary: strings.TrimSpace(match.Overview), Data: encoded,
+		Kind: "movie", Title: match.Title, Year: match.Year, Line1: line1, Line2: line2, Line3: line3,
+		Summary: strings.TrimSpace(match.Overview), Data: encoded,
 	})
 	if err != nil {
 		return err
 	}
-	if p.artwork != nil {
-		return p.artwork.ProcessEntry(ctx, directory.ID)
+	if p.afterMatch != nil {
+		return p.afterMatch(ctx, directory.ID)
 	}
 	return nil
 }

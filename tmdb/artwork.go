@@ -1,4 +1,4 @@
-package media
+package tmdb
 
 import (
 	"context"
@@ -36,7 +36,15 @@ func NewArtwork(cat *catalog.Catalog, cacheDir string, client *http.Client) *Art
 
 func (p *Artwork) Name() string { return "tmdb_artwork" }
 func (p *Artwork) Match(entry model.Entry) bool {
-	return entry.Type == model.EntryFile && movieVideoExtension(entry.Extension)
+	if entry.Type != model.EntryFile {
+		return false
+	}
+	switch strings.ToLower(entry.Extension) {
+	case "mp4", "m4v", "mkv", "webm", "mov", "avi", "mpeg", "mpg", "ts", "m2ts", "wmv", "rmvb":
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *Artwork) Process(ctx context.Context, entry model.Entry) error {

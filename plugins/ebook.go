@@ -1,4 +1,4 @@
-package enrichment
+package plugins
 
 import (
 	"github.com/lsongdev/files-go/catalog"
@@ -7,8 +7,8 @@ import (
 	"github.com/lsongdev/files-go/storage"
 )
 
-func Ebook(catalog *catalog.Catalog, storages *storage.Registry, thumbnail *processor.Thumbnail) processor.Plugin {
-	return processor.NewPlugin("ebook", func(entry model.Entry) bool {
+func Ebook(catalog *catalog.Catalog, storages *storage.Registry, thumbnail *processor.Thumbnail) Plugin {
+	return NewPlugin("ebook", func(entry model.Entry) bool {
 		return extensionIn(entry, "epub")
 	}, processor.NewEPUBMetadata(catalog, storages), thumbnail)
 }
