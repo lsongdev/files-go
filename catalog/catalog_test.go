@@ -256,3 +256,48 @@ func TestSearchTracksEntriesAndFiltersLibraries(t *testing.T) {
 		t.Fatalf("stale name search = %#v, %v", results, err)
 	}
 }
+
+
+func TestBrowseQueriesHideUnavailableEntries(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := cat.BeginScan(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := cat.EnsureRoot(ctx, "disk", generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentID := root.ID
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{
+		{StorageID: "disk", ParentID: &parentID, Name: "visible.txt", Path: "visible.txt", Type: model.EntryFile},
+		{StorageID: "disk", ParentID: &parentID, Name: "removed.txt", Path: "removed.txt", Type: model.EntryFile},
+	}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.MarkEntryTreeUnavailable(ctx, entries[1]); err != nil {
+		t.Fatal(err)
+	}
+	children, err := cat.Children(ctx, root.ID, ListOptions{Limit: 10})
+	if err != nil || len(children) != 1 || children[0].Name != "visible.txt" {
+		t.Fatalf("children = %#v, %v", children, err)
+	}
+	results, err := cat.Search(ctx, SearchOptions{Query: "removed", Limit: 10})
+	if err != nil || len(results) != 0 {
+		t.Fatalf("search returned unavailable entries: %#v, %v", results, err)
+	}
+	stale, err := cat.EntryByPath(ctx, "disk", "removed.txt")
+	if err != nil || stale.Available {
+		t.Fatalf("internal stale lookup = %#v, %v", stale, err)
+	}
+}
