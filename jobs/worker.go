@@ -67,15 +67,15 @@ func (p *Pool) worker(ctx context.Context) {
 		}
 		handler, ok := p.handlers[job.Type]
 		if !ok {
-			_ = p.queue.FailPermanently(context.WithoutCancel(ctx), job.ID, fmt.Errorf("no handler registered for job type %q", job.Type))
+			_ = p.queue.failPermanentlyAttempt(context.WithoutCancel(ctx), job.ID, job.Attempts, fmt.Sprintf("no handler registered for job type %q", job.Type))
 			continue
 		}
-		if err := callHandler(ctx, handler, job); err != nil {
+		if err := p.callHandlerWithLease(ctx, handler, job); err != nil {
 			delay := time.Second << min(job.Attempts-1, 6)
 			_ = p.queue.Fail(context.WithoutCancel(ctx), job, err, delay)
 			continue
 		}
-		_ = p.queue.Complete(context.WithoutCancel(ctx), job.ID)
+		_ = p.queue.CompleteJob(context.WithoutCancel(ctx), job)
 	}
 }
 
@@ -86,4 +86,44 @@ func callHandler(ctx context.Context, handler Handler, job *Job) (err error) {
 		}
 	}()
 	return handler(ctx, job)
+}
+
+func (p *Pool) callHandlerWithLease(ctx context.Context, handler Handler, job *Job) error {
+	jobCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan struct{})
+	heartbeatErr := make(chan error, 1)
+	interval := p.queue.LeaseDuration() / 3
+	if interval <= 0 {
+		interval = time.Second
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-jobCtx.Done():
+				return
+			case <-ticker.C:
+				if err := p.queue.Renew(context.WithoutCancel(jobCtx), job); err != nil {
+					select {
+					case heartbeatErr <- err:
+					default:
+					}
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	err := callHandler(jobCtx, handler, job)
+	close(done)
+	select {
+	case renewErr := <-heartbeatErr:
+		return fmt.Errorf("renew job lease: %w", renewErr)
+	default:
+		return err
+	}
 }
