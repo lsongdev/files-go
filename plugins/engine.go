@@ -32,11 +32,11 @@ type pipeline struct {
 
 func NewPlugin(name string, match func(model.Entry) bool, steps ...processor.Processor) Plugin {
 	if name == "" || match == nil || len(steps) == 0 {
-		panic("enrichment plugin requires a name, matcher and steps")
+		panic("plugin requires a name, matcher and steps")
 	}
 	for _, step := range steps {
 		if step == nil {
-			panic("enrichment plugin contains a nil step")
+			panic("plugin contains a nil step")
 		}
 	}
 	return &pipeline{name: name, match: match, steps: append([]processor.Processor(nil), steps...)}
@@ -46,9 +46,9 @@ func (p *pipeline) Name() string                 { return p.name }
 func (p *pipeline) Match(entry model.Entry) bool { return p.match(entry) }
 func (p *pipeline) Steps() []processor.Processor { return append([]processor.Processor(nil), p.steps...) }
 
-// SelectPlugins applies the configured plugin order. An empty order enables
-// every available plugin in its declaration order; otherwise presence means
-// enabled and omission means disabled.
+// SelectPlugins applies the configured plugin order. A nil order uses every
+// available plugin in declaration order; an explicit empty order disables all.
+// Otherwise presence means enabled and omission means disabled.
 func SelectPlugins(order []string, available ...Plugin) ([]Plugin, error) {
 	if order == nil {
 		return append([]Plugin(nil), available...), nil
