@@ -1,4 +1,4 @@
-package processor
+package plugins
 
 import (
 	"context"
@@ -11,52 +11,44 @@ import (
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/jobs"
 	"github.com/lsongdev/files-go/model"
+	"github.com/lsongdev/files-go/processor"
 	"github.com/lsongdev/files-go/storage"
 )
 
 const JobProcessEntry = "process_entry"
-const pipelineVersion = 9
+const pipelineVersion = 10
 
-type Processor interface {
-	Name() string
-	Match(model.Entry) bool
-	Process(context.Context, model.Entry) error
-}
-
-// Plugin owns one media family's ordered enrichment steps. A file may match
-// more than one plugin (for example, a folder.jpg also matches sidecars).
-// Plugins run in registration order; steps within a plugin run in order.
 type Plugin interface {
 	Name() string
 	Match(model.Entry) bool
-	Steps() []Processor
+	Steps() []processor.Processor
 }
 
 type pipeline struct {
 	name  string
 	match func(model.Entry) bool
-	steps []Processor
+	steps []processor.Processor
 }
 
-func NewPlugin(name string, match func(model.Entry) bool, steps ...Processor) Plugin {
+func NewPlugin(name string, match func(model.Entry) bool, steps ...processor.Processor) Plugin {
 	if name == "" || match == nil || len(steps) == 0 {
-		panic("enrichment plugin requires a name, matcher and steps")
+		panic("plugin requires a name, matcher and steps")
 	}
 	for _, step := range steps {
 		if step == nil {
-			panic("enrichment plugin contains a nil step")
+			panic("plugin contains a nil step")
 		}
 	}
-	return &pipeline{name: name, match: match, steps: append([]Processor(nil), steps...)}
+	return &pipeline{name: name, match: match, steps: append([]processor.Processor(nil), steps...)}
 }
 
 func (p *pipeline) Name() string                 { return p.name }
 func (p *pipeline) Match(entry model.Entry) bool { return p.match(entry) }
-func (p *pipeline) Steps() []Processor           { return append([]Processor(nil), p.steps...) }
+func (p *pipeline) Steps() []processor.Processor { return append([]processor.Processor(nil), p.steps...) }
 
-// SelectPlugins applies the configured plugin order. An empty order enables
-// every available plugin in its declaration order; otherwise presence means
-// enabled and omission means disabled.
+// SelectPlugins applies the configured plugin order. A nil order uses every
+// available plugin in declaration order; an explicit empty order disables all.
+// Otherwise presence means enabled and omission means disabled.
 func SelectPlugins(order []string, available ...Plugin) ([]Plugin, error) {
 	if order == nil {
 		return append([]Plugin(nil), available...), nil
@@ -97,7 +89,7 @@ type Engine struct {
 
 type registeredPlugin struct {
 	plugin Plugin
-	steps  []Processor
+	steps  []processor.Processor
 }
 
 func New(catalog *catalog.Catalog, queue *jobs.Queue, plugins ...Plugin) *Engine {
@@ -159,10 +151,6 @@ func (e *Engine) ReprocessEntryPriority(ctx context.Context, entry model.Entry, 
 
 func (e *Engine) processEntryKey(entry model.Entry) string {
 	return fmt.Sprintf("%s:%s:%d:%d", e.fingerprint, entry.ID, entry.ModifiedAt.UnixNano(), entry.Size)
-}
-
-func isMetadataSidecar(entry model.Entry) bool {
-	return strings.HasPrefix(entry.Name, "._")
 }
 
 func (e *Engine) Handle(ctx context.Context, job *jobs.Job) error {

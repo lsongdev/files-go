@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,6 +158,46 @@ func TestFFProbeParsesAndProbesAudio(t *testing.T) {
 	}
 }
 
+func TestMediaWritersPopulateThreeDisplayLines(t *testing.T) {
+	ctx := context.Background()
+
+	audioCatalog, _, audioEntry := mediaFixture(t, "roads.flac", []byte("fixture"))
+	duration := int64(123000)
+	if err := writeAVMedia(ctx, audioCatalog, audioEntry, model.ParsedMedia{
+		EntryID: audioEntry.ID, Kind: "audio", Container: "flac", AudioCodec: "flac", DurationMS: &duration,
+		Metadata: json.RawMessage(`{"music":{"title":"Roads","artist":"Portishead","album":"Dummy","track":"5/11","date":"1994"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	audio, err := audioCatalog.MediaForEntry(ctx, audioEntry.ID)
+	if err != nil || audio.Title != "Roads" || audio.Line1 != "Portishead" || audio.Line2 != "Dummy" ||
+		!strings.Contains(audio.Line3, "Track 5") || !strings.Contains(audio.Line3, "2:03") || !strings.Contains(audio.Line3, "FLAC") {
+		t.Fatalf("audio display = %#v, %v", audio, err)
+	}
+
+	videoCatalog, _, videoEntry := mediaFixture(t, "clip.mkv", []byte("fixture"))
+	width, height := 1920, 1080
+	if err := writeAVMedia(ctx, videoCatalog, videoEntry, model.ParsedMedia{
+		EntryID: videoEntry.ID, Kind: "video", Container: "matroska,webm", VideoCodec: "h264", AudioCodec: "aac",
+		Width: &width, Height: &height, DurationMS: &duration, Metadata: json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	video, err := videoCatalog.MediaForEntry(ctx, videoEntry.ID)
+	if err != nil || video.Kind != "video" || video.Line1 != "视频 · 1920 × 1080" || video.Line2 != "H264 · AAC" || video.Line3 != "2:03 · MKV" {
+		t.Fatalf("video display = %#v, %v", video, err)
+	}
+
+	pdfCatalog, _, pdfEntry := mediaFixture(t, "paper.pdf", []byte("fixture"))
+	if err := writePDFMedia(ctx, pdfCatalog, pdfEntry, json.RawMessage(`{"title":"Paper","author":"Ada","subject":"Systems","pageCount":42,"pdfVersion":"1.7"}`)); err != nil {
+		t.Fatal(err)
+	}
+	pdf, err := pdfCatalog.MediaForEntry(ctx, pdfEntry.ID)
+	if err != nil || pdf.Line1 != "Ada" || pdf.Line2 != "Systems" || pdf.Line3 != "42 页 · PDF 1.7" {
+		t.Fatalf("pdf display = %#v, %v", pdf, err)
+	}
+}
+
 func TestFFProbeSkipsTypeScriptFilesWithTSExtension(t *testing.T) {
 	cat, registry, entry := mediaFixture(t, "source.ts", []byte("export const answer = 42;\n"))
 	probe := NewFFProbe(cat, registry, "/missing/ffprobe", time.Second)
@@ -268,7 +309,7 @@ func TestEPUBMetadataReadsPackage(t *testing.T) {
 	var encoded bytes.Buffer
 	archive := zip.NewWriter(&encoded)
 	writeArchiveFile(t, archive, "META-INF/container.xml", `<?xml version="1.0"?><container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>`)
-	writeArchiveFile(t, archive, "OPS/book.opf", `<?xml version="1.0"?><package><metadata><title>The Left Hand of Darkness</title><creator>Ursula K. Le Guin</creator><language>en</language><publisher>Ace</publisher><identifier>book-1</identifier><meta name="cover" content="cover-image"/></metadata><manifest><item id="cover-image" href="images/cover.jpg" media-type="image/jpeg"/></manifest></package>`)
+	writeArchiveFile(t, archive, "OPS/book.opf", `<?xml version="1.0"?><package><metadata><title>The Left Hand of Darkness</title><creator>Ursula K. Le Guin</creator><language>en</language><publisher>Ace</publisher><identifier>book-1</identifier><description>A science fiction novel.</description><meta name="cover" content="cover-image"/></metadata><manifest><item id="cover-image" href="images/cover.jpg" media-type="image/jpeg"/></manifest></package>`)
 	coverImage := image.NewRGBA(image.Rect(0, 0, 120, 180))
 	coverImage.Set(60, 90, color.RGBA{R: 80, G: 120, B: 200, A: 255})
 	var cover bytes.Buffer
@@ -307,7 +348,7 @@ func TestEPUBMetadataReadsPackage(t *testing.T) {
 		t.Fatalf("EPUB metadata = %#v, media = %#v", metadata, media)
 	}
 	resolved, err := cat.MediaForEntry(context.Background(), entry.ID)
-	if err != nil || resolved.Kind != "book" || resolved.Title != "The Left Hand of Darkness" || resolved.Icon != "file:"+entry.ID || resolved.Line2 != "Ursula K. Le Guin" {
+	if err != nil || resolved.Kind != "book" || resolved.Title != "The Left Hand of Darkness" || resolved.Icon != "file:"+entry.ID || resolved.Line1 != "Ursula K. Le Guin" || resolved.Line2 != "Ace · EN" || resolved.Line3 != "EPUB" || resolved.Summary != "A science fiction novel." {
 		t.Fatalf("resolved book = %#v, %v", resolved, err)
 	}
 	cacheDir := t.TempDir()
@@ -495,4 +536,82 @@ func wavSilence(sampleRate, samples int) []byte {
 	_ = binary.Write(buffer, binary.LittleEndian, uint32(dataSize))
 	buffer.Write(make([]byte, dataSize))
 	return buffer.Bytes()
+}
+
+
+func TestCommonMediaDisplayLines(t *testing.T) {
+	t.Run("photo", func(t *testing.T) {
+		cat, _, entry := mediaFixture(t, "photo.jpg", []byte("fixture"))
+		width, height := 4032, 3024
+		takenAt := time.Date(2026, 9, 20, 10, 30, 0, 0, time.Local)
+		parsed := model.ParsedMedia{
+			EntryID: entry.ID, Kind: "photo", Width: &width, Height: &height,
+			TakenAt: &takenAt, Camera: "Fujifilm X100VI", Metadata: json.RawMessage(`{"format":"jpeg"}`),
+		}
+		if err := writePhotoMedia(context.Background(), cat, entry, parsed); err != nil {
+			t.Fatal(err)
+		}
+		item, err := cat.MediaForEntry(context.Background(), entry.ID)
+		if err != nil || item.Line1 != "照片 · 4032 × 3024" || item.Line2 != "Fujifilm X100VI" || item.Line3 == "" {
+			t.Fatalf("photo lines = %#v, %v", item, err)
+		}
+	})
+
+	t.Run("video", func(t *testing.T) {
+		cat, _, entry := mediaFixture(t, "clip.mkv", []byte("fixture"))
+		width, height, duration := 1920, 1080, int64(90_000)
+		parsed := model.ParsedMedia{
+			EntryID: entry.ID, Kind: "video", Width: &width, Height: &height, DurationMS: &duration,
+			Container: "matroska,webm", VideoCodec: "h264", AudioCodec: "aac", Metadata: json.RawMessage(`{}`),
+		}
+		if err := writeAVMedia(context.Background(), cat, entry, parsed); err != nil {
+			t.Fatal(err)
+		}
+		item, err := cat.MediaForEntry(context.Background(), entry.ID)
+		if err != nil || item.Line1 != "视频 · 1920 × 1080" || item.Line2 != "H264 · AAC" || item.Line3 != "1:30 · MKV" {
+			t.Fatalf("video lines = %#v, %v", item, err)
+		}
+	})
+
+	t.Run("music", func(t *testing.T) {
+		cat, _, entry := mediaFixture(t, "roads.flac", []byte("fixture"))
+		duration := int64(120_000)
+		parsed := model.ParsedMedia{
+			EntryID: entry.ID, Kind: "audio", DurationMS: &duration, AudioCodec: "flac",
+			Metadata: json.RawMessage(`{"music":{"title":"Roads","artist":"Portishead","album":"Dummy","track":"5/11","date":"1994"}}`),
+		}
+		if err := writeAVMedia(context.Background(), cat, entry, parsed); err != nil {
+			t.Fatal(err)
+		}
+		item, err := cat.MediaForEntry(context.Background(), entry.ID)
+		if err != nil || item.Title != "Roads" || item.Line1 != "Portishead" || item.Line2 != "Dummy" || item.Line3 != "Track 5 · 1994 · 2:00 · FLAC" {
+			t.Fatalf("music lines = %#v, %v", item, err)
+		}
+	})
+
+	t.Run("epub", func(t *testing.T) {
+		cat, _, entry := mediaFixture(t, "book.epub", []byte("fixture"))
+		parsed := model.ParsedMedia{EntryID: entry.ID, Kind: "book", Metadata: json.RawMessage(
+			`{"title":"The Left Hand of Darkness","authors":["Ursula K. Le Guin"],"publisher":"Ace","language":"en","description":"A classic science fiction novel."}`,
+		)}
+		if err := writeBookMedia(context.Background(), cat, entry, parsed); err != nil {
+			t.Fatal(err)
+		}
+		item, err := cat.MediaForEntry(context.Background(), entry.ID)
+		if err != nil || item.Line1 != "Ursula K. Le Guin" || item.Line2 != "Ace · EN" || item.Line3 != "EPUB" || item.Summary == "" {
+			t.Fatalf("EPUB lines = %#v, %v", item, err)
+		}
+	})
+
+	t.Run("pdf", func(t *testing.T) {
+		cat, _, entry := mediaFixture(t, "paper.pdf", []byte("fixture"))
+		data := json.RawMessage(`{"title":"A Paper","author":"Ada","subject":"Computing","pageCount":321,"pdfVersion":"1.7"}`)
+		if err := writePDFMedia(context.Background(), cat, entry, data); err != nil {
+			t.Fatal(err)
+		}
+		item, err := cat.MediaForEntry(context.Background(), entry.ID)
+		if err != nil || item.Line1 != "Ada" || item.Line2 != "Computing" || item.Line3 != "321 页 · PDF 1.7" {
+			t.Fatalf("PDF lines = %#v, %v", item, err)
+		}
+	})
 }

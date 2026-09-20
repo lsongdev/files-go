@@ -1,4 +1,4 @@
-package media
+package processor
 
 import (
 	"context"
@@ -11,9 +11,10 @@ import (
 	"github.com/lsongdev/files-go/database"
 	"github.com/lsongdev/files-go/model"
 	"github.com/lsongdev/files-go/storage"
+	"github.com/lsongdev/files-go/tmdb"
 )
 
-func TestDirectoryEnricherStoresArtworkAndNFOOnDirectoryOnly(t *testing.T) {
+func TestMovieDirectoryStoresArtworkAndNFOOnDirectoryOnly(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(ctx, t.TempDir())
 	if err != nil {
@@ -51,7 +52,7 @@ func TestDirectoryEnricherStoresArtworkAndNFOOnDirectoryOnly(t *testing.T) {
 	icon := insertSidecarEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &directory.ID, Name: "folder.jpg", Path: "Arrival/folder.jpg", Type: model.EntryFile, Extension: "jpg"})
 	backdrop := insertSidecarEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &directory.ID, Name: "backdrop.jpg", Path: "Arrival/backdrop.jpg", Type: model.EntryFile, Extension: "jpg"})
 	nfo := insertSidecarEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &directory.ID, Name: "movie.nfo", Path: "Arrival/movie.nfo", Type: model.EntryFile, Extension: "nfo"})
-	processor := NewDirectoryEnricher(cat, registry)
+	processor := NewMovieDirectory(cat, registry)
 	if err := processor.Process(ctx, nfo); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +76,7 @@ func TestDirectoryEnricherStoresArtworkAndNFOOnDirectoryOnly(t *testing.T) {
 	}
 }
 
-func TestDirectoryEnricherMatchesOnlySingleMovieDirectories(t *testing.T) {
+func TestMovieDirectoryMatchesOnlySingleMovieDirectories(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(ctx, t.TempDir())
 	if err != nil {
@@ -100,7 +101,7 @@ func TestDirectoryEnricherMatchesOnlySingleMovieDirectories(t *testing.T) {
 	library := insertSidecarEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &root.ID, Name: "Movies", Path: "Movies", Type: model.EntryDirectory})
 	folder := insertSidecarEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &library.ID, Name: "Interstellar", Path: "Movies/Interstellar", Type: model.EntryDirectory})
 	insertSidecarEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &folder.ID, Name: "Interstellar.2014.mkv", Path: "Movies/Interstellar/Interstellar.2014.mkv", Type: model.EntryFile, Extension: "mkv"})
-	processor := NewDirectoryEnricherWithProvider(cat, storage.NewRegistry(), fakeProvider{}, "zh-CN")
+	processor := NewMovieDirectoryWithProvider(cat, storage.NewRegistry(), fakeProvider{}, "zh-CN")
 	if err := processor.ProcessDirectory(ctx, library); err != nil {
 		t.Fatal(err)
 	}
@@ -125,15 +126,15 @@ func TestDirectoryEnricherMatchesOnlySingleMovieDirectories(t *testing.T) {
 
 type tvDirectoryProvider struct{}
 
-func (tvDirectoryProvider) Search(_ context.Context, query Query) ([]Candidate, error) {
-	return []Candidate{{ID: "tv-1", Type: query.Type, Title: "Better Call Saul"}}, nil
+func (tvDirectoryProvider) Search(_ context.Context, query tmdb.Query) ([]tmdb.Candidate, error) {
+	return []tmdb.Candidate{{ID: "tv-1", Type: query.Type, Title: "Better Call Saul"}}, nil
 }
 
-func (tvDirectoryProvider) Fetch(_ context.Context, kind, id, _ string) (Candidate, error) {
-	return Candidate{ID: id, Type: kind, Title: "Better Call Saul"}, nil
+func (tvDirectoryProvider) Fetch(_ context.Context, kind, id, _ string) (tmdb.Candidate, error) {
+	return tmdb.Candidate{ID: id, Type: kind, Title: "Better Call Saul"}, nil
 }
 
-func TestDirectoryEnricherInfersTVShowFromSeasonEpisodes(t *testing.T) {
+func TestMovieDirectoryInfersTVShowFromSeasonEpisodes(t *testing.T) {
 	ctx := context.Background()
 	db, err := database.Open(ctx, t.TempDir())
 	if err != nil {
@@ -159,7 +160,7 @@ func TestDirectoryEnricherInfersTVShowFromSeasonEpisodes(t *testing.T) {
 	show := insertSidecarEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &library.ID, Name: "Better.Call.Saul", Path: "TV/Better.Call.Saul", Type: model.EntryDirectory})
 	season := insertSidecarEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &show.ID, Name: "S01", Path: "TV/Better.Call.Saul/S01", Type: model.EntryDirectory})
 	episode := insertSidecarEntry(t, cat, generation, model.Entry{StorageID: "disk", ParentID: &season.ID, Name: "Better.Call.Saul.S01E01.mkv", Path: "TV/Better.Call.Saul/S01/Better.Call.Saul.S01E01.mkv", Type: model.EntryFile, Extension: "mkv"})
-	processor := NewDirectoryEnricherWithProvider(cat, storage.NewRegistry(), tvDirectoryProvider{}, "zh-CN")
+	processor := NewMovieDirectoryWithProvider(cat, storage.NewRegistry(), tvDirectoryProvider{}, "zh-CN")
 	if err := processor.Process(ctx, episode); err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package media
+package tmdb
 
 import (
 	"encoding/hex"

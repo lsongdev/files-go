@@ -1,4 +1,4 @@
-package media
+package processor
 
 import (
 	"context"
@@ -6,19 +6,20 @@ import (
 
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/model"
+	"github.com/lsongdev/files-go/tmdb"
 )
 
 type fakeProvider struct{}
 
-func (fakeProvider) Search(_ context.Context, query Query) ([]Candidate, error) {
+func (fakeProvider) Search(_ context.Context, query tmdb.Query) ([]tmdb.Candidate, error) {
 	year := 2014
 	if query.Year != nil { year = *query.Year }
-	return []Candidate{{ID: "157336", Type: query.Type, Title: "Interstellar", OriginalTitle: "Interstellar", Year: &year}}, nil
+	return []tmdb.Candidate{{ID: "157336", Type: query.Type, Title: "Interstellar", OriginalTitle: "Interstellar", Year: &year}}, nil
 }
 
-func (fakeProvider) Fetch(_ context.Context, kind, id, _ string) (Candidate, error) {
+func (fakeProvider) Fetch(_ context.Context, kind, id, _ string) (tmdb.Candidate, error) {
 	year := 2014
-	return Candidate{ID: id, Type: kind, Title: "Interstellar", OriginalTitle: "Interstellar", Year: &year}, nil
+	return tmdb.Candidate{ID: id, Type: kind, Title: "Interstellar", OriginalTitle: "Interstellar", Year: &year}, nil
 }
 
 func insertSidecarEntry(t *testing.T, cat *catalog.Catalog, generation int64, entry model.Entry) model.Entry {
