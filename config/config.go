@@ -20,6 +20,7 @@ type Config struct {
 	Libraries  []Library  `yaml:"libraries"`
 	Processing Processing `yaml:"processing"`
 	Media      Media      `yaml:"media"`
+	Auth       Auth       `yaml:"auth,omitempty"`
 
 	TMDB struct {
 		APIKey string `yaml:"api_key"`
@@ -28,6 +29,16 @@ type Config struct {
 
 type Media struct {
 	TMDB TMDB `yaml:"tmdb"`
+}
+
+type Auth struct {
+	Tokens []AuthToken `yaml:"tokens,omitempty"`
+}
+
+type AuthToken struct {
+	Name  string `yaml:"name,omitempty"`
+	Token string `yaml:"token"`
+	Role  string `yaml:"role"`
 }
 type TMDB struct {
 	Token     string `yaml:"token"`
@@ -168,6 +179,25 @@ func LoadConfig() (cfg *Config, err error) {
 }
 
 func (c *Config) normalize() error {
+	seenTokens := make(map[string]bool, len(c.Auth.Tokens))
+	for index := range c.Auth.Tokens {
+		token := &c.Auth.Tokens[index]
+		token.Token = strings.TrimSpace(os.ExpandEnv(token.Token))
+		token.Role = strings.ToLower(strings.TrimSpace(token.Role))
+		if token.Token == "" {
+			return fmt.Errorf("auth token %d is empty", index)
+		}
+		if token.Role == "" {
+			token.Role = "viewer"
+		}
+		if token.Role != "viewer" && token.Role != "editor" && token.Role != "admin" {
+			return fmt.Errorf("auth token %d has invalid role %q", index, token.Role)
+		}
+		if seenTokens[token.Token] {
+			return fmt.Errorf("duplicate auth token")
+		}
+		seenTokens[token.Token] = true
+	}
 	storageIDs := make(map[string]bool, len(c.Storages))
 	for index := range c.Storages {
 		item := &c.Storages[index]
