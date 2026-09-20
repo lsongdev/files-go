@@ -100,7 +100,6 @@ func main() {
 	movieFile := processor.NewMovieFile(cat, provider, cfg.Media.TMDB.Language)
 	movieDirectory := processor.NewMovieDirectoryWithProvider(cat, registry, provider, cfg.Media.TMDB.Language)
 	artwork := tmdb.NewArtwork(cat, cfg.CacheDir, nil)
-	movieDirectory.SetArtwork(artwork)
 	selected, err := plugins.SelectPlugins(cfg.Processing.Plugins,
 		plugins.Image(cat, registry, thumbnailer),
 		plugins.Video(cat, registry, thumbnailer, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
