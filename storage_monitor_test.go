@@ -58,8 +58,8 @@ func TestProbeStorageAvailabilityMarksMissingRootOfflineAndSchedulesRecovery(t *
 		t.Fatalf("storage state = %#v, %v", state, err)
 	}
 	entry, err := cat.Entry(ctx, entries[0].ID)
-	if err != nil || entry.Available {
-		t.Fatalf("offline entry = %#v, %v", entry, err)
+	if err != nil || !entry.Available {
+		t.Fatalf("storage outage changed entry presence = %#v, %v", entry, err)
 	}
 	if err := os.Rename(away, root); err != nil {
 		t.Fatal(err)

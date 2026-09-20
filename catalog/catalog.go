@@ -590,14 +590,23 @@ func (c *Catalog) UpsertEntries(ctx context.Context, entries []model.Entry, gene
 			entry.ID = uuid.Must(uuid.NewV7()).String()
 		}
 
-		// A previous-generation local entry with the same device/inode is a rename.
+		// A previous-generation local entry with the same device/inode can be a
+		// rename, but only when the target path is new and the identity has one
+		// unambiguous old owner. Multiple owners are valid hard links.
 		renamed := false
 		if entry.Inode != 0 && entry.Device != 0 {
 			var existingID string
-			err := tx.QueryRowContext(ctx, `SELECT id FROM entries
+			err := tx.QueryRowContext(ctx, `SELECT MIN(id) FROM entries
 			WHERE storage_id=? AND device=? AND inode=? AND path<>? AND (scan_generation<? OR available=0)
-				ORDER BY updated_at DESC LIMIT 1`, entry.StorageID, int64(entry.Device), int64(entry.Inode), entry.Path, generation).Scan(&existingID)
-			if err == nil {
+			AND NOT EXISTS (
+				SELECT 1 FROM entries current
+				WHERE current.storage_id=? AND current.path=?
+			)
+			GROUP BY device, inode
+			HAVING COUNT(*)=1`,
+				entry.StorageID, int64(entry.Device), int64(entry.Inode), entry.Path, generation,
+				entry.StorageID, entry.Path).Scan(&existingID)
+			if err == nil && existingID != "" {
 				entry.ID = existingID
 				renamed = true
 			}
@@ -699,11 +708,10 @@ func (c *Catalog) FailScan(ctx context.Context, storageID, state, message string
 	if _, err := tx.ExecContext(ctx, `UPDATE storages SET state=?, scan_updated_at=?, scan_error=?, updated_at=? WHERE id=?`, state, now, message, now, storageID); err != nil {
 		return err
 	}
-	if state == "offline" {
-		if _, err := tx.ExecContext(ctx, `UPDATE entries SET available=0, updated_at=? WHERE storage_id=?`, now, storageID); err != nil {
-			return err
-		}
-	}
+	// Entry availability records whether the path was present at the last
+	// successful reconciliation. Storage reachability is tracked separately in
+	// storages.state, so taking a whole disk offline must not rewrite millions
+	// of catalog rows.
 	return tx.Commit()
 }
 

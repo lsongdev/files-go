@@ -30,6 +30,25 @@ func TestLocalRejectsTraversalAndSymlinkEscape(t *testing.T) {
 	}
 }
 
+
+func TestLocalReadDirDistinguishesMissingChildFromOfflineRoot(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	local, err := NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.ReadDir(ctx, "gone"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing child error = %v, want ErrNotFound", err)
+	}
+	if err := os.Remove(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.ReadDir(ctx, ""); !errors.Is(err, ErrOffline) {
+		t.Fatalf("missing root error = %v, want ErrOffline", err)
+	}
+}
+
 func TestLocalOpenIsSeekable(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "video.bin"), []byte("0123456789"), 0644); err != nil {
