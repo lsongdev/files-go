@@ -115,20 +115,32 @@ func (c *Catalog) EntryByPath(ctx context.Context, storageID, path string) (*mod
 	return &entry, nil
 }
 
-func (c *Catalog) UnavailableEntryByIdentity(ctx context.Context, storageID string, device, inode uint64) (*model.Entry, error) {
+func (c *Catalog) UnavailableEntryByIdentity(ctx context.Context, storageID string, device, inode uint64, size int64, modifiedAt time.Time) (*model.Entry, error) {
 	if device == 0 || inode == 0 {
 		return nil, ErrNotFound
 	}
-	entry, err := scanEntry(c.reader.QueryRowContext(ctx, `SELECT `+entryColumns+` FROM entries
-		WHERE storage_id=? AND device=? AND inode=? AND available=0
-		ORDER BY updated_at DESC LIMIT 1`, storageID, int64(device), int64(inode)))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
+	rows, err := c.reader.QueryContext(ctx, `SELECT `+entryColumns+` FROM entries
+		WHERE storage_id=? AND device=? AND inode=? AND size=? AND mtime IS ? AND available=0
+		ORDER BY updated_at DESC LIMIT 2`, storageID, int64(device), int64(inode), size, nullableTime(modifiedAt))
 	if err != nil {
 		return nil, err
 	}
-	return &entry, nil
+	defer rows.Close()
+	var matches []model.Entry
+	for rows.Next() {
+		entry, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(matches) != 1 {
+		return nil, ErrNotFound
+	}
+	return &matches[0], nil
 }
 
 func (c *Catalog) MarkEntryTreeUnavailable(ctx context.Context, entry model.Entry) error {
@@ -176,7 +188,7 @@ func (c *Catalog) Children(ctx context.Context, parentID string, opts ListOption
 		limit = 500
 	}
 	args := []any{parentID}
-	where := "parent_id = ?"
+	where := "parent_id = ? AND available=1"
 	if opts.After != nil {
 		where += ` AND ((CASE WHEN type = 'directory' THEN 0 ELSE 1 END) > ?
 			OR ((CASE WHEN type = 'directory' THEN 0 ELSE 1 END) = ? AND lower(name) > ?)
@@ -294,7 +306,7 @@ func (c *Catalog) Search(ctx context.Context, opts SearchOptions) ([]model.Entry
 		return []model.Entry{}, nil
 	}
 
-	where := []string{"entry_search MATCH ?"}
+	where := []string{"entry_search MATCH ?", "e.available=1"}
 	args := []any{query}
 	if opts.LibraryID != "" {
 		where = append(where, `EXISTS (
@@ -597,15 +609,16 @@ func (c *Catalog) UpsertEntries(ctx context.Context, entries []model.Entry, gene
 		if entry.Inode != 0 && entry.Device != 0 {
 			var existingID string
 			err := tx.QueryRowContext(ctx, `SELECT MIN(id) FROM entries
-			WHERE storage_id=? AND device=? AND inode=? AND path<>? AND (scan_generation<? OR available=0)
+			WHERE storage_id=? AND device=? AND inode=? AND size=? AND mtime IS ?
+			AND path<>? AND (scan_generation<? OR available=0)
 			AND NOT EXISTS (
 				SELECT 1 FROM entries current
 				WHERE current.storage_id=? AND current.path=?
 			)
 			GROUP BY device, inode
 			HAVING COUNT(*)=1`,
-				entry.StorageID, int64(entry.Device), int64(entry.Inode), entry.Path, generation,
-				entry.StorageID, entry.Path).Scan(&existingID)
+				entry.StorageID, int64(entry.Device), int64(entry.Inode), entry.Size, nullableTime(entry.ModifiedAt),
+				entry.Path, generation, entry.StorageID, entry.Path).Scan(&existingID)
 			if err == nil && existingID != "" {
 				entry.ID = existingID
 				renamed = true
