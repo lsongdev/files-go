@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/model"
@@ -257,4 +256,3 @@ func isDirectoryArtwork(name string) bool {
 	return false
 }
 
-var _ = time.Time{}
