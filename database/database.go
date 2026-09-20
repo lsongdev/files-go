@@ -42,7 +42,7 @@ func Open(ctx context.Context, dataDir string) (*sql.DB, error) {
 // writes cannot starve API/catalog reads. Open must be called first so the
 // database and migrations already exist.
 func OpenReader(ctx context.Context, dataDir string) (*sql.DB, error) {
-	dbPath := filepath.Join(dataDir, "catalog.db")
+	dbPath := filepath.Join(dataDir, "files.db")
 	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro&_pragma=query_only(ON)&_pragma=busy_timeout(5000)", dbPath))
 	if err != nil {
 		return nil, err
