@@ -537,3 +537,81 @@ func wavSilence(sampleRate, samples int) []byte {
 	buffer.Write(make([]byte, dataSize))
 	return buffer.Bytes()
 }
+
+
+func TestCommonMediaDisplayLines(t *testing.T) {
+	t.Run("photo", func(t *testing.T) {
+		cat, _, entry := mediaFixture(t, "photo.jpg", []byte("fixture"))
+		width, height := 4032, 3024
+		takenAt := time.Date(2026, 9, 20, 10, 30, 0, 0, time.Local)
+		parsed := model.ParsedMedia{
+			EntryID: entry.ID, Kind: "photo", Width: &width, Height: &height,
+			TakenAt: &takenAt, Camera: "Fujifilm X100VI", Metadata: json.RawMessage(`{"format":"jpeg"}`),
+		}
+		if err := writePhotoMedia(context.Background(), cat, entry, parsed); err != nil {
+			t.Fatal(err)
+		}
+		item, err := cat.MediaForEntry(context.Background(), entry.ID)
+		if err != nil || item.Line1 != "照片 · 4032 × 3024" || item.Line2 != "Fujifilm X100VI" || item.Line3 == "" {
+			t.Fatalf("photo lines = %#v, %v", item, err)
+		}
+	})
+
+	t.Run("video", func(t *testing.T) {
+		cat, _, entry := mediaFixture(t, "clip.mkv", []byte("fixture"))
+		width, height, duration := 1920, 1080, int64(90_000)
+		parsed := model.ParsedMedia{
+			EntryID: entry.ID, Kind: "video", Width: &width, Height: &height, DurationMS: &duration,
+			Container: "matroska,webm", VideoCodec: "h264", AudioCodec: "aac", Metadata: json.RawMessage(`{}`),
+		}
+		if err := writeAVMedia(context.Background(), cat, entry, parsed); err != nil {
+			t.Fatal(err)
+		}
+		item, err := cat.MediaForEntry(context.Background(), entry.ID)
+		if err != nil || item.Line1 != "视频 · 1920 × 1080" || item.Line2 != "H264 · AAC" || item.Line3 != "1:30 · MKV" {
+			t.Fatalf("video lines = %#v, %v", item, err)
+		}
+	})
+
+	t.Run("music", func(t *testing.T) {
+		cat, _, entry := mediaFixture(t, "roads.flac", []byte("fixture"))
+		duration := int64(120_000)
+		parsed := model.ParsedMedia{
+			EntryID: entry.ID, Kind: "audio", DurationMS: &duration, AudioCodec: "flac",
+			Metadata: json.RawMessage(`{"music":{"title":"Roads","artist":"Portishead","album":"Dummy","track":"5/11","date":"1994"}}`),
+		}
+		if err := writeAVMedia(context.Background(), cat, entry, parsed); err != nil {
+			t.Fatal(err)
+		}
+		item, err := cat.MediaForEntry(context.Background(), entry.ID)
+		if err != nil || item.Title != "Roads" || item.Line1 != "Portishead" || item.Line2 != "Dummy" || item.Line3 != "Track 5 · 1994 · 2:00 · FLAC" {
+			t.Fatalf("music lines = %#v, %v", item, err)
+		}
+	})
+
+	t.Run("epub", func(t *testing.T) {
+		cat, _, entry := mediaFixture(t, "book.epub", []byte("fixture"))
+		parsed := model.ParsedMedia{EntryID: entry.ID, Kind: "book", Metadata: json.RawMessage(
+			`{"title":"The Left Hand of Darkness","authors":["Ursula K. Le Guin"],"publisher":"Ace","language":"en","description":"A classic science fiction novel."}`,
+		)}
+		if err := writeBookMedia(context.Background(), cat, entry, parsed); err != nil {
+			t.Fatal(err)
+		}
+		item, err := cat.MediaForEntry(context.Background(), entry.ID)
+		if err != nil || item.Line1 != "Ursula K. Le Guin" || item.Line2 != "Ace · EN" || item.Line3 != "EPUB" || item.Summary == "" {
+			t.Fatalf("EPUB lines = %#v, %v", item, err)
+		}
+	})
+
+	t.Run("pdf", func(t *testing.T) {
+		cat, _, entry := mediaFixture(t, "paper.pdf", []byte("fixture"))
+		data := json.RawMessage(`{"title":"A Paper","author":"Ada","subject":"Computing","pageCount":321,"pdfVersion":"1.7"}`)
+		if err := writePDFMedia(context.Background(), cat, entry, data); err != nil {
+			t.Fatal(err)
+		}
+		item, err := cat.MediaForEntry(context.Background(), entry.ID)
+		if err != nil || item.Line1 != "Ada" || item.Line2 != "Computing" || item.Line3 != "321 页 · PDF 1.7" {
+			t.Fatalf("PDF lines = %#v, %v", item, err)
+		}
+	})
+}
