@@ -7,6 +7,7 @@ import (
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/database"
 	"github.com/lsongdev/files-go/model"
+	"github.com/lsongdev/files-go/tmdb"
 )
 
 func TestMovieFileParsesFilenameBeforeTMDBAndOnlyWritesFile(t *testing.T) {
@@ -44,5 +45,21 @@ func TestMovieFileParsesFilenameBeforeTMDBAndOnlyWritesFile(t *testing.T) {
 	}
 	if _, err := cat.MediaForEntry(ctx, folder.ID); err == nil {
 		t.Fatal("video enrichment was copied to its parent directory")
+	}
+}
+
+
+func TestMovieDisplayKeepsSemanticAndReleaseDetails(t *testing.T) {
+	year := 2014
+	parsed := MovieName{
+		Title: "Interstellar", Year: &year,
+		Release: ReleaseInfo{Resolution: "1080p", Source: "BluRay", VideoCodec: "x264", AudioCodec: "DTS"},
+	}
+	candidate := tmdb.Candidate{
+		Title: "星际穿越", OriginalTitle: "Interstellar", Year: &year, VoteAverage: 8.7,
+	}
+	line1, line2, line3 := MovieDisplay("movie", parsed, &candidate)
+	if line1 != "电影 · 2014" || line2 != "Interstellar" || line3 != "TMDB 8.7 · x264 · DTS" {
+		t.Fatalf("movie lines = %q / %q / %q", line1, line2, line3)
 	}
 }
