@@ -26,6 +26,7 @@ import (
 	"github.com/lsongdev/files-go/jobs"
 	mediaengine "github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/model"
+	"github.com/lsongdev/files-go/playback"
 	"github.com/lsongdev/files-go/processor"
 	"github.com/lsongdev/files-go/storage"
 )
@@ -358,7 +359,8 @@ func TestDecodeText(t *testing.T) {
 }
 
 func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	root := filepath.Join(t.TempDir(), "private-mount")
 	if err := os.MkdirAll(root, 0755); err != nil {
 		t.Fatal(err)
@@ -451,7 +453,27 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	var apiLogs bytes.Buffer
-	handler := New(ctx, cat, registry, idx, log.New(&apiLogs, "", 0), cacheDir).Handler()
+	manager := playback.NewManager(ctx, cat, registry, "ffmpeg", cacheDir, 1)
+	handler := New(ctx, cat, registry, idx, log.New(&apiLogs, "", 0), cacheDir, manager).Handler()
+	if _, err := cat.SetMediaCandidate(ctx, movie.ID, "embedded", catalog.MediaCandidate{
+		Kind: "movie", Data: json.RawMessage(`{"container":"mp4","videoCodec":"h264","audioCodec":"aac"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	playResponse := httptest.NewRecorder()
+	handler.ServeHTTP(playResponse, httptest.NewRequest(http.MethodPost, "/api/v1/playback/"+movie.ID,
+		strings.NewReader(`{"containers":["mp4"],"videoCodecs":["h264"],"audioCodecs":["aac"]}`)))
+	var playResult playback.Result
+	if err := json.Unmarshal(playResponse.Body.Bytes(), &playResult); err != nil || playResponse.Code != http.StatusOK || playResult.Mode != "direct" {
+		t.Fatalf("playback without stored progress = %d %s, %v", playResponse.Code, playResponse.Body.String(), err)
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(method, "/api/v1/entries/"+movie.ID+"/playback-state", nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("removed progress endpoint %s returned %d", method, response.Code)
+		}
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+rootEntry.ID+"/children?limit=1", nil)
 	res := httptest.NewRecorder()
@@ -516,8 +538,34 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+photo.ID+"/thumbnail?size=small", nil)
 	res = httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
-	if res.Code != http.StatusOK || res.Header().Get("Content-Type") != "image/jpeg" || res.Body.Len() == 0 || !strings.Contains(res.Header().Get("Cache-Control"), "immutable") {
+	if res.Code != http.StatusOK || res.Header().Get("Content-Type") != "image/jpeg" || res.Body.Len() == 0 || !strings.Contains(res.Header().Get("Cache-Control"), "must-revalidate") {
 		t.Fatalf("thumbnail = %d %q %d %#v", res.Code, res.Header().Get("Content-Type"), res.Body.Len(), res.Header())
+	}
+	thumbnailURL := req.URL.String()
+	etag := res.Header().Get("ETag")
+	var changesBefore, changesAfter int
+	if err := db.QueryRow(`SELECT total_changes()`).Scan(&changesBefore); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodGet, thumbnailURL, nil)
+	req.Header.Set("If-None-Match", etag)
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusNotModified || etag == "" {
+		t.Fatalf("cached thumbnail = %d, etag=%q", res.Code, etag)
+	}
+	if err := db.QueryRow(`SELECT total_changes()`).Scan(&changesAfter); err != nil || changesAfter != changesBefore {
+		t.Fatalf("thumbnail read wrote database: before=%d after=%d err=%v", changesBefore, changesAfter, err)
+	}
+	changedPhoto := *photo
+	changedPhoto.ModifiedAt = photo.ModifiedAt.Add(time.Second)
+	if _, err := cat.UpsertEntries(ctx, []model.Entry{changedPhoto}, 1); err != nil {
+		t.Fatal(err)
+	}
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("changed file served old thumbnail: %d", res.Code)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/search?q=mov&library=movies&type=file&extension=.MP4", nil)

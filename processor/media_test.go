@@ -93,11 +93,7 @@ func TestImageMetadataReadsDimensions(t *testing.T) {
 		t.Fatal(err)
 	}
 	for variant, maximum := range thumbnailVariants {
-		artifact, err := cat.ArtifactForEntry(context.Background(), entry.ID, "thumbnail", variant)
-		if err != nil {
-			t.Fatalf("%s artifact: %v", variant, err)
-		}
-		filename, err := ThumbnailPath(cacheDir, artifact.Key)
+		filename, err := ThumbnailPath(cacheDir, ThumbnailKey(entry, variant))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -209,9 +205,7 @@ func TestVideoThumbnailGeneratesCachedVariants(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, variant := range []string{"small", "medium", "large"} {
-		if _, err := cat.ArtifactForEntry(ctx, entry.ID, "thumbnail", variant); err != nil {
-			t.Fatalf("%s video thumbnail: %v", variant, err)
-		}
+		assertThumbnail(t, thumbnailer.cacheDir, entry, variant)
 	}
 }
 
@@ -248,9 +242,7 @@ func TestAudioArtworkGeneratesCachedVariants(t *testing.T) {
 	if err := processor.Process(ctx, entry); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cat.ArtifactForEntry(ctx, entry.ID, "thumbnail", "medium"); err != nil {
-		t.Fatalf("audio artwork thumbnail: %v", err)
-	}
+	assertThumbnail(t, thumbnailer.cacheDir, entry, "medium")
 }
 
 func TestFFProbeNormalizesMusicTags(t *testing.T) {
@@ -322,10 +314,7 @@ func TestEPUBMetadataReadsPackage(t *testing.T) {
 	if err := NewThumbnail(cat, registry, cacheDir).Process(context.Background(), entry); err != nil {
 		t.Fatal(err)
 	}
-	artifact, err := cat.ArtifactForEntry(context.Background(), entry.ID, "thumbnail", "medium")
-	if err != nil || artifact.MIME != "image/jpeg" {
-		t.Fatalf("EPUB cover thumbnail = %#v, %v", artifact, err)
-	}
+	assertThumbnail(t, cacheDir, entry, "medium")
 	// Cover extraction depends only on the file-centric media row.
 	v2Catalog, v2Registry, v2Entry := mediaFixture(t, "book.epub", encoded.Bytes())
 	if _, err := v2Catalog.SetMediaCandidate(context.Background(), v2Entry.ID, "embedded", catalog.MediaCandidate{
@@ -334,12 +323,11 @@ func TestEPUBMetadataReadsPackage(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := NewThumbnail(v2Catalog, v2Registry, t.TempDir()).Process(context.Background(), v2Entry); err != nil {
+	v2CacheDir := t.TempDir()
+	if err := NewThumbnail(v2Catalog, v2Registry, v2CacheDir).Process(context.Background(), v2Entry); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := v2Catalog.ArtifactForEntry(context.Background(), v2Entry.ID, "thumbnail", "medium"); err != nil {
-		t.Fatalf("EPUB cover from medias: %v", err)
-	}
+	assertThumbnail(t, v2CacheDir, v2Entry, "medium")
 }
 
 func TestResolveEPUBResourceDecodesEscapedPaths(t *testing.T) {
@@ -392,8 +380,79 @@ func TestPDFThumbnailGeneratesCachedVariants(t *testing.T) {
 	if err := processor.Process(ctx, entry); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cat.ArtifactForEntry(ctx, entry.ID, "thumbnail", "medium"); err != nil {
-		t.Fatalf("PDF thumbnail: %v", err)
+	assertThumbnail(t, thumbnailer.cacheDir, entry, "medium")
+}
+
+func assertThumbnail(t *testing.T, cacheDir string, entry model.Entry, variant string) {
+	t.Helper()
+	filename, err := ThumbnailPath(cacheDir, ThumbnailKey(entry, variant))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	_, format, err := image.DecodeConfig(file)
+	if err != nil || format != "jpeg" {
+		t.Fatalf("%s thumbnail format=%q err=%v", variant, format, err)
+	}
+}
+
+func TestDerivedThumbnailCacheInvalidation(t *testing.T) {
+	for _, extension := range []string{"mp4", "mp3", "pdf"} {
+		t.Run(extension, func(t *testing.T) {
+			ctx := context.Background()
+			cat, registry, entry := mediaFixture(t, "file."+extension, []byte("fixture"))
+			candidate := catalog.MediaCandidate{Kind: "movie"}
+			if extension == "mp3" {
+				candidate.Kind = "audio"
+				candidate.Data = json.RawMessage(`{"probe":{"music":{"hasAlbumArt":true}}}`)
+			} else if extension == "pdf" {
+				candidate.Kind = "book"
+			}
+			if _, err := cat.SetMediaCandidate(ctx, entry.ID, "embedded", candidate); err != nil {
+				t.Fatal(err)
+			}
+			cacheDir := t.TempDir()
+			thumbnail := NewThumbnail(cat, registry, cacheDir)
+			// A missing executable makes an attempted regeneration observable.
+			binary := filepath.Join(t.TempDir(), "missing-converter")
+			process := NewVideoThumbnail(cat, registry, thumbnail, binary, time.Second).Process
+			if extension == "mp3" {
+				process = NewAudioArtwork(cat, registry, thumbnail, binary, time.Second).Process
+			} else if extension == "pdf" {
+				process = NewPDFThumbnail(cat, registry, thumbnail, cacheDir, binary, time.Second).Process
+			}
+			if err := thumbnail.writeVariants(ctx, entry, image.NewRGBA(image.Rect(0, 0, 4, 3))); err != nil {
+				t.Fatal(err)
+			}
+			if err := process(ctx, entry); err != nil {
+				t.Fatalf("complete cache should skip converter: %v", err)
+			}
+			for _, change := range []string{"mtime", "size"} {
+				changed := entry
+				if change == "mtime" {
+					changed.ModifiedAt = entry.ModifiedAt.Add(time.Second)
+				} else {
+					changed.Size++
+				}
+				if err := process(ctx, changed); err == nil {
+					t.Fatalf("changed %s reused old thumbnail", change)
+				}
+			}
+			filename, err := ThumbnailPath(cacheDir, ThumbnailKey(entry, "medium"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filename); err != nil {
+				t.Fatal(err)
+			}
+			if err := process(ctx, entry); err == nil {
+				t.Fatal("missing medium variant did not trigger regeneration")
+			}
+		})
 	}
 }
 

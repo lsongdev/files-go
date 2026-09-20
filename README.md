@@ -24,12 +24,15 @@ than a claim that every section is implemented.
 - image dimensions and cached small/medium/large thumbnails;
 - ffprobe-backed video, audio, and normalized music metadata;
 - bounded EPUB package parsing and pdfinfo-backed PDF metadata.
-- separate movie, series/season/episode, track, photo, and book catalog items;
+- file-centric movie, TV, audio, photo, and book enhancements;
 - optional TMDB movie/TV matching with confidence scoring and manual override APIs;
 - cached TMDB posters, episode details, and media annotations attached to the
   physical file/folder views.
 - capability-based direct play, remux, and single-profile HLS transcoding;
-- per-user resume state and a Continue Watching media shelf.
+
+The current [database structure](docs/database-schema.md) keeps files and media
+enhancements separate. Thumbnails are derived disk caches; playback progress
+is not recorded and videos do not resume automatically.
 
 Important design work that is still outstanding includes authentication,
 permissions and sharing, health and metrics endpoints, cache GC and supported
@@ -105,9 +108,6 @@ POST /api/v1/entries/{id}/media/rematch
 POST /api/v1/playback/{id}
 GET  /api/v1/playback/sessions/{session}/{file}
 DELETE /api/v1/playback/sessions/{session}
-GET  /api/v1/entries/{id}/playback-state
-PUT  /api/v1/entries/{id}/playback-state
-GET  /api/v1/playback/continue
 ```
 
 ## Development

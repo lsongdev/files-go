@@ -2,7 +2,8 @@
 
 > 媒体增强已切换到[文件中心的媒体增强 v2](media-enrichment-v2.md)。本文后续关于
 > `media_files`、`media_items`、`media_item_files` 和 `/media-item` 的章节属于旧设计
-> 历史，不代表当前数据库结构或 API。
+> 历史，不代表当前数据库结构或 API。当前表清单见[数据库结构](database-schema.md)；
+> `artifacts`、`maintenance_tasks` 和 `playback_states` 已移除，后文相关章节也属于历史设计。
 
 Status: Draft
 Target: v1 architecture
@@ -2629,9 +2630,9 @@ CREATE TABLE IF NOT EXISTS
 ```text
 migrations/
   001_init.sql
-  002_media.sql
-  003_search.sql
 ```
+
+开发阶段历史迁移已压缩为当前 schema 的单一基线。新数据库直接执行 `001_init.sql`；已经完成旧版 001–020 迁移的数据库保留原有版本记录并可继续打开。停在旧迁移中途的数据库不再做兼容升级，应从已配置资料库重新构建。
 
 数据库：
 

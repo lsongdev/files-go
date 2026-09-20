@@ -93,9 +93,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/playback/{id}", s.startPlayback)
 	s.mux.HandleFunc("GET /api/v1/playback/sessions/{session}/{file}", s.playbackFile)
 	s.mux.HandleFunc("DELETE /api/v1/playback/sessions/{session}", s.stopPlayback)
-	s.mux.HandleFunc("GET /api/v1/entries/{id}/playback-state", s.getPlaybackState)
-	s.mux.HandleFunc("PUT /api/v1/entries/{id}/playback-state", s.setPlaybackState)
-	s.mux.HandleFunc("GET /api/v1/playback/continue", s.continueWatching)
 }
 
 func (s *Server) startPlayback(w http.ResponseWriter, r *http.Request) {
@@ -164,84 +161,6 @@ func (s *Server) stopPlayback(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-type playbackStateInput struct {
-	PositionMS int64 `json:"positionMs"`
-	Played     bool  `json:"played"`
-}
-
-func playbackUser(r *http.Request) (string, error) {
-	user := strings.TrimSpace(r.Header.Get("X-Files-Go-User"))
-	if user == "" {
-		return "local", nil
-	}
-	if len(user) > 128 {
-		return "", errors.New("user ID is too long")
-	}
-	for _, char := range user {
-		if !(char == '-' || char == '_' || char == '.' || char >= '0' && char <= '9' || char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z') {
-			return "", errors.New("user ID contains unsupported characters")
-		}
-	}
-	return user, nil
-}
-
-func (s *Server) getPlaybackState(w http.ResponseWriter, r *http.Request) {
-	user, err := playbackUser(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	state, err := s.catalog.PlaybackState(r.Context(), user, r.PathValue("id"))
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "playback_state_not_found", "playback state not found")
-		return
-	}
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, state)
-}
-
-func (s *Server) setPlaybackState(w http.ResponseWriter, r *http.Request) {
-	user, err := playbackUser(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if _, err := s.catalog.Entry(r.Context(), r.PathValue("id")); errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
-		return
-	} else if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	var input playbackStateInput
-	if err := decodeJSONBody(w, r, &input); err != nil {
-		return
-	}
-	state, err := s.catalog.UpsertPlaybackState(r.Context(), model.PlaybackState{UserID: user, EntryID: r.PathValue("id"), PositionMS: input.PositionMS, Played: input.Played})
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, state)
-}
-
-func (s *Server) continueWatching(w http.ResponseWriter, r *http.Request) {
-	user, err := playbackUser(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	items, err := s.catalog.ContinueWatching(r.Context(), user, 20)
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
-}
-
 func (s *Server) thumbnail(w http.ResponseWriter, r *http.Request) {
 	variant := r.URL.Query().Get("size")
 	if variant == "" {
@@ -251,28 +170,24 @@ func (s *Server) thumbnail(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "size must be small, medium, or large")
 		return
 	}
-	artifact, err := s.catalog.ArtifactForEntry(r.Context(), r.PathValue("id"), "thumbnail", variant)
+	entry, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
 	if errors.Is(err, catalog.ErrNotFound) {
-		if entry, entryErr := s.catalog.Entry(r.Context(), r.PathValue("id")); entryErr == nil {
-			s.reprocess(*entry)
-		}
-		writeThumbnailPending(w)
+		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
 		return
 	}
 	if err != nil {
 		s.internalError(w, err)
 		return
 	}
-	filename, err := processor.ThumbnailPath(s.cacheDir, artifact.Key)
+	key := processor.ThumbnailKey(*entry, variant)
+	filename, err := processor.ThumbnailPath(s.cacheDir, key)
 	if err != nil {
 		s.internalError(w, err)
 		return
 	}
 	file, err := os.Open(filename)
 	if errors.Is(err, os.ErrNotExist) {
-		if entry, entryErr := s.catalog.Entry(r.Context(), r.PathValue("id")); entryErr == nil {
-			s.reprocess(*entry)
-		}
+		s.reprocess(*entry)
 		writeThumbnailPending(w)
 		return
 	}
@@ -286,12 +201,18 @@ func (s *Server) thumbnail(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, err)
 		return
 	}
+	if info.Size() == 0 {
+		s.reprocess(*entry)
+		writeThumbnailPending(w)
+		return
+	}
 	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	w.Header().Set("ETag", `"`+artifact.Key+`"`)
+	// This URL identifies a file, not a file version. Revalidate so replacement
+	// or modification of the original cannot leave an old thumbnail in browsers.
+	w.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
+	w.Header().Set("ETag", `"`+key+`"`)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	http.ServeContent(w, r, artifact.ID+".jpg", info.ModTime(), file)
-	go func() { _ = s.catalog.TouchArtifact(s.ctx, artifact.ID) }()
+	http.ServeContent(w, r, key+".jpg", info.ModTime(), file)
 }
 
 func (s *Server) mediaIcon(w http.ResponseWriter, r *http.Request) {
@@ -375,6 +296,9 @@ func writeThumbnailPending(w http.ResponseWriter) {
 }
 
 func (s *Server) reprocess(entry model.Entry) {
+	if s.indexer == nil {
+		return
+	}
 	go func() {
 		if err := s.indexer.ReprocessEntry(s.ctx, entry); err != nil && !errors.Is(err, context.Canceled) {
 			s.logger.Printf("reprocess entry %s: %v", entry.ID, err)
@@ -858,7 +782,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) system(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"version": "0.4.0", "features": map[string]bool{"media": true, "mediaEnhancement": true, "thumbnail": true, "poster": true, "directPlay": true, "remux": true, "hls": true, "transcode": true, "continueWatching": true, "scanProgress": true}})
+	writeJSON(w, http.StatusOK, map[string]any{"version": "0.4.0", "features": map[string]bool{"media": true, "mediaEnhancement": true, "thumbnail": true, "poster": true, "directPlay": true, "remux": true, "hls": true, "transcode": true, "scanProgress": true}})
 }
 
 func (s *Server) systemStatus(w http.ResponseWriter, r *http.Request) {

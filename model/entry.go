@@ -84,18 +84,6 @@ type ParsedMedia struct {
 	UpdatedAt  time.Time       `json:"updatedAt"`
 }
 
-type Artifact struct {
-	ID             string    `json:"id"`
-	EntryID        string    `json:"entryId,omitempty"`
-	Type           string    `json:"type"`
-	Variant        string    `json:"variant,omitempty"`
-	Key            string    `json:"-"`
-	MIME           string    `json:"mime,omitempty"`
-	Size           int64     `json:"size"`
-	CreatedAt      time.Time `json:"createdAt"`
-	LastAccessedAt time.Time `json:"lastAccessedAt"`
-}
-
 // Media is the resolved, file-centric display enhancement. FileID may refer
 // to either a file or a directory; a missing row means no enhancement.
 type Media struct {
@@ -112,13 +100,4 @@ type Media struct {
 	Sources     json.RawMessage `json:"-"`
 	MatchLocked bool            `json:"matchLocked,omitempty"`
 	UpdatedAt   time.Time       `json:"updatedAt"`
-}
-
-type PlaybackState struct {
-	UserID     string    `json:"-"`
-	EntryID    string    `json:"entryId"`
-	PositionMS int64     `json:"positionMs"`
-	Played     bool      `json:"played"`
-	UpdatedAt  time.Time `json:"updatedAt"`
-	Media      *Media    `json:"media,omitempty"`
 }

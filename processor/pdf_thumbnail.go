@@ -41,10 +41,8 @@ func (p *PDFThumbnail) Match(entry model.Entry) bool {
 }
 
 func (p *PDFThumbnail) Process(ctx context.Context, entry model.Entry) error {
-	if _, err := p.catalog.ArtifactForEntry(ctx, entry.ID, "thumbnail", "large"); err == nil {
+	if p.thumbnail.cached(ctx, entry) {
 		return nil
-	} else if !errors.Is(err, catalog.ErrNotFound) {
-		return err
 	}
 	mediaItem, err := p.catalog.MediaForEntry(ctx, entry.ID)
 	if errors.Is(err, catalog.ErrNotFound) {
