@@ -105,3 +105,15 @@ func TestMediaCandidateBatchRollsBackOnMissingEntry(t *testing.T) {
 		t.Fatalf("first entry was committed despite rollback: %v", err)
 	}
 }
+
+func TestSemanticMediaFieldsOverrideTechnicalFallback(t *testing.T) {
+	year := 2014
+	item := resolveMedia("file", "Interstellar.mkv", map[string]MediaCandidate{
+		"embedded": {Kind: "video", Title: "Interstellar", Line1: "视频 · 1920 × 1080", Line2: "H264 · AAC", Line3: "2:49:00 · MKV"},
+		"filename": {Kind: "movie", Title: "Interstellar", Year: &year, Line1: "电影 · 2014"},
+		"tmdb": {Kind: "movie", Title: "星际穿越", Year: &year, Line1: "电影 · 2014", Line2: "Interstellar"},
+	})
+	if item.Kind != "movie" || item.Title != "星际穿越" || item.Line1 != "电影 · 2014" || item.Line2 != "Interstellar" || item.Line3 != "2:49:00 · MKV" {
+		t.Fatalf("resolved semantic media = %#v", item)
+	}
+}
