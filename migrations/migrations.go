@@ -72,6 +72,7 @@ func Apply(ctx context.Context, db *sql.DB) error {
 	}{
 		{`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('storages', 'libraries', 'library_sources', 'entries', 'entry_search', 'jobs', 'scan_checkpoints', 'medias')`, 8},
 		{`SELECT COUNT(*) FROM pragma_table_info('storages') WHERE name='scan_scope'`, 1},
+		{`SELECT COUNT(*) FROM pragma_table_info('medias') WHERE name='summary'`, 1},
 		{`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('media_files', 'media_items', 'media_item_files', 'media_match_suppressions')`, 0},
 	} {
 		var count int
