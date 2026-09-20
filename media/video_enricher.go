@@ -98,7 +98,7 @@ func (p *VideoEnricher) Process(ctx context.Context, entry model.Entry) error {
 		return err
 	}
 	_, err = p.catalog.SetMediaCandidate(ctx, entry.ID, "tmdb", catalog.MediaCandidate{
-		Kind: kind, Title: match.Title, Year: match.Year, Data: encoded,
+		Kind: kind, Title: match.Title, Year: match.Year, Summary: strings.TrimSpace(match.Overview), Data: encoded,
 	})
 	return err
 }
