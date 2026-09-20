@@ -90,7 +90,7 @@ TMDB URL。建议统一为 `file:<file-id>`（如 `folder.jpg`）和
     "icon": "/api/v1/entries/<file-id>/icon",
     "backdrop": "/api/v1/entries/<file-id>/backdrop",
     "year": 1980,
-    "line1": "电影 · 1980",
+    "line1": "1980",
     "line2": "",
     "line3": ""
   }

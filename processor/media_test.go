@@ -85,7 +85,7 @@ func TestImageMetadataReadsDimensions(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolved, err := cat.MediaForEntry(context.Background(), entry.ID)
-	if err != nil || resolved.Kind != "photo" || resolved.Icon != "file:"+entry.ID || resolved.Title != "photo" || resolved.Line1 != "照片 · 800 × 600" {
+	if err != nil || resolved.Kind != "photo" || resolved.Icon != "file:"+entry.ID || resolved.Title != "photo" || resolved.Line1 != "800 × 600" {
 		t.Fatalf("resolved photo = %#v, %v", resolved, err)
 	}
 	cacheDir := t.TempDir()
@@ -184,7 +184,7 @@ func TestMediaWritersPopulateThreeDisplayLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	video, err := videoCatalog.MediaForEntry(ctx, videoEntry.ID)
-	if err != nil || video.Kind != "video" || video.Line1 != "视频 · 1920 × 1080" || video.Line2 != "H264 · AAC" || video.Line3 != "2:03 · MKV" {
+	if err != nil || video.Kind != "video" || video.Line1 != "1920 × 1080" || video.Line2 != "H264 · AAC" || video.Line3 != "2:03 · MKV" {
 		t.Fatalf("video display = %#v, %v", video, err)
 	}
 
@@ -538,7 +538,6 @@ func wavSilence(sampleRate, samples int) []byte {
 	return buffer.Bytes()
 }
 
-
 func TestCommonMediaDisplayLines(t *testing.T) {
 	t.Run("photo", func(t *testing.T) {
 		cat, _, entry := mediaFixture(t, "photo.jpg", []byte("fixture"))
@@ -552,7 +551,7 @@ func TestCommonMediaDisplayLines(t *testing.T) {
 			t.Fatal(err)
 		}
 		item, err := cat.MediaForEntry(context.Background(), entry.ID)
-		if err != nil || item.Line1 != "照片 · 4032 × 3024" || item.Line2 != "Fujifilm X100VI" || item.Line3 == "" {
+		if err != nil || item.Line1 != "4032 × 3024" || item.Line2 != "Fujifilm X100VI" || item.Line3 == "" {
 			t.Fatalf("photo lines = %#v, %v", item, err)
 		}
 	})
@@ -568,7 +567,7 @@ func TestCommonMediaDisplayLines(t *testing.T) {
 			t.Fatal(err)
 		}
 		item, err := cat.MediaForEntry(context.Background(), entry.ID)
-		if err != nil || item.Line1 != "视频 · 1920 × 1080" || item.Line2 != "H264 · AAC" || item.Line3 != "1:30 · MKV" {
+		if err != nil || item.Line1 != "1920 × 1080" || item.Line2 != "H264 · AAC" || item.Line3 != "1:30 · MKV" {
 			t.Fatalf("video lines = %#v, %v", item, err)
 		}
 	})
