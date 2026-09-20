@@ -3,7 +3,6 @@ package processor
 import (
 	"context"
 	"encoding/json"
-	"strconv"
 	"strings"
 
 	"github.com/lsongdev/files-go/catalog"
@@ -50,13 +49,7 @@ func (p *MovieFile) Process(ctx context.Context, entry model.Entry) error {
 		_, err := p.catalog.ClearMediaCandidate(ctx, entry.ID, "filename")
 		return err
 	}
-	line1 := "电影"
-	if kind == "episode" {
-		line1 = "电视剧"
-	}
-	if parsed.Year != nil {
-		line1 += " · " + strconv.Itoa(*parsed.Year)
-	}
+	line1, line2, line3 := MovieDisplay(kind, parsed, nil)
 	data, err := json.Marshal(map[string]any{
 		"season": parsed.Season, "episode": parsed.Episode, "release": parsed.Release,
 	})
@@ -64,7 +57,7 @@ func (p *MovieFile) Process(ctx context.Context, entry model.Entry) error {
 		return err
 	}
 	if _, err := p.catalog.SetMediaCandidate(ctx, entry.ID, "filename", catalog.MediaCandidate{
-		Kind: kind, Title: parsed.Title, Year: parsed.Year, Line1: line1, Data: data,
+		Kind: kind, Title: parsed.Title, Year: parsed.Year, Line1: line1, Line2: line2, Line3: line3, Data: data,
 	}); err != nil {
 		return err
 	}
@@ -98,8 +91,10 @@ func (p *MovieFile) Process(ctx context.Context, entry model.Entry) error {
 	if err != nil {
 		return err
 	}
+	line1, line2, line3 = MovieDisplay(kind, parsed, &match)
 	_, err = p.catalog.SetMediaCandidate(ctx, entry.ID, "tmdb", catalog.MediaCandidate{
-		Kind: kind, Title: match.Title, Year: match.Year, Summary: strings.TrimSpace(match.Overview), Data: encoded,
+		Kind: kind, Title: match.Title, Year: match.Year, Line1: line1, Line2: line2, Line3: line3,
+		Summary: strings.TrimSpace(match.Overview), Data: encoded,
 	})
 	return err
 }
