@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lsongdev/files-go/api"
+	"github.com/lsongdev/files-go/auth"
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/config"
 	"github.com/lsongdev/files-go/database"
@@ -181,8 +182,16 @@ func main() {
 	apiServer := api.New(ctx, cat, registry, idx, log.Default(), cfg.CacheDir, playbackManager)
 	apiServer.SetJobQueue(queue)
 	apiServer.SetMediaProvider(provider, cfg.Media.TMDB.Language)
+	authTokens := make([]auth.Token, 0, len(cfg.Auth.Tokens))
+	for _, item := range cfg.Auth.Tokens {
+		role, ok := auth.ParseRole(item.Role)
+		if !ok {
+			log.Fatalf("invalid auth role %q", item.Role)
+		}
+		authTokens = append(authTokens, auth.Token{Name: item.Name, Secret: item.Token, Role: role})
+	}
 	mux := http.NewServeMux()
-	mux.Handle("/api/", apiServer.Handler())
+	mux.Handle("/api/", auth.Middleware(authTokens)(apiServer.Handler()))
 	mux.Handle("/", web.Handler())
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	shutdownDone := make(chan struct{})
