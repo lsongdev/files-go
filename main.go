@@ -16,14 +16,14 @@ import (
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/config"
 	"github.com/lsongdev/files-go/database"
-	"github.com/lsongdev/files-go/enrichment"
 	"github.com/lsongdev/files-go/indexer"
 	"github.com/lsongdev/files-go/jobs"
-	"github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/model"
 	"github.com/lsongdev/files-go/playback"
+	"github.com/lsongdev/files-go/plugins"
 	"github.com/lsongdev/files-go/processor"
 	"github.com/lsongdev/files-go/storage"
+	"github.com/lsongdev/files-go/tmdb"
 	"github.com/lsongdev/files-go/web"
 )
 
@@ -93,35 +93,35 @@ func main() {
 	}
 	queue := jobs.New(db, 2*time.Minute)
 	thumbnailer := processor.NewThumbnail(cat, registry, cfg.CacheDir)
-	var provider media.MetadataProvider
+	var provider tmdb.Provider
 	if cfg.Media.TMDB.Token != "" {
-		provider = media.NewTMDB(cfg.Media.TMDB.Token, nil)
+		provider = tmdb.New(cfg.Media.TMDB.Token, nil)
 	}
-	videoEnricher := media.NewVideoEnricher(cat, provider, cfg.Media.TMDB.Language)
-	directoryEnricher := media.NewDirectoryEnricherWithProvider(cat, registry, provider, cfg.Media.TMDB.Language)
-	artwork := media.NewArtwork(cat, cfg.CacheDir, nil)
-	directoryEnricher.SetArtwork(artwork)
-	plugins, err := processor.SelectPlugins(cfg.Processing.Plugins,
-		enrichment.Image(cat, registry, thumbnailer),
-		enrichment.Video(cat, registry, thumbnailer, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
-		enrichment.Movies(videoEnricher, directoryEnricher, artwork),
-		enrichment.Music(cat, registry, thumbnailer, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
-		enrichment.Ebook(cat, registry, thumbnailer),
-		enrichment.Document(cat, registry, thumbnailer, cfg.CacheDir, cfg.Processing.PDFInfo, cfg.Processing.PDFToPPM),
+	movieFile := processor.NewMovieFile(cat, provider, cfg.Media.TMDB.Language)
+	movieDirectory := processor.NewMovieDirectoryWithProvider(cat, registry, provider, cfg.Media.TMDB.Language)
+	artwork := tmdb.NewArtwork(cat, cfg.CacheDir, nil)
+	movieDirectory.SetArtwork(artwork)
+	selected, err := plugins.SelectPlugins(cfg.Processing.Plugins,
+		plugins.Image(cat, registry, thumbnailer),
+		plugins.Video(cat, registry, thumbnailer, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
+		plugins.Movies(movieFile, movieDirectory, artwork),
+		plugins.Music(cat, registry, thumbnailer, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
+		plugins.Ebook(cat, registry, thumbnailer),
+		plugins.Document(cat, registry, thumbnailer, cfg.CacheDir, cfg.Processing.PDFInfo, cfg.Processing.PDFToPPM),
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
-	for _, plugin := range plugins {
+	for _, plugin := range selected {
 		if plugin.Name() == "movies" {
-			idx.SetRemovedEntryReconciler(directoryEnricher.Process)
+			idx.SetRemovedEntryReconciler(movieDirectory.Process)
 			break
 		}
 	}
-	processing := processor.New(cat, queue, plugins...)
+	processing := plugins.New(cat, queue, selected...)
 	idx.SetEntrySink(processing)
 	workerPool := jobs.NewPool(queue, cfg.Processing.Workers)
-	workerPool.Handle(processor.JobProcessEntry, processing.Handle)
+	workerPool.Handle(plugins.JobProcessEntry, processing.Handle)
 	workerPool.Start(ctx)
 	requestScan := func(storageID string) {
 		if !idx.CanScanStorage(storageID) || idx.IsScanning(storageID) {
