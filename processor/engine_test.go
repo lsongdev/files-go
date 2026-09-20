@@ -174,4 +174,8 @@ func TestSelectPluginsUsesConfiguredOrderAndPresence(t *testing.T) {
 	if err != nil || len(all) != len(available) {
 		t.Fatalf("default plugins = %v, %v", all, err)
 	}
+	none, err := SelectPlugins([]string{}, available...)
+	if err != nil || len(none) != 0 {
+		t.Fatalf("disabled plugins = %v, %v", none, err)
+	}
 }
