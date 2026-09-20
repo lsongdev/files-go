@@ -23,6 +23,7 @@ type MediaCandidate struct {
 	Line1    string          `json:"line1,omitempty"`
 	Line2    string          `json:"line2,omitempty"`
 	Line3    string          `json:"line3,omitempty"`
+	Summary  string          `json:"summary,omitempty"`
 	Data     json.RawMessage `json:"data,omitempty"`
 }
 
@@ -165,14 +166,14 @@ func applyMediaCandidates(ctx context.Context, tx *sql.Tx, fileID string, update
 		locked = 1
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO medias
-		(file_id, kind, title, icon, backdrop, year, line1, line2, line3, data, sources, match_locked, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(file_id, kind, title, icon, backdrop, year, line1, line2, line3, summary, data, sources, match_locked, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(file_id) DO UPDATE SET kind=excluded.kind, title=excluded.title,
 		icon=excluded.icon, backdrop=excluded.backdrop, year=excluded.year,
-		line1=excluded.line1, line2=excluded.line2, line3=excluded.line3,
+		line1=excluded.line1, line2=excluded.line2, line3=excluded.line3, summary=excluded.summary,
 		data=excluded.data, sources=excluded.sources, match_locked=excluded.match_locked,
 		updated_at=excluded.updated_at`, fileID, item.Kind, item.Title, item.Icon, item.Backdrop,
-		year, item.Line1, item.Line2, item.Line3, string(item.Data), string(item.Sources), locked, item.UpdatedAt)
+		year, item.Line1, item.Line2, item.Line3, item.Summary, string(item.Data), string(item.Sources), locked, item.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +218,9 @@ func resolveMedia(fileID, name string, sources map[string]MediaCandidate) model.
 		if item.Line3 == "" && candidate.Line3 != "" {
 			item.Line3 = candidate.Line3
 		}
+		if item.Summary == "" && candidate.Summary != "" {
+			item.Summary = candidate.Summary
+		}
 		if len(candidate.Data) > 0 {
 			data[source] = candidate.Data
 		}
@@ -233,7 +237,7 @@ func scanMedia(row scanner) (model.Media, error) {
 	var data, sources string
 	var locked int
 	err := row.Scan(&item.FileID, &item.Kind, &item.Title, &item.Icon, &item.Backdrop,
-		&year, &item.Line1, &item.Line2, &item.Line3, &data, &sources, &locked, &item.UpdatedAt)
+		&year, &item.Line1, &item.Line2, &item.Line3, &item.Summary, &data, &sources, &locked, &item.UpdatedAt)
 	if year.Valid {
 		value := int(year.Int64)
 		item.Year = &value
@@ -244,7 +248,7 @@ func scanMedia(row scanner) (model.Media, error) {
 	return item, err
 }
 
-const mediaColumns = `file_id, kind, title, icon, backdrop, year, line1, line2, line3, data, sources, match_locked, updated_at`
+const mediaColumns = `file_id, kind, title, icon, backdrop, year, line1, line2, line3, summary, data, sources, match_locked, updated_at`
 
 func (c *Catalog) MediaForEntry(ctx context.Context, fileID string) (*model.Media, error) {
 	item, err := scanMedia(c.reader.QueryRowContext(ctx, `SELECT `+mediaColumns+` FROM medias WHERE file_id=?`, fileID))
