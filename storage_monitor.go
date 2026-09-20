@@ -22,24 +22,24 @@ func probeStorageAvailability(ctx context.Context, cat *catalog.Catalog, registr
 	if err != nil {
 		return err
 	}
-	var err error
+	var probeErr error
 	if verifier, ok := backend.(storage.Verifier); ok {
-		err = verifier.Verify(ctx)
+		probeErr = verifier.Verify(ctx)
 	} else {
 		root, statErr := backend.Stat(ctx, "")
-		err = statErr
-		if err == nil && root.Type != model.EntryDirectory {
-			err = storage.ErrOffline
+		probeErr = statErr
+		if probeErr == nil && root.Type != model.EntryDirectory {
+			probeErr = storage.ErrOffline
 		}
 	}
-	if errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrOffline) {
+	if errors.Is(probeErr, storage.ErrNotFound) || errors.Is(probeErr, storage.ErrOffline) {
 		if state.State != "offline" {
 			return cat.FailScan(ctx, storageID, "offline", "storage root is unavailable")
 		}
 		return nil
 	}
-	if err != nil {
-		return err
+	if probeErr != nil {
+		return probeErr
 	}
 	if state.State == "offline" && onRecovered != nil {
 		onRecovered(storageID)
