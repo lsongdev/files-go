@@ -302,3 +302,47 @@ func TestJobClaimUsesPendingIndex(t *testing.T) {
 		t.Fatalf("query plan does not use idx_jobs_claim: %v", details)
 	}
 }
+
+
+func TestCleanupHistoryKeepsLatestEntryJob(t *testing.T) {
+	ctx := context.Background()
+	queue := testQueue(t)
+	now := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+	queue.now = func() time.Time { return now }
+
+	old, _, err := queue.Enqueue(ctx, "process", map[string]string{"entryId": "entry-1"}, EnqueueOptions{Key: "pipeline-v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err = queue.Claim(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.CompleteJob(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(31 * 24 * time.Hour)
+	current, _, err := queue.Enqueue(ctx, "process", map[string]string{"entryId": "entry-1"}, EnqueueOptions{Key: "pipeline-v2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err = queue.Claim(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.CompleteJob(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := queue.CleanupHistory(ctx, 30*24*time.Hour)
+	if err != nil || deleted != 1 {
+		t.Fatalf("cleanup deleted=%d err=%v", deleted, err)
+	}
+	if _, err := queue.byTypeKey(ctx, "process", "pipeline-v1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("old job survived cleanup: %v", err)
+	}
+	if latest, err := queue.byTypeKey(ctx, "process", "pipeline-v2"); err != nil || latest.State != StateDone {
+		t.Fatalf("latest job = %#v, %v", latest, err)
+	}
+}
