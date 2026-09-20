@@ -28,6 +28,24 @@ func Apply(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	sort.Strings(names)
+
+	// A recorded squashed init must correspond to the actual core schema before
+	// later ALTER migrations run. This keeps partial pre-squash databases on
+	// the explicit rebuild path instead of leaking raw SQLite errors.
+	var initApplied int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version=1`).Scan(&initApplied); err != nil {
+		return err
+	}
+	if initApplied != 0 {
+		var coreTables int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table'
+			AND name IN ('storages', 'libraries', 'library_sources', 'entries', 'entry_search', 'jobs', 'scan_checkpoints', 'medias')`).Scan(&coreTables); err != nil {
+			return err
+		}
+		if coreTables != 8 {
+			return fmt.Errorf("database schema is incomplete or from an unsupported pre-squash migration; rebuild the database from configured libraries")
+		}
+	}
 	for _, name := range names {
 		prefix, _, ok := strings.Cut(name, "_")
 		if !ok {
@@ -72,6 +90,7 @@ func Apply(ctx context.Context, db *sql.DB) error {
 	}{
 		{`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('storages', 'libraries', 'library_sources', 'entries', 'entry_search', 'jobs', 'scan_checkpoints', 'medias')`, 8},
 		{`SELECT COUNT(*) FROM pragma_table_info('storages') WHERE name='scan_scope'`, 1},
+		{`SELECT COUNT(*) FROM pragma_table_info('medias') WHERE name='summary'`, 1},
 		{`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('media_files', 'media_items', 'media_item_files', 'media_match_suppressions')`, 0},
 	} {
 		var count int

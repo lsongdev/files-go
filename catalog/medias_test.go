@@ -30,24 +30,24 @@ func TestMediaCandidatesResolvePerFieldAndRecoverAfterRemoval(t *testing.T) {
 	}
 	id := entries[0].ID
 	year := 2016
-	if _, err := cat.SetMediaCandidate(ctx, id, "tmdb", MediaCandidate{Kind: "movie", Title: "Arrival", Year: &year, Icon: "cache:poster-key", Backdrop: "cache:background-key"}); err != nil {
+	if _, err := cat.SetMediaCandidate(ctx, id, "tmdb", MediaCandidate{Kind: "movie", Title: "Arrival", Year: &year, Icon: "cache:poster-key", Backdrop: "cache:background-key", Summary: "A linguist meets visitors."}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := cat.SetMediaCandidate(ctx, id, "local_artwork", MediaCandidate{Icon: "file:folder-id"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cat.SetMediaCandidate(ctx, id, "local_nfo", MediaCandidate{Title: "降临"}); err != nil {
+	if _, err := cat.SetMediaCandidate(ctx, id, "local_nfo", MediaCandidate{Title: "降临", Summary: "本地简介"}); err != nil {
 		t.Fatal(err)
 	}
 	item, err := cat.MediaForEntry(ctx, id)
-	if err != nil || item.Title != "降临" || item.Icon != "file:folder-id" || item.Backdrop != "cache:background-key" || item.Year == nil || *item.Year != year {
+	if err != nil || item.Title != "降临" || item.Summary != "本地简介" || item.Icon != "file:folder-id" || item.Backdrop != "cache:background-key" || item.Year == nil || *item.Year != year {
 		t.Fatalf("resolved media = %#v, %v", item, err)
 	}
 	if _, err := cat.ClearMediaCandidate(ctx, id, "local_artwork"); err != nil {
 		t.Fatal(err)
 	}
 	item, err = cat.MediaForEntry(ctx, id)
-	if err != nil || item.Icon != "cache:poster-key" || item.Title != "降临" {
+	if err != nil || item.Icon != "cache:poster-key" || item.Title != "降临" || item.Summary != "本地简介" {
 		t.Fatalf("fallback media = %#v, %v", item, err)
 	}
 	batch, err := cat.MediasForEntries(ctx, []string{id, "absent"})

@@ -175,7 +175,7 @@ func (i *Indexer) SyncPath(ctx context.Context, storageID, entryPath string) (*m
 		return nil, fmt.Errorf("find watched parent %q: %w", parentPath, err)
 	}
 	if _, err := i.catalog.EntryByPath(ctx, storageID, entryPath); errors.Is(err, catalog.ErrNotFound) {
-		if previous, identityErr := i.catalog.UnavailableEntryByIdentity(ctx, storageID, info.Device, info.Inode); identityErr == nil {
+		if previous, identityErr := i.catalog.UnavailableEntryByIdentity(ctx, storageID, info.Device, info.Inode, info.Size, info.ModifiedAt); identityErr == nil {
 			if _, moveErr := i.catalog.MoveEntry(ctx, previous.ID, parent.ID, info.Name, info.Path); moveErr != nil {
 				return nil, moveErr
 			}

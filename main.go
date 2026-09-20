@@ -161,6 +161,8 @@ func main() {
 		defer availability.Stop()
 		reconciliation := time.NewTicker(24 * time.Hour)
 		defer reconciliation.Stop()
+		jobCleanup := time.NewTicker(24 * time.Hour)
+		defer jobCleanup.Stop()
 		for {
 			select {
 			case <-ctx.Done():
@@ -174,6 +176,10 @@ func main() {
 			case <-reconciliation.C:
 				for _, item := range cfg.Storages {
 					requestScan(item.ID)
+				}
+			case <-jobCleanup.C:
+				if _, err := queue.CleanupHistory(ctx, 30*24*time.Hour); err != nil && ctx.Err() == nil {
+					log.Printf("cleanup job history: %v", err)
 				}
 			}
 		}

@@ -31,8 +31,11 @@ func TestInitSchema(t *testing.T) {
 		t.Fatalf("repeat migration: %v", err)
 	}
 	var count int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != 1 {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("migration count=%d err=%v", count, err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('medias') WHERE name='summary'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("media summary column count=%d err=%v", count, err)
 	}
 	for _, name := range []string{"media_files", "media_items", "media_item_files", "media_match_suppressions", "artifacts", "maintenance_tasks", "playback_states"} {
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&count); err != nil || count != 0 {
@@ -73,7 +76,7 @@ func TestCompletedOldHistoryCanReopen(t *testing.T) {
 	if err := Apply(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	for version := 2; version <= 20; version++ {
+	for version := 3; version <= 20; version++ {
 		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations(version) VALUES (?)`, version); err != nil {
 			t.Fatal(err)
 		}

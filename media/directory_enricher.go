@@ -125,7 +125,7 @@ func (p *DirectoryEnricher) ProcessDirectory(ctx context.Context, directory mode
 	if document.XMLName.Local == "tvshow" {
 		kind = "tv"
 	}
-	nfo := catalog.MediaCandidate{Kind: kind, Title: strings.TrimSpace(document.Title)}
+	nfo := catalog.MediaCandidate{Kind: kind, Title: strings.TrimSpace(document.Title), Summary: strings.TrimSpace(document.Plot)}
 	if len(document.Year) >= 4 {
 		if year, err := strconv.Atoi(document.Year[:4]); err == nil {
 			nfo.Year = &year
@@ -254,7 +254,7 @@ func (p *DirectoryEnricher) enrichTVDirectory(ctx context.Context, directory mod
 		return err
 	}
 	if _, err := p.catalog.SetMediaCandidate(ctx, directory.ID, "tmdb", catalog.MediaCandidate{
-		Kind: "tv", Title: match.Title, Year: match.Year, Data: encoded,
+		Kind: "tv", Title: match.Title, Year: match.Year, Summary: strings.TrimSpace(match.Overview), Data: encoded,
 	}); err != nil {
 		return err
 	}
@@ -349,7 +349,7 @@ func (p *DirectoryEnricher) enrichMovieDirectory(ctx context.Context, directory 
 		return err
 	}
 	_, err = p.catalog.SetMediaCandidate(ctx, directory.ID, "tmdb", catalog.MediaCandidate{
-		Kind: "movie", Title: match.Title, Year: match.Year, Data: encoded,
+		Kind: "movie", Title: match.Title, Year: match.Year, Summary: strings.TrimSpace(match.Overview), Data: encoded,
 	})
 	if err != nil {
 		return err

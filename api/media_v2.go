@@ -125,7 +125,7 @@ func (s *Server) setEntryMediaV2(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, err)
 		return
 	}
-	candidate := catalog.MediaCandidate{Kind: kind, Title: item.Title, Year: item.Year, Data: data}
+	candidate := catalog.MediaCandidate{Kind: kind, Title: item.Title, Year: item.Year, Summary: strings.TrimSpace(item.Overview), Data: data}
 	resolved, err := s.catalog.SetMediaCandidate(r.Context(), entry.ID, "manual", candidate)
 	if err != nil {
 		s.internalError(w, err)
