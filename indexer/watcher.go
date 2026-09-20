@@ -282,7 +282,7 @@ func (w *Watcher) add(directory string) error {
 		return ErrWatchLimit
 	}
 	if err := w.watcher.Add(directory); err != nil {
-		if errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE) {
+		if errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE) || errors.Is(err, syscall.ENOSPC) {
 			w.maxWatches = len(w.watched)
 			return ErrWatchLimit
 		}
