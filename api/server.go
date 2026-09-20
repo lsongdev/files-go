@@ -931,13 +931,14 @@ type mediaResponse struct {
 	Line1       string          `json:"line1,omitempty"`
 	Line2       string          `json:"line2,omitempty"`
 	Line3       string          `json:"line3,omitempty"`
+	Summary     string          `json:"summary,omitempty"`
 	Data        json.RawMessage `json:"data,omitempty"`
 	MatchLocked bool            `json:"matchLocked,omitempty"`
 }
 
 func mediaView(item model.Media) mediaResponse {
 	view := mediaResponse{Kind: item.Kind, Title: item.Title, Year: item.Year,
-		Line1: item.Line1, Line2: item.Line2, Line3: item.Line3,
+		Line1: item.Line1, Line2: item.Line2, Line3: item.Line3, Summary: item.Summary,
 		Data: item.Data, MatchLocked: item.MatchLocked}
 	if item.Icon != "" {
 		view.Icon = "/api/v1/entries/" + item.FileID + "/icon"
@@ -1022,6 +1023,10 @@ func (s *Server) getEntry(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, err)
 		return
 	}
+	if !entry.Available {
+		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
+		return
+	}
 	result, err := s.responsesFor(r.Context(), []model.Entry{*entry})
 	if err != nil {
 		s.internalError(w, err)
@@ -1042,6 +1047,10 @@ func (s *Server) listChildren(w http.ResponseWriter, r *http.Request) {
 	}
 	if parent.Type != model.EntryDirectory {
 		writeError(w, http.StatusBadRequest, "invalid_request", "entry is not a directory")
+		return
+	}
+	if !parent.Available {
+		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
 		return
 	}
 	limit := 100

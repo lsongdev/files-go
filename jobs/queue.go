@@ -122,6 +122,26 @@ func (q *Queue) Stats(ctx context.Context, jobType string) (Stats, error) {
 	return stats, rows.Err()
 }
 
+func (q *Queue) CleanupHistory(ctx context.Context, olderThan time.Duration) (int64, error) {
+	if olderThan <= 0 {
+		return 0, errors.New("cleanup age must be positive")
+	}
+	cutoff := q.now().Add(-olderThan)
+	result, err := q.db.ExecContext(ctx, `DELETE FROM jobs
+		WHERE state IN ('done','failed') AND finished_at IS NOT NULL AND finished_at<?
+		AND EXISTS (
+			SELECT 1 FROM jobs newer
+			WHERE newer.type=jobs.type
+			AND COALESCE(json_extract(newer.payload, '$.entryId'), newer.key, newer.id)
+				= COALESCE(json_extract(jobs.payload, '$.entryId'), jobs.key, jobs.id)
+			AND newer.rowid>jobs.rowid
+		)`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (q *Queue) FailureGroups(ctx context.Context, jobType string, limit int) ([]FailureGroup, error) {
 	if limit <= 0 {
 		limit = 20
