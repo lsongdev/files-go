@@ -137,7 +137,7 @@ function mediaMetadata(media) {
 }
 
 function mediaTypeLabel(type) {
-  return ({ movie: '电影', tv: '电视剧', episode: '剧集', audio: '音乐', photo: '照片', book: '图书', folder: '文件夹' }[type] || '媒体');
+  return ({ movie: '电影', tv: '电视剧', episode: '剧集', video: '视频', audio: '音乐', photo: '照片', book: '图书', folder: '文件夹' }[type] || '媒体');
 }
 
 function entryDisplayTitle(item) {
@@ -145,11 +145,12 @@ function entryDisplayTitle(item) {
   return enhanced || item?.name || '';
 }
 
-function entrySecondaryLabel(item) {
-  if (!item?.media) return item?.type === 'directory' ? '文件夹' : (item?.extension?.toUpperCase() || '文件');
-  const details = [item.media.line1 || mediaTypeLabel(item.media.kind), item.media.line2, item.media.year && !item.media.line1?.includes(String(item.media.year)) ? item.media.year : ''].filter(Boolean);
-  if (entryDisplayTitle(item) !== item.name) details.push(item.name);
-  return details.join(' · ');
+function entryDisplayLines(item) {
+  if (!item?.media) return [item?.type === 'directory' ? '文件夹' : (item?.extension?.toUpperCase() || '文件')];
+  const lines = [item.media.line1 || mediaTypeLabel(item.media.kind), item.media.line2, item.media.line3]
+    .map((line) => typeof line === 'string' ? line.trim() : '')
+    .filter(Boolean);
+  return lines.length ? lines : [mediaTypeLabel(item.media.kind)];
 }
 
 function durationLabel(durationMS) {
@@ -990,7 +991,7 @@ function App() {
             <div class="table-head" role="row"><span>名称</span><span>大小</span><span>修改时间</span><span></span></div>
             ${items.map((item) => html`<div key=${item.id} class="file-row" role="row">
               <button class="file-main" onClick=${() => openEntry(item.id)}>
-                <span class="name-cell" role="cell">${item.links.thumbnail ? html`<${ThumbnailImage} key=${item.id} item=${item} compact=${true}/>` : html`<i class=${item.type === 'directory' ? 'folder' : 'document'}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${20}/></i>`}<span><strong title=${entryDisplayTitle(item)}>${entryDisplayTitle(item)}</strong><small>${entrySecondaryLabel(item)}</small></span>${!item.available && html`<em>不可用</em>`}</span>
+                <span class="name-cell" role="cell">${item.links.thumbnail ? html`<${ThumbnailImage} key=${item.id} item=${item} compact=${true}/>` : html`<i class=${item.type === 'directory' ? 'folder' : 'document'}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${20}/></i>`}<span><strong title=${entryDisplayTitle(item)}>${entryDisplayTitle(item)}</strong>${entryDisplayLines(item).map((line, index) => html`<small key=${index}>${line}</small>`)}</span>${!item.available && html`<em>不可用</em>`}</span>
                 <span class="size-cell" role="cell">${item.type === 'directory' ? '—' : formatSize(item.size)}</span>
                 <span class="date-cell" role="cell">${formatDate(item.modifiedAt)}</span>
               </button>
@@ -1001,7 +1002,7 @@ function App() {
             ${items.map((item) => html`<article key=${item.id} class="file-card">
               <button class="card-main" onClick=${() => openEntry(item.id)}>
                 ${item.links.thumbnail ? html`<${ThumbnailImage} key=${item.id} item=${item}/>` : html`<span class=${`card-icon ${item.type}`}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${30}/></span>`}
-                <strong title=${entryDisplayTitle(item)}>${entryDisplayTitle(item)}</strong><small>${item.media ? entrySecondaryLabel(item) : item.type === 'directory' ? '文件夹' : formatSize(item.size)}</small>${!item.available && html`<em>不可用</em>`}
+                <strong title=${entryDisplayTitle(item)}>${entryDisplayTitle(item)}</strong><span class="card-lines">${item.media ? entryDisplayLines(item).map((line, index) => html`<small key=${index}>${line}</small>`) : html`<small>${item.type === 'directory' ? '文件夹' : formatSize(item.size)}</small>`}</span>${!item.available && html`<em>不可用</em>`}
               </button>
               <button class="card-action" onClick=${() => openManage(item)} aria-label=${`管理 ${item.name}`}><${Icon} name="more" size=${18}/></button>
             </article>`)}
