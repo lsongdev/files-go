@@ -63,3 +63,20 @@ func TestLoadConfigExpandsAuthTokens(t *testing.T) {
 		t.Fatalf("auth config = %#v", cfg.Auth)
 	}
 }
+
+func TestLoadConfigPreservesPluginOrder(t *testing.T) {
+	previous := ConfigDir
+	ConfigDir = t.TempDir()
+	t.Cleanup(func() { ConfigDir = previous })
+	data := []byte("processing:\n  plugins: [music, video]\nstorages: []\nlibraries: []\n")
+	if err := os.WriteFile(filepath.Join(ConfigDir, "config.yaml"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Processing.Plugins) != 2 || cfg.Processing.Plugins[0] != "music" || cfg.Processing.Plugins[1] != "video" {
+		t.Fatalf("plugins = %v", cfg.Processing.Plugins)
+	}
+}
