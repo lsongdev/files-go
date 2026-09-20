@@ -7,18 +7,23 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/lsongdev/files-go/model"
 )
 
 type Local struct {
-	root string
+	root           string
+	expectedDevice uint64
+	deviceUUID     string
 }
 
 func (l *Local) NativeRoot() string { return l.root }
 
 func NewLocal(root string) (*Local, error) {
+	return NewLocalWithDevice(root, "")
+}
+
+func NewLocalWithDevice(root, deviceUUID string) (*Local, error) {
 	if root == "" {
 		return nil, errors.New("local storage root is required")
 	}
@@ -32,7 +37,36 @@ func NewLocal(root string) (*Local, error) {
 	} else {
 		return nil, err
 	}
-	return &Local{root: abs}, nil
+	expectedDevice, err := configuredDeviceIdentity(abs, deviceUUID)
+	if err != nil {
+		return nil, err
+	}
+	local := &Local{root: abs, expectedDevice: expectedDevice, deviceUUID: deviceUUID}
+	if err := local.verifyRoot(); err != nil {
+		return nil, err
+	}
+	return local, nil
+}
+
+func (l *Local) Verify(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return l.verifyRoot()
+}
+
+func (l *Local) verifyRoot() error {
+	device, err := rootDeviceIdentity(l.root)
+	if errors.Is(err, os.ErrNotExist) {
+		return ErrOffline
+	}
+	if err != nil {
+		return err
+	}
+	if l.expectedDevice != 0 && device != 0 && device != l.expectedDevice {
+		return ErrOffline
+	}
+	return nil
 }
 
 func resolveExistingPrefix(value string) (string, error) {
@@ -59,6 +93,9 @@ func resolveExistingPrefix(value string) (string, error) {
 }
 
 func (l *Local) resolve(path string, followFinalSymlink bool) (string, error) {
+	if err := l.verifyRoot(); err != nil {
+		return "", err
+	}
 	clean := filepath.Clean(filepath.FromSlash(path))
 	if clean == "." {
 		clean = ""
@@ -93,10 +130,7 @@ func fileInfo(path string, info os.FileInfo) FileInfo {
 		typeValue = model.EntrySymlink
 	}
 	result := FileInfo{Name: info.Name(), Path: filepath.ToSlash(path), Type: typeValue, Size: info.Size(), ModifiedAt: info.ModTime()}
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		result.Inode = stat.Ino
-		result.Device = uint64(stat.Dev)
-	}
+	applyFileIdentity(&result, info)
 	return result
 }
 
@@ -125,7 +159,10 @@ func (l *Local) ReadDir(ctx context.Context, path string) ([]FileInfo, error) {
 	}
 	entries, err := os.ReadDir(full)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, ErrOffline
+		if path == "" {
+			return nil, ErrOffline
+		}
+		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -155,9 +192,6 @@ func (l *Local) Open(ctx context.Context, path string) (io.ReadSeekCloser, error
 	}
 	f, err := os.Open(full)
 	if errors.Is(err, os.ErrNotExist) {
-		if _, rootErr := os.Stat(l.root); errors.Is(rootErr, os.ErrNotExist) {
-			return nil, ErrOffline
-		}
 		return nil, ErrNotFound
 	}
 	return f, err
@@ -281,7 +315,7 @@ func (l *Local) Remove(ctx context.Context, path string) error {
 	if errors.Is(err, os.ErrNotExist) {
 		return ErrNotFound
 	}
-	if errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+	if isDirNotEmpty(err) {
 		return ErrNotEmpty
 	}
 	return err
