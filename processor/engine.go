@@ -58,7 +58,7 @@ func (p *pipeline) Steps() []Processor           { return append([]Processor(nil
 // every available plugin in its declaration order; otherwise presence means
 // enabled and omission means disabled.
 func SelectPlugins(order []string, available ...Plugin) ([]Plugin, error) {
-	if len(order) == 0 {
+	if order == nil {
 		return append([]Plugin(nil), available...), nil
 	}
 	byName := make(map[string]Plugin, len(available))
