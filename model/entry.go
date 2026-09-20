@@ -96,6 +96,7 @@ type Media struct {
 	Line1       string          `json:"line1"`
 	Line2       string          `json:"line2"`
 	Line3       string          `json:"line3"`
+	Summary     string          `json:"summary,omitempty"`
 	Data        json.RawMessage `json:"data,omitempty"`
 	Sources     json.RawMessage `json:"-"`
 	MatchLocked bool            `json:"matchLocked,omitempty"`
