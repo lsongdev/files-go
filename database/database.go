@@ -15,7 +15,7 @@ func Open(ctx context.Context, dataDir string) (*sql.DB, error) {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, err
 	}
-	dbPath := filepath.Join(dataDir, "catalog.db")
+	dbPath := filepath.Join(dataDir, "files.db")
 	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?_txlock=immediate&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)", dbPath))
 	if err != nil {
 		return nil, err
