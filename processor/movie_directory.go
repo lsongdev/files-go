@@ -132,6 +132,10 @@ func (p *MovieDirectory) ProcessDirectory(ctx context.Context, directory model.E
 			nfo.Year = &year
 		}
 	}
+	nfo.Line1, nfo.Line2, nfo.Line3 = MovieDisplay(kind, MovieName{Title: nfo.Title, Year: nfo.Year}, nil)
+	if original := strings.TrimSpace(document.OriginalTitle); original != "" && !strings.EqualFold(original, nfo.Title) {
+		nfo.Line2 = original
+	}
 	nfo.Data, err = json.Marshal(map[string]any{
 		"entryId": nfoEntry.ID, "overview": strings.TrimSpace(document.Plot),
 		"originalTitle": strings.TrimSpace(document.OriginalTitle), "providerIds": document.providerIDs(),
@@ -254,8 +258,10 @@ func (p *MovieDirectory) enrichTVDirectory(ctx context.Context, directory model.
 	if err != nil {
 		return err
 	}
+	line1, line2, line3 := MovieDisplay("tv", parsed, &match)
 	if _, err := p.catalog.SetMediaCandidate(ctx, directory.ID, "tmdb", catalog.MediaCandidate{
-		Kind: "tv", Title: match.Title, Year: match.Year, Summary: strings.TrimSpace(match.Overview), Data: encoded,
+		Kind: "tv", Title: match.Title, Year: match.Year, Line1: line1, Line2: line2, Line3: line3,
+		Summary: strings.TrimSpace(match.Overview), Data: encoded,
 	}); err != nil {
 		return err
 	}
@@ -349,8 +355,10 @@ func (p *MovieDirectory) enrichMovieDirectory(ctx context.Context, directory mod
 	if err != nil {
 		return err
 	}
+	line1, line2, line3 := MovieDisplay("movie", parsed, &match)
 	_, err = p.catalog.SetMediaCandidate(ctx, directory.ID, "tmdb", catalog.MediaCandidate{
-		Kind: "movie", Title: match.Title, Year: match.Year, Summary: strings.TrimSpace(match.Overview), Data: encoded,
+		Kind: "movie", Title: match.Title, Year: match.Year, Line1: line1, Line2: line2, Line3: line3,
+		Summary: strings.TrimSpace(match.Overview), Data: encoded,
 	})
 	if err != nil {
 		return err
