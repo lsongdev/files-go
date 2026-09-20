@@ -148,3 +148,29 @@ func TestEngineRunsMatchingPluginsAndStepsInOrder(t *testing.T) {
 		t.Fatalf("steps = %s, want %s", got, want)
 	}
 }
+
+func TestSelectPluginsUsesConfiguredOrderAndPresence(t *testing.T) {
+	step := orderedProcessor{name: "step", calls: &[]string{}, match: true}
+	available := []Plugin{
+		NewPlugin("video", func(model.Entry) bool { return true }, step),
+		NewPlugin("movies", func(model.Entry) bool { return true }, step),
+		NewPlugin("music", func(model.Entry) bool { return true }, step),
+	}
+	selected, err := SelectPlugins([]string{"music", "video"}, available...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := []string{selected[0].Name(), selected[1].Name()}; !slices.Equal(got, []string{"music", "video"}) {
+		t.Fatalf("selected plugins = %v", got)
+	}
+	if _, err := SelectPlugins([]string{"video", "video"}, available...); err == nil {
+		t.Fatal("duplicate configured plugin was accepted")
+	}
+	if _, err := SelectPlugins([]string{"unknown"}, available...); err == nil {
+		t.Fatal("unknown configured plugin was accepted")
+	}
+	all, err := SelectPlugins(nil, available...)
+	if err != nil || len(all) != len(available) {
+		t.Fatalf("default plugins = %v, %v", all, err)
+	}
+}
