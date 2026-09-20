@@ -44,7 +44,7 @@ func NewPlugin(name string, match func(model.Entry) bool, steps ...processor.Pro
 
 func (p *pipeline) Name() string                 { return p.name }
 func (p *pipeline) Match(entry model.Entry) bool { return p.match(entry) }
-func (p *pipeline) Steps() []processor.Processor           { return append([]processor.Processor(nil), p.steps...) }
+func (p *pipeline) Steps() []processor.Processor { return append([]processor.Processor(nil), p.steps...) }
 
 // SelectPlugins applies the configured plugin order. An empty order enables
 // every available plugin in its declaration order; otherwise presence means
