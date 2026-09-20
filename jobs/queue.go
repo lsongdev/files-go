@@ -86,6 +86,8 @@ func New(db *sql.DB, lease time.Duration) *Queue {
 	return &Queue{db: db, lease: lease, notify: make(chan struct{}, 1), now: func() time.Time { return time.Now().UTC() }}
 }
 
+func (q *Queue) LeaseDuration() time.Duration { return q.lease }
+
 func (q *Queue) Stats(ctx context.Context, jobType string) (Stats, error) {
 	rows, err := q.db.QueryContext(ctx, `WITH latest AS (
 		SELECT state, ROW_NUMBER() OVER (
@@ -280,6 +282,24 @@ func (q *Queue) Complete(ctx context.Context, id string) error {
 	return affected(result, err)
 }
 
+func (q *Queue) CompleteJob(ctx context.Context, job *Job) error {
+	if job == nil {
+		return ErrNotFound
+	}
+	result, err := q.db.ExecContext(ctx, `UPDATE jobs SET state='done', finished_at=?, lease_until=NULL, error=NULL
+		WHERE id=? AND state='running' AND attempts=?`, q.now(), job.ID, job.Attempts)
+	return affected(result, err)
+}
+
+func (q *Queue) Renew(ctx context.Context, job *Job) error {
+	if job == nil {
+		return ErrNotFound
+	}
+	result, err := q.db.ExecContext(ctx, `UPDATE jobs SET lease_until=?
+		WHERE id=? AND state='running' AND attempts=?`, q.now().Add(q.lease), job.ID, job.Attempts)
+	return affected(result, err)
+}
+
 func (q *Queue) Fail(ctx context.Context, job *Job, cause error, delay time.Duration) error {
 	if job == nil {
 		return ErrNotFound
@@ -287,9 +307,10 @@ func (q *Queue) Fail(ctx context.Context, job *Job, cause error, delay time.Dura
 	message := errorMessage(cause)
 	now := q.now()
 	if job.Attempts >= job.MaxAttempts {
-		return q.failPermanently(ctx, job.ID, message)
+		return q.failPermanentlyAttempt(ctx, job.ID, job.Attempts, message)
 	}
-	result, err := q.db.ExecContext(ctx, `UPDATE jobs SET state='pending', run_after=?, started_at=NULL, lease_until=NULL, error=? WHERE id=? AND state='running'`, now.Add(delay), message, job.ID)
+	result, err := q.db.ExecContext(ctx, `UPDATE jobs SET state='pending', run_after=?, started_at=NULL, lease_until=NULL, error=?
+		WHERE id=? AND state='running' AND attempts=?`, now.Add(delay), message, job.ID, job.Attempts)
 	if err == nil {
 		q.wake()
 	}
@@ -320,6 +341,12 @@ func (q *Queue) Requeue(ctx context.Context, jobType, key string, priority int) 
 
 func (q *Queue) failPermanently(ctx context.Context, id, message string) error {
 	result, err := q.db.ExecContext(ctx, `UPDATE jobs SET state='failed', finished_at=?, lease_until=NULL, error=? WHERE id=? AND state='running'`, q.now(), message, id)
+	return affected(result, err)
+}
+
+func (q *Queue) failPermanentlyAttempt(ctx context.Context, id string, attempts int, message string) error {
+	result, err := q.db.ExecContext(ctx, `UPDATE jobs SET state='failed', finished_at=?, lease_until=NULL, error=?
+		WHERE id=? AND state='running' AND attempts=?`, q.now(), message, id, attempts)
 	return affected(result, err)
 }
 

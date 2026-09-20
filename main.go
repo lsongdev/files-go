@@ -86,9 +86,8 @@ func main() {
 		}
 	}
 	for _, item := range cfg.Storages {
-		if err := idx.SetScanScope(item.ID, paths[item.ID]); err != nil {
-			log.Fatalf("invalid library scan scope for %s: %v", item.ID, err)
-		}
+		// The storage catalog represents the whole configured filesystem. Library
+		// sources are projections and scan priorities, not catalog boundaries.
 		idx.SetPriority(item.ID, paths[item.ID])
 	}
 	queue := jobs.New(db, 2*time.Minute)
@@ -143,7 +142,7 @@ func main() {
 		}
 	}
 	go func() {
-		watcher, err := indexer.NewWatcher(cat, registry, idx, log.Default())
+		watcher, err := indexer.NewWatcherWithLimit(cat, registry, idx, log.Default(), cfg.Processing.WatchLimit)
 		if err != nil {
 			log.Printf("filesystem watcher unavailable: %v", err)
 			return

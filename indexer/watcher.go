@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,10 +20,17 @@ import (
 
 var ErrWatchLimit = errors.New("filesystem watch limit reached")
 
-// fsnotify uses one kqueue descriptor per watched directory on macOS. Keep a
-// conservative budget for HTTP, SQLite and active file processing; the daily
-// reconciliation scan covers directories outside this hot set.
-const defaultMaxWatches = 128
+func defaultMaxWatches() int {
+	switch runtime.GOOS {
+	case "linux":
+		return 8192
+	case "darwin":
+		// kqueue consumes one descriptor per watched directory.
+		return 128
+	default:
+		return 1024
+	}
+}
 
 type Watcher struct {
 	catalog  *catalog.Catalog
@@ -38,6 +46,7 @@ type Watcher struct {
 	syncCh      chan watchedPath
 	maxWatches  int
 	limitWarned bool
+	refreshing  bool
 }
 
 type watchedPath struct {
@@ -47,6 +56,10 @@ type watchedPath struct {
 }
 
 func NewWatcher(catalog *catalog.Catalog, storages *storage.Registry, indexer *Indexer, logger *log.Logger) (*Watcher, error) {
+	return NewWatcherWithLimit(catalog, storages, indexer, logger, 0)
+}
+
+func NewWatcherWithLimit(catalog *catalog.Catalog, storages *storage.Registry, indexer *Indexer, logger *log.Logger, maxWatches int) (*Watcher, error) {
 	native, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
@@ -54,9 +67,12 @@ func NewWatcher(catalog *catalog.Catalog, storages *storage.Registry, indexer *I
 	if logger == nil {
 		logger = log.Default()
 	}
+	if maxWatches <= 0 {
+		maxWatches = defaultMaxWatches()
+	}
 	return &Watcher{catalog: catalog, storages: storages, indexer: indexer, logger: logger, watcher: native,
 		roots: make(map[string]string), watched: make(map[string]bool), timers: make(map[string]*time.Timer),
-		syncCh: make(chan watchedPath, 256), maxWatches: defaultMaxWatches}, nil
+		syncCh: make(chan watchedPath, 256), maxWatches: maxWatches}, nil
 }
 
 // Start attaches local storage roots immediately and fills recursive watches
@@ -214,6 +230,18 @@ func (w *Watcher) syncCreatedTree(ctx context.Context, storageID, root, absolute
 }
 
 func (w *Watcher) refreshCatalogDirectories(ctx context.Context) {
+	w.mu.Lock()
+	if w.refreshing {
+		w.mu.Unlock()
+		return
+	}
+	w.refreshing = true
+	w.mu.Unlock()
+	defer func() {
+		w.mu.Lock()
+		w.refreshing = false
+		w.mu.Unlock()
+	}()
 	for storageID, root := range w.roots {
 		after := ""
 		for {
