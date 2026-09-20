@@ -281,8 +281,17 @@ function FailureDialog({ groups, loading, error, onClose }) {
 }
 
 function routeEntryID() {
-  const match = window.location.pathname.match(/^\/files\/([^/]+)$/);
+  const match = window.location.pathname.match(/^\/files\/([^/]+)(?:\/|$)/);
   return match ? decodeURIComponent(match[1]) : null;
+}
+
+function entryRoute(id, trail = []) {
+  const readable = trail
+    .map((item) => item.name)
+    .filter(Boolean)
+    .map((name) => encodeURIComponent(name))
+    .join('/');
+  return `/files/${encodeURIComponent(id)}${readable ? `/${readable}` : ''}`;
 }
 
 function Skeleton() {
@@ -480,7 +489,10 @@ function App() {
       if (requestID !== entryRequestRef.current) return false;
       if (nextTrail.libraryID) setActiveLibraryID(nextTrail.libraryID);
       setTrail(nextTrail.items);
-      if (history) window.history.pushState({ entryID: id, libraryID }, '', `/files/${encodeURIComponent(id)}`);
+      const route = entryRoute(id, nextTrail.items);
+      const state = { entryID: id, libraryID: nextTrail.libraryID || libraryID };
+      if (history) window.history.pushState(state, '', route);
+      else if (window.location.pathname !== route) window.history.replaceState({ ...window.history.state, ...state }, '', route);
       return true;
     } catch (reason) {
       if (requestID === entryRequestRef.current) setError(reason.message || '无法打开条目');
