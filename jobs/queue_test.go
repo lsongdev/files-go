@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -211,6 +212,69 @@ func TestWorkerPoolRunsHandlerAndStopsGracefully(t *testing.T) {
 			t.Fatalf("job %s did not complete: %#v, %v", job.ID, current, findErr)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	pool.Wait()
+}
+
+
+func TestQueueRenewExtendsActiveLease(t *testing.T) {
+	ctx := context.Background()
+	queue := testQueue(t)
+	base := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+	queue.now = func() time.Time { return base }
+	queue.lease = time.Minute
+	if _, _, err := queue.Enqueue(ctx, "work", nil, EnqueueOptions{Key: "lease"}); err != nil {
+		t.Fatal(err)
+	}
+	job, err := queue.Claim(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base = base.Add(50 * time.Second)
+	if err := queue.Renew(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	base = base.Add(20 * time.Second)
+	queue.lastRecover = time.Time{}
+	if _, err := queue.Claim(ctx); !errors.Is(err, ErrNoJob) {
+		t.Fatalf("renewed running job was reclaimed: %v", err)
+	}
+	if err := queue.CompleteJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkerHeartbeatPreventsDuplicateLongRunningJob(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	queue := testQueue(t)
+	queue.lease = 60 * time.Millisecond
+	pool := NewPool(queue, 2)
+	var calls atomic.Int32
+	finished := make(chan struct{}, 1)
+	pool.Handle("slow", func(ctx context.Context, _ *Job) error {
+		calls.Add(1)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(180 * time.Millisecond):
+			finished <- struct{}{}
+			return nil
+		}
+	})
+	if _, _, err := queue.Enqueue(ctx, "slow", nil, EnqueueOptions{Key: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	pool.Start(ctx)
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("long-running job did not finish")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("handler ran %d times, want 1", got)
 	}
 	cancel()
 	pool.Wait()

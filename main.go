@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lsongdev/files-go/api"
+	"github.com/lsongdev/files-go/auth"
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/config"
 	"github.com/lsongdev/files-go/database"
@@ -48,7 +49,7 @@ func main() {
 	cat := catalog.NewWithReader(db, readerDB)
 	registry := storage.NewRegistry()
 	for _, item := range cfg.Storages {
-		backend, err := storage.NewLocal(item.Path)
+		backend, err := storage.NewLocalWithDevice(item.Path, item.DeviceUUID)
 		if err != nil {
 			log.Fatalf("configure storage %s: %v", item.ID, err)
 		}
@@ -86,9 +87,8 @@ func main() {
 		}
 	}
 	for _, item := range cfg.Storages {
-		if err := idx.SetScanScope(item.ID, paths[item.ID]); err != nil {
-			log.Fatalf("invalid library scan scope for %s: %v", item.ID, err)
-		}
+		// The storage catalog represents the whole configured filesystem. Library
+		// sources are projections and scan priorities, not catalog boundaries.
 		idx.SetPriority(item.ID, paths[item.ID])
 	}
 	queue := jobs.New(db, 2*time.Minute)
@@ -143,7 +143,7 @@ func main() {
 		}
 	}
 	go func() {
-		watcher, err := indexer.NewWatcher(cat, registry, idx, log.Default())
+		watcher, err := indexer.NewWatcherWithLimit(cat, registry, idx, log.Default(), cfg.Processing.WatchLimit)
 		if err != nil {
 			log.Printf("filesystem watcher unavailable: %v", err)
 			return
@@ -182,8 +182,16 @@ func main() {
 	apiServer := api.New(ctx, cat, registry, idx, log.Default(), cfg.CacheDir, playbackManager)
 	apiServer.SetJobQueue(queue)
 	apiServer.SetMediaProvider(provider, cfg.Media.TMDB.Language)
+	authTokens := make([]auth.Token, 0, len(cfg.Auth.Tokens))
+	for _, item := range cfg.Auth.Tokens {
+		role, ok := auth.ParseRole(item.Role)
+		if !ok {
+			log.Fatalf("invalid auth role %q", item.Role)
+		}
+		authTokens = append(authTokens, auth.Token{Name: item.Name, Secret: item.Token, Role: role})
+	}
 	mux := http.NewServeMux()
-	mux.Handle("/api/", apiServer.Handler())
+	mux.Handle("/api/", auth.Middleware(authTokens)(apiServer.Handler()))
 	mux.Handle("/", web.Handler())
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	shutdownDone := make(chan struct{})
