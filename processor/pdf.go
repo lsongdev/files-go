@@ -68,7 +68,7 @@ func (p *PDFMetadata) Process(ctx context.Context, entry model.Entry) error {
 	if err != nil {
 		return err
 	}
-	return p.catalog.UpsertMediaFile(ctx, model.MediaFile{EntryID: entry.ID, Kind: "book", Container: "pdf", Metadata: encoded})
+	return writePDFMedia(ctx, p.catalog, entry, encoded)
 }
 
 func parsePDFInfo(output string) map[string]any {

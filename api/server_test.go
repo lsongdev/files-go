@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,160 @@ import (
 )
 
 type apiMetadataProvider struct{}
+
+func TestScanEntryQueuesOnlyConfiguredFile(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := cat.BeginScan(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{
+		{StorageID: "disk", Name: "Film.mkv", Path: "Movies/Film.mkv", Type: model.EntryFile, Extension: "mkv"},
+		{StorageID: "disk", Name: "Other.mkv", Path: "Projects/Other.mkv", Type: model.EntryFile, Extension: "mkv"},
+	}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := indexer.New(cat, storage.NewRegistry())
+	if err := idx.SetScanScope("disk", []string{"Movies"}); err != nil {
+		t.Fatal(err)
+	}
+	queue := jobs.New(db, time.Minute)
+	idx.SetEntrySink(processor.New(cat, queue))
+	server := New(ctx, cat, storage.NewRegistry(), idx, log.Default(), t.TempDir())
+	for _, check := range []struct {
+		entry model.Entry
+		code  int
+	}{
+		{entries[0], http.StatusAccepted}, {entries[1], http.StatusBadRequest},
+	} {
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/entries/"+check.entry.ID+"/scan", nil))
+		if response.Code != check.code {
+			t.Fatalf("scan %s = %d %s", check.entry.Path, response.Code, response.Body.String())
+		}
+	}
+	var queued int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE state='pending'`).Scan(&queued); err != nil || queued != 1 {
+		t.Fatalf("queued jobs = %d, %v", queued, err)
+	}
+}
+
+func TestMediaImageEndpointsResolvePublicFields(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := cat.BeginScan(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{{StorageID: "disk", Name: "Film", Path: "Film", Type: model.EntryDirectory}, {StorageID: "disk", Name: "folder.jpg", Path: "folder.jpg", Type: model.EntryFile, Extension: "jpg"}}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := t.TempDir()
+	server := New(ctx, cat, storage.NewRegistry(), nil, log.Default(), cacheDir)
+	if _, err := cat.SetMediaCandidate(ctx, entries[0].ID, "local_artwork", catalog.MediaCandidate{Icon: "file:" + entries[1].ID}); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+entries[0].ID+"/icon", nil))
+	if response.Code != http.StatusFound || response.Header().Get("Location") != "/api/v1/entries/"+entries[1].ID+"/thumbnail?size=medium" {
+		t.Fatalf("icon response = %d, location %q", response.Code, response.Header().Get("Location"))
+	}
+	key := strings.Repeat("a", 64)
+	filename, err := mediaengine.ArtifactPath(cacheDir, "posters", key, "jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, []byte("cached poster"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.SetMediaCandidate(ctx, entries[0].ID, "tmdb", catalog.MediaCandidate{Backdrop: "cache:posters/" + key + ".jpg"}); err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+entries[0].ID+"/backdrop", nil))
+	if response.Code != http.StatusOK || response.Body.String() != "cached poster" || response.Header().Get("Content-Type") != "image/jpeg" {
+		t.Fatalf("backdrop response = %d %q %q", response.Code, response.Body.String(), response.Header().Get("Content-Type"))
+	}
+}
+
+func TestEntryMediaProjectionMatchesListAndDetail(t *testing.T) {
+	ctx := context.Background()
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	generation, err := cat.BeginScan(ctx, "disk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := cat.EnsureRoot(ctx, "disk", generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := cat.UpsertEntries(ctx, []model.Entry{{StorageID: "disk", ParentID: &root.ID, Name: "Modern.Times.1936.mkv", Path: "Modern.Times.1936.mkv", Type: model.EntryFile, Extension: "mkv"}}, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := entries[0]
+	year := 1936
+	if _, err := cat.SetMediaCandidate(ctx, entry.ID, "tmdb", catalog.MediaCandidate{Kind: "movie", Title: "摩登时代", Year: &year, Icon: "cache:posters/poster.jpg", Backdrop: "cache:posters/backdrop.jpg"}); err != nil {
+		t.Fatal(err)
+	}
+	server := New(ctx, cat, storage.NewRegistry(), nil, log.Default(), t.TempDir())
+	list := httptest.NewRecorder()
+	server.Handler().ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+root.ID+"/children", nil))
+	if list.Code != http.StatusOK {
+		t.Fatalf("list = %d %s", list.Code, list.Body.String())
+	}
+	var listing struct {
+		Items []entryResponse `json:"items"`
+	}
+	if err := json.Unmarshal(list.Body.Bytes(), &listing); err != nil || len(listing.Items) != 1 {
+		t.Fatalf("list = %#v, %v", listing, err)
+	}
+	detail := httptest.NewRecorder()
+	server.Handler().ServeHTTP(detail, httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+entry.ID, nil))
+	if detail.Code != http.StatusOK {
+		t.Fatalf("detail = %d %s", detail.Code, detail.Body.String())
+	}
+	var single entryResponse
+	if err := json.Unmarshal(detail.Body.Bytes(), &single); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(listing.Items[0].Media, single.Media) || !reflect.DeepEqual(listing.Items[0].Links, single.Links) {
+		t.Fatalf("list/detail media differ: list=%#v detail=%#v", listing.Items[0], single)
+	}
+	if single.Media == nil || single.Media.Title != "摩登时代" || single.Links["thumbnail"] != single.Media.Icon {
+		t.Fatalf("resolved media projection = %#v", single)
+	}
+}
 
 func (apiMetadataProvider) Search(_ context.Context, query mediaengine.Query) ([]mediaengine.Candidate, error) {
 	year := 2014
@@ -65,7 +220,7 @@ func TestManualMediaCandidateAPI(t *testing.T) {
 	}
 	registry := storage.NewRegistry()
 	server := New(ctx, cat, registry, indexer.New(cat, registry), log.Default(), t.TempDir())
-	server.SetMediaMatcher(mediaengine.NewMatcher(cat, apiMetadataProvider{}, "en-US"))
+	server.SetMediaProvider(apiMetadataProvider{}, "en-US")
 
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+entries[0].ID+"/media-candidates?q=Interstellar", nil))
@@ -74,25 +229,22 @@ func TestManualMediaCandidateAPI(t *testing.T) {
 	}
 	payload := strings.NewReader(`{"candidateId":"157336","candidateType":"movie"}`)
 	response = httptest.NewRecorder()
-	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/entries/"+entries[0].ID+"/media-item", payload))
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/entries/"+entries[0].ID+"/media", payload))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"matchLocked":true`) {
 		t.Fatalf("manual match = %d %s", response.Code, response.Body.String())
 	}
 	response = httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/search?q=Interstellar", nil))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"media":{"id":`) || !strings.Contains(response.Body.String(), `"title":"Interstellar"`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"media":{"kind":"movie"`) || !strings.Contains(response.Body.String(), `"title":"Interstellar"`) {
 		t.Fatalf("entry media summary = %d %s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"thumbnail":"/api/v1/media/`) || strings.Contains(response.Body.String(), `/thumbnail?size=medium`) {
-		t.Fatalf("matched file did not prefer its media poster: %s", response.Body.String())
-	}
 	response = httptest.NewRecorder()
-	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/entries/"+entries[0].ID+"/media-item", nil))
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodDelete, "/api/v1/entries/"+entries[0].ID+"/media", nil))
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("unmatch = %d %s", response.Code, response.Body.String())
 	}
-	if suppressed, err := cat.MediaMatchSuppressed(ctx, entries[0].ID); err != nil || !suppressed {
-		t.Fatalf("suppression = %v, %v", suppressed, err)
+	if resolved, err := cat.MediaForEntry(ctx, entries[0].ID); err != nil || !resolved.MatchLocked || resolved.Title == "Interstellar" {
+		t.Fatalf("suppressed media = %#v, %v", resolved, err)
 	}
 }
 
@@ -119,26 +271,20 @@ func TestSidecarFileDetailDoesNotInheritMovieIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	item, err := cat.UpsertMediaItem(ctx, model.MediaItem{Type: "movie", Title: "Movie", MatchSource: "nfo"})
-	if err != nil {
+	if _, err := cat.SetMediaCandidate(ctx, entries[0].ID, "filename", catalog.MediaCandidate{Kind: "movie", Title: "Movie"}); err != nil {
 		t.Fatal(err)
-	}
-	for index, role := range []string{"video", "artwork-primary", "metadata"} {
-		if err := cat.AssociateMediaFile(ctx, item.ID, entries[index].ID, role); err != nil {
-			t.Fatal(err)
-		}
 	}
 	registry := storage.NewRegistry()
 	server := New(ctx, cat, registry, indexer.New(cat, registry), log.Default(), t.TempDir())
 	for _, entry := range entries[1:] {
 		response := httptest.NewRecorder()
-		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+entry.ID+"/media-item?optional=1", nil))
+		server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+entry.ID+"/media?optional=1", nil))
 		if response.Code != http.StatusNoContent {
 			t.Fatalf("%s inherited movie detail: %d %s", entry.Name, response.Code, response.Body.String())
 		}
 	}
 	response := httptest.NewRecorder()
-	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+entries[0].ID+"/media-item?optional=1", nil))
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/entries/"+entries[0].ID+"/media?optional=1", nil))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"title":"Movie"`) {
 		t.Fatalf("video movie detail = %d %s", response.Code, response.Body.String())
 	}
@@ -353,7 +499,6 @@ func TestEntryAPIHidesPathsBrowsesOfflineAndServesRange(t *testing.T) {
 
 	for _, target := range []string{
 		"/api/v1/entries/" + notes.ID + "/media?optional=1",
-		"/api/v1/entries/" + notes.ID + "/media-item?optional=1",
 	} {
 		res = httptest.NewRecorder()
 		handler.ServeHTTP(res, httptest.NewRequest(http.MethodGet, target, nil))

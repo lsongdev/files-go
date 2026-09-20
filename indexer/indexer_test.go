@@ -106,6 +106,114 @@ func TestScanGenerationRenameAndOffline(t *testing.T) {
 	}
 }
 
+func TestScanScopeIndexesOnlySelectedLibraries(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	for _, name := range []string{"Projects/code.go", "Documents/book.epub", "Videos/Movies/movie.mkv", "Videos/TV Shows/show.mkv"} {
+		filename := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filename, []byte(name), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	local, err := storage.NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := storage.NewRegistry()
+	if err := registry.Add("disk", local); err != nil {
+		t.Fatal(err)
+	}
+	idx := New(cat, registry)
+	if err := idx.Scan(ctx, "disk"); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.SetScanScope("disk", []string{"Videos/Movies", "Videos/TV Shows"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Scan(ctx, "disk"); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"Videos/Movies/movie.mkv", "Videos/TV Shows/show.mkv"} {
+		entry, err := cat.EntryByPath(ctx, "disk", path)
+		if err != nil || !entry.Available {
+			t.Fatalf("selected path %s = %#v, %v", path, entry, err)
+		}
+	}
+	for _, path := range []string{"Projects/code.go", "Documents/book.epub"} {
+		entry, err := cat.EntryByPath(ctx, "disk", path)
+		if err != nil || entry.Available {
+			t.Fatalf("excluded path %s = %#v, %v", path, entry, err)
+		}
+		if updated, err := idx.SyncPath(ctx, "disk", path); err != nil || updated != nil {
+			t.Fatalf("excluded sync %s = %#v, %v", path, updated, err)
+		}
+	}
+	if err := os.Remove(filepath.Join(root, "Videos/Movies/movie.mkv")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Videos/Movies/new.mkv"), []byte("new"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	reprocessed := &reprocessRecordingSink{}
+	idx.SetEntrySink(reprocessed)
+	if err := idx.ScanSubtree(ctx, "disk", "Videos/Movies"); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := cat.EntryByPath(ctx, "disk", "Videos/Movies/movie.mkv")
+	if err != nil || removed.Available {
+		t.Fatalf("removed movie = %#v, %v", removed, err)
+	}
+	created, err := cat.EntryByPath(ctx, "disk", "Videos/Movies/new.mkv")
+	if err != nil || !created.Available {
+		t.Fatalf("new movie = %#v, %v", created, err)
+	}
+	if len(reprocessed.entries) != 1 || reprocessed.entries[0].ID != created.ID {
+		t.Fatalf("scoped enhancement reprocessed %#v", reprocessed.entries)
+	}
+	other, err := cat.EntryByPath(ctx, "disk", "Videos/TV Shows/show.mkv")
+	if err != nil || !other.Available {
+		t.Fatalf("unrelated library changed = %#v, %v", other, err)
+	}
+	if err := idx.ScanSubtree(ctx, "disk", "Projects"); !errors.Is(err, storage.ErrPathTraversal) {
+		t.Fatalf("outside scope scan error = %v", err)
+	}
+	if err := os.Remove(filepath.Join(root, "Videos/Movies/new.mkv")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "Videos/Movies")); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.ScanSubtree(ctx, "disk", "Videos/Movies"); err != nil {
+		t.Fatal(err)
+	}
+	missing, err := cat.EntryByPath(ctx, "disk", "Videos/Movies")
+	if err != nil || missing.Available {
+		t.Fatalf("removed library root = %#v, %v", missing, err)
+	}
+	if err := idx.SetScanScope("disk", []string{""}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.ScanSubtree(ctx, "disk", ""); err != nil {
+		t.Fatalf("root library scan: %v", err)
+	}
+	project, err := cat.EntryByPath(ctx, "disk", "Projects/code.go")
+	if err != nil || !project.Available {
+		t.Fatalf("root library did not include project: %#v, %v", project, err)
+	}
+}
+
 func TestSyncPathAddsRenamesAndMarksExternalFilesUnavailable(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -157,6 +265,88 @@ func TestSyncPathAddsRenamesAndMarksExternalFilesUnavailable(t *testing.T) {
 	removed, err := cat.Entry(ctx, originalID)
 	if err != nil || removed.Available {
 		t.Fatalf("removed watched entry = %#v, %v", removed, err)
+	}
+}
+
+func TestRemovedArtworkReconcilesDirectoryInWatcherScopedAndFullScans(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	folder := filepath.Join(root, "Movies", "Example")
+	if err := os.MkdirAll(folder, 0755); err != nil {
+		t.Fatal(err)
+	}
+	filename := filepath.Join(folder, "folder.jpg")
+	if err := os.WriteFile(filename, []byte("image"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	backend, err := storage.NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := storage.NewRegistry()
+	if err := registry.Add("disk", backend); err != nil {
+		t.Fatal(err)
+	}
+	idx := New(cat, registry)
+	if err := idx.SetScanScope("disk", []string{"Movies"}); err != nil {
+		t.Fatal(err)
+	}
+	removed := 0
+	idx.SetRemovedEntryReconciler(func(ctx context.Context, entry model.Entry) error {
+		if entry.Name != "folder.jpg" {
+			return nil
+		}
+		removed++
+		_, err := cat.ClearMediaCandidate(ctx, *entry.ParentID, "local_artwork")
+		return err
+	})
+	if err := idx.Scan(ctx, "disk"); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"watcher", "subtree", "full"} {
+		if err := os.WriteFile(filename, []byte("image"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := idx.SyncPath(ctx, "disk", "Movies/Example/folder.jpg"); err != nil {
+			t.Fatal(err)
+		}
+		entry, err := cat.EntryByPath(ctx, "disk", "Movies/Example/folder.jpg")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := cat.SetMediaCandidate(ctx, *entry.ParentID, "local_artwork", catalog.MediaCandidate{Icon: "file:" + entry.ID}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(filename); err != nil {
+			t.Fatal(err)
+		}
+		before := removed
+		switch mode {
+		case "watcher":
+			_, err = idx.SyncPath(ctx, "disk", "Movies/Example/folder.jpg")
+		case "subtree":
+			err = idx.ScanSubtree(ctx, "disk", "Movies/Example")
+		case "full":
+			err = idx.Scan(ctx, "disk")
+		}
+		if err != nil {
+			t.Fatalf("%s removal: %v", mode, err)
+		}
+		if removed != before+1 {
+			t.Fatalf("%s removal invoked reconciler %d times, want 1", mode, removed-before)
+		}
+		if item, err := cat.MediaForEntry(ctx, *entry.ParentID); !errors.Is(err, catalog.ErrNotFound) || item != nil {
+			t.Fatalf("%s retained stale artwork: %#v, %v", mode, item, err)
+		}
 	}
 }
 
@@ -229,6 +419,18 @@ type recordingSink struct{ entries []model.Entry }
 
 func (s *recordingSink) EnqueueEntries(_ context.Context, entries []model.Entry) error {
 	s.entries = append(s.entries, entries...)
+	return nil
+}
+
+type reprocessRecordingSink struct{ entries []model.Entry }
+
+func (s *reprocessRecordingSink) EnqueueEntries(_ context.Context, entries []model.Entry) error {
+	s.entries = append(s.entries, entries...)
+	return nil
+}
+
+func (s *reprocessRecordingSink) ReprocessEntry(_ context.Context, entry model.Entry) error {
+	s.entries = append(s.entries, entry)
 	return nil
 }
 

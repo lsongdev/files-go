@@ -1,8 +1,8 @@
 # files-go NAS File Engine 设计文档
 
-> 媒体增强的数据模型和目录判定正在重新设计；新的目标方案见
-> [文件中心的媒体增强 v2](media-enrichment-v2.md)。本文既有媒体表结构描述
-> 仍用于说明当前实现，不能视为 v2 的最终表结构。
+> 媒体增强已切换到[文件中心的媒体增强 v2](media-enrichment-v2.md)。本文后续关于
+> `media_files`、`media_items`、`media_item_files` 和 `/media-item` 的章节属于旧设计
+> 历史，不代表当前数据库结构或 API。
 
 Status: Draft
 Target: v1 architecture
@@ -921,6 +921,11 @@ inode/device
 # 18. Scan Generation
 
 全量扫描使用 generation，而不是在内存保存：
+
+扫描范围是用户配置的资料库 source 及其祖先目录，不是整个存储根目录。
+同一存储中的未配置目录（例如 Projects）不得顺带遍历。断点记录扫描范围；
+配置变化时丢弃旧范围的断点并重新计算进度估计。针对调试，可以只重扫某个
+资料库子目录，不因此使其他资料库条目失效。
 
 ```text
 map[path]bool

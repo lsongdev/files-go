@@ -66,7 +66,7 @@ type LibrarySource struct {
 	EntryID   string `json:"entryId,omitempty"`
 }
 
-type MediaFile struct {
+type ParsedMedia struct {
 	EntryID    string          `json:"entryId"`
 	Kind       string          `json:"kind"`
 	DurationMS *int64          `json:"durationMs,omitempty"`
@@ -87,7 +87,6 @@ type MediaFile struct {
 type Artifact struct {
 	ID             string    `json:"id"`
 	EntryID        string    `json:"entryId,omitempty"`
-	MediaID        string    `json:"mediaId,omitempty"`
 	Type           string    `json:"type"`
 	Variant        string    `json:"variant,omitempty"`
 	Key            string    `json:"-"`
@@ -95,44 +94,6 @@ type Artifact struct {
 	Size           int64     `json:"size"`
 	CreatedAt      time.Time `json:"createdAt"`
 	LastAccessedAt time.Time `json:"lastAccessedAt"`
-}
-
-type MediaItem struct {
-	ID              string          `json:"id"`
-	Type            string          `json:"type"`
-	Title           string          `json:"title"`
-	SortTitle       string          `json:"sortTitle,omitempty"`
-	Year            *int            `json:"year,omitempty"`
-	ParentID        string          `json:"parentId,omitempty"`
-	IndexNumber     *int            `json:"indexNumber,omitempty"`
-	ExternalID      string          `json:"externalId,omitempty"`
-	MatchSource     string          `json:"matchSource,omitempty"`
-	MatchConfidence float64         `json:"matchConfidence,omitempty"`
-	MatchLocked     bool            `json:"matchLocked"`
-	Metadata        json.RawMessage `json:"metadata"`
-	CreatedAt       time.Time       `json:"createdAt"`
-	UpdatedAt       time.Time       `json:"updatedAt"`
-	PrimaryEntryID  string          `json:"primaryEntryId,omitempty"`
-	Files           []MediaItemFile `json:"files,omitempty"`
-}
-
-type MediaItemFile struct {
-	MediaID   string    `json:"mediaId"`
-	EntryID   string    `json:"entryId"`
-	Role      string    `json:"role"`
-	CreatedAt time.Time `json:"createdAt"`
-}
-
-type MediaSummary struct {
-	ID              string  `json:"id"`
-	Type            string  `json:"type"`
-	Title           string  `json:"title"`
-	Year            *int    `json:"year,omitempty"`
-	IndexNumber     *int    `json:"indexNumber,omitempty"`
-	MatchSource     string  `json:"matchSource,omitempty"`
-	MatchConfidence float64 `json:"matchConfidence,omitempty"`
-	PrimaryEntryID  string  `json:"primaryEntryId,omitempty"`
-	HasPoster       bool    `json:"hasPoster,omitempty"`
 }
 
 // Media is the resolved, file-centric display enhancement. FileID may refer
@@ -154,10 +115,10 @@ type Media struct {
 }
 
 type PlaybackState struct {
-	UserID     string     `json:"-"`
-	MediaID    string     `json:"mediaId"`
-	PositionMS int64      `json:"positionMs"`
-	Played     bool       `json:"played"`
-	UpdatedAt  time.Time  `json:"updatedAt"`
-	Media      *MediaItem `json:"media,omitempty"`
+	UserID     string    `json:"-"`
+	EntryID    string    `json:"entryId"`
+	PositionMS int64     `json:"positionMs"`
+	Played     bool      `json:"played"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+	Media      *Media    `json:"media,omitempty"`
 }

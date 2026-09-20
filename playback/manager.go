@@ -2,6 +2,7 @@ package playback
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lsongdev/files-go/catalog"
+	"github.com/lsongdev/files-go/model"
 	"github.com/lsongdev/files-go/storage"
 )
 
@@ -58,11 +60,22 @@ func (m *Manager) Start(ctx context.Context, entryID string, capabilities Capabi
 	if err != nil {
 		return Result{}, err
 	}
-	technical, err := m.catalog.MediaFile(ctx, entryID)
+	media, err := m.catalog.MediaForEntry(ctx, entryID)
 	if err != nil {
 		return Result{}, err
 	}
-	mode := Decide(*technical, capabilities)
+	var details struct {
+		Embedded struct {
+			Container  string `json:"container"`
+			VideoCodec string `json:"videoCodec"`
+			AudioCodec string `json:"audioCodec"`
+		} `json:"embedded"`
+	}
+	if err := json.Unmarshal(media.Data, &details); err != nil {
+		return Result{}, err
+	}
+	technical := model.ParsedMedia{Container: details.Embedded.Container, VideoCodec: details.Embedded.VideoCodec, AudioCodec: details.Embedded.AudioCodec}
+	mode := Decide(technical, capabilities)
 	if mode == ModeDirect {
 		return Result{Mode: string(mode), URL: "/api/v1/entries/" + entryID + "/content"}, nil
 	}

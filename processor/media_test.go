@@ -83,9 +83,9 @@ func TestImageMetadataReadsDimensions(t *testing.T) {
 	if err := processor.Process(context.Background(), entry); err != nil {
 		t.Fatal(err)
 	}
-	media, err := cat.MediaFile(context.Background(), entry.ID)
-	if err != nil || media.Kind != "photo" || media.Width == nil || *media.Width != 800 || media.Height == nil || *media.Height != 600 {
-		t.Fatalf("image metadata = %#v, %v", media, err)
+	resolved, err := cat.MediaForEntry(context.Background(), entry.ID)
+	if err != nil || resolved.Kind != "photo" || resolved.Icon != "file:"+entry.ID || resolved.Title != "photo" || resolved.Line1 != "照片 · 800 × 600" {
+		t.Fatalf("resolved photo = %#v, %v", resolved, err)
 	}
 	cacheDir := t.TempDir()
 	thumbnail := NewThumbnail(cat, registry, cacheDir)
@@ -116,13 +116,34 @@ func TestImageMetadataReadsDimensions(t *testing.T) {
 	}
 }
 
+func TestDirectoryArtworkDoesNotBecomePhotoMedia(t *testing.T) {
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 10, 20))); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"folder.jpg", "backdrop.jpg", "Movie-poster.jpg", "Movie-backdrop.jpg"} {
+		t.Run(name, func(t *testing.T) {
+			cat, registry, entry := mediaFixture(t, name, encoded.Bytes())
+			if err := NewImageMetadata(cat, registry).Process(context.Background(), entry); err != nil {
+				t.Fatal(err)
+			}
+			if item, err := cat.MediaForEntry(context.Background(), entry.ID); err != catalog.ErrNotFound || item != nil {
+				t.Fatalf("directory artwork should not have photo media: %#v, %v", item, err)
+			}
+		})
+	}
+}
+
 func TestFFProbeParsesAndProbesAudio(t *testing.T) {
 	parsed, err := parseFFProbe("entry", []byte(`{
 		"streams":[{"codec_type":"video","codec_name":"h264","width":1920,"height":1080},{"codec_type":"audio","codec_name":"aac"}],
-		"format":{"format_name":"matroska,webm","duration":"12.345","bit_rate":"8000000"}
+		"format":{"filename":"/private/Movies/example.mkv","format_name":"matroska,webm","duration":"12.345","bit_rate":"8000000"}
 	}`))
 	if err != nil || parsed.Kind != "video" || parsed.VideoCodec != "h264" || parsed.AudioCodec != "aac" || parsed.DurationMS == nil || *parsed.DurationMS != 12345 {
 		t.Fatalf("parsed ffprobe = %#v, %v", parsed, err)
+	}
+	if string(parsed.Metadata) != `{}` {
+		t.Fatalf("raw ffprobe output leaked into media data: %s", parsed.Metadata)
 	}
 
 	binaryPath, err := exec.LookPath("ffprobe")
@@ -134,8 +155,8 @@ func TestFFProbeParsesAndProbesAudio(t *testing.T) {
 	if err := processor.Process(context.Background(), entry); err != nil {
 		t.Fatal(err)
 	}
-	media, err := cat.MediaFile(context.Background(), entry.ID)
-	if err != nil || media.Kind != "audio" || media.AudioCodec != "pcm_s16le" || media.DurationMS == nil || *media.DurationMS != 100 {
+	media, err := cat.MediaForEntry(context.Background(), entry.ID)
+	if err != nil || media.Kind != "audio" || !bytes.Contains(media.Data, []byte(`"audioCodec":"pcm_s16le"`)) || !bytes.Contains(media.Data, []byte(`"durationMs":100`)) {
 		t.Fatalf("probed audio = %#v, %v", media, err)
 	}
 }
@@ -158,8 +179,7 @@ func TestFFProbeSkipsTypeScriptFilesWithTSExtension(t *testing.T) {
 func TestVideoThumbnailGeneratesCachedVariants(t *testing.T) {
 	ctx := context.Background()
 	cat, registry, entry := mediaFixture(t, "movie.mp4", []byte("video fixture"))
-	duration := int64(100_000)
-	if err := cat.UpsertMediaFile(ctx, model.MediaFile{EntryID: entry.ID, Kind: "video", DurationMS: &duration, Metadata: json.RawMessage(`{}`)}); err != nil {
+	if _, err := cat.SetMediaCandidate(ctx, entry.ID, "embedded", catalog.MediaCandidate{Data: json.RawMessage(`{"durationMs":100000}`)}); err != nil {
 		t.Fatal(err)
 	}
 	frame := image.NewRGBA(image.Rect(0, 0, 320, 180))
@@ -198,8 +218,8 @@ func TestVideoThumbnailGeneratesCachedVariants(t *testing.T) {
 func TestAudioArtworkGeneratesCachedVariants(t *testing.T) {
 	ctx := context.Background()
 	cat, registry, entry := mediaFixture(t, "song.mp3", []byte("audio fixture"))
-	metadata := json.RawMessage(`{"music":{"hasAlbumArt":true,"title":"Roads"}}`)
-	if err := cat.UpsertMediaFile(ctx, model.MediaFile{EntryID: entry.ID, Kind: "audio", Metadata: metadata}); err != nil {
+	metadata := json.RawMessage(`{"probe":{"music":{"hasAlbumArt":true,"title":"Roads"}}}`)
+	if _, err := cat.SetMediaCandidate(ctx, entry.ID, "embedded", catalog.MediaCandidate{Kind: "audio", Title: "Roads", Data: metadata}); err != nil {
 		t.Fatal(err)
 	}
 	cover := image.NewRGBA(image.Rect(0, 0, 300, 300))
@@ -271,7 +291,7 @@ func TestEPUBMetadataReadsPackage(t *testing.T) {
 	if err := NewEPUBMetadata(cat, registry).Process(context.Background(), entry); err != nil {
 		t.Fatal(err)
 	}
-	media, err := cat.MediaFile(context.Background(), entry.ID)
+	media, err := cat.MediaForEntry(context.Background(), entry.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,11 +302,21 @@ func TestEPUBMetadataReadsPackage(t *testing.T) {
 			Path string `json:"path"`
 		} `json:"cover"`
 	}
-	if err := json.Unmarshal(media.Metadata, &metadata); err != nil {
+	var document struct {
+		Embedded json.RawMessage `json:"embedded"`
+	}
+	if err := json.Unmarshal(media.Data, &document); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(document.Embedded, &metadata); err != nil {
 		t.Fatal(err)
 	}
 	if media.Kind != "book" || metadata.Title != "The Left Hand of Darkness" || len(metadata.Authors) != 1 || metadata.Cover.Path != "OPS/images/cover.jpg" {
 		t.Fatalf("EPUB metadata = %#v, media = %#v", metadata, media)
+	}
+	resolved, err := cat.MediaForEntry(context.Background(), entry.ID)
+	if err != nil || resolved.Kind != "book" || resolved.Title != "The Left Hand of Darkness" || resolved.Icon != "file:"+entry.ID || resolved.Line2 != "Ursula K. Le Guin" {
+		t.Fatalf("resolved book = %#v, %v", resolved, err)
 	}
 	cacheDir := t.TempDir()
 	if err := NewThumbnail(cat, registry, cacheDir).Process(context.Background(), entry); err != nil {
@@ -295,6 +325,20 @@ func TestEPUBMetadataReadsPackage(t *testing.T) {
 	artifact, err := cat.ArtifactForEntry(context.Background(), entry.ID, "thumbnail", "medium")
 	if err != nil || artifact.MIME != "image/jpeg" {
 		t.Fatalf("EPUB cover thumbnail = %#v, %v", artifact, err)
+	}
+	// Cover extraction depends only on the file-centric media row.
+	v2Catalog, v2Registry, v2Entry := mediaFixture(t, "book.epub", encoded.Bytes())
+	if _, err := v2Catalog.SetMediaCandidate(context.Background(), v2Entry.ID, "embedded", catalog.MediaCandidate{
+		Kind: "book", Title: "The Left Hand of Darkness", Icon: "file:" + v2Entry.ID,
+		Data: json.RawMessage(`{"cover":{"path":"OPS/images/cover.jpg"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewThumbnail(v2Catalog, v2Registry, t.TempDir()).Process(context.Background(), v2Entry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v2Catalog.ArtifactForEntry(context.Background(), v2Entry.ID, "thumbnail", "medium"); err != nil {
+		t.Fatalf("EPUB cover from medias: %v", err)
 	}
 }
 
@@ -318,7 +362,7 @@ func TestPDFInfoMetadata(t *testing.T) {
 func TestPDFThumbnailGeneratesCachedVariants(t *testing.T) {
 	ctx := context.Background()
 	cat, registry, entry := mediaFixture(t, "book.pdf", []byte("PDF fixture"))
-	if err := cat.UpsertMediaFile(ctx, model.MediaFile{EntryID: entry.ID, Kind: "book", Container: "pdf", Metadata: json.RawMessage(`{"pageCount":1}`)}); err != nil {
+	if _, err := cat.SetMediaCandidate(ctx, entry.ID, "embedded", catalog.MediaCandidate{Kind: "book", Title: "book", Data: json.RawMessage(`{"pageCount":1}`)}); err != nil {
 		t.Fatal(err)
 	}
 	frame := image.NewRGBA(image.Rect(0, 0, 240, 320))

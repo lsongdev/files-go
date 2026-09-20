@@ -53,22 +53,26 @@ func (p *AudioArtwork) Process(ctx context.Context, entry model.Entry) error {
 	} else if !errors.Is(err, catalog.ErrNotFound) {
 		return err
 	}
-	mediaFile, err := p.catalog.MediaFile(ctx, entry.ID)
+	mediaItem, err := p.catalog.MediaForEntry(ctx, entry.ID)
 	if errors.Is(err, catalog.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if mediaFile.Kind != "audio" {
+	if mediaItem.Kind != "audio" {
 		return nil
 	}
 	var metadata struct {
-		Music struct {
-			HasAlbumArt bool `json:"hasAlbumArt"`
-		} `json:"music"`
+		Embedded struct {
+			Probe struct {
+				Music struct {
+					HasAlbumArt bool `json:"hasAlbumArt"`
+				} `json:"music"`
+			} `json:"probe"`
+		} `json:"embedded"`
 	}
-	if json.Unmarshal(mediaFile.Metadata, &metadata) != nil || !metadata.Music.HasAlbumArt {
+	if json.Unmarshal(mediaItem.Data, &metadata) != nil || !metadata.Embedded.Probe.Music.HasAlbumArt {
 		return nil
 	}
 	backend, ok := p.storages.Get(entry.StorageID)

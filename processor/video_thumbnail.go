@@ -3,6 +3,7 @@ package processor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -50,19 +51,16 @@ func (p *VideoThumbnail) Match(entry model.Entry) bool {
 
 func (p *VideoThumbnail) Process(ctx context.Context, entry model.Entry) error {
 	if _, err := p.catalog.ArtifactForEntry(ctx, entry.ID, "thumbnail", "large"); err == nil {
-		return nil
+		return p.markScreenshot(ctx, entry)
 	} else if !errors.Is(err, catalog.ErrNotFound) {
 		return err
 	}
-	mediaFile, err := p.catalog.MediaFile(ctx, entry.ID)
+	mediaItem, err := p.catalog.MediaForEntry(ctx, entry.ID)
 	if errors.Is(err, catalog.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
 		return err
-	}
-	if mediaFile.Kind != "video" {
-		return nil
 	}
 	backend, ok := p.storages.Get(entry.StorageID)
 	if !ok {
@@ -77,8 +75,14 @@ func (p *VideoThumbnail) Process(ctx context.Context, entry model.Entry) error {
 		return err
 	}
 	seekSeconds := 10.0
-	if mediaFile.DurationMS != nil && *mediaFile.DurationMS > 0 {
-		seekSeconds = min(300, max(5, float64(*mediaFile.DurationMS)/10_000))
+	var technical struct {
+		Embedded struct {
+			DurationMS *int64 `json:"durationMs"`
+		} `json:"embedded"`
+	}
+	_ = json.Unmarshal(mediaItem.Data, &technical)
+	if technical.Embedded.DurationMS != nil && *technical.Embedded.DurationMS > 0 {
+		seekSeconds = min(300, max(5, float64(*technical.Embedded.DurationMS)/10_000))
 	}
 	processCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
@@ -100,5 +104,13 @@ func (p *VideoThumbnail) Process(ctx context.Context, entry model.Entry) error {
 	if err != nil {
 		return fmt.Errorf("decode video thumbnail: %w", err)
 	}
-	return p.thumbnail.writeVariants(ctx, entry, imageValue)
+	if err := p.thumbnail.writeVariants(ctx, entry, imageValue); err != nil {
+		return err
+	}
+	return p.markScreenshot(ctx, entry)
+}
+
+func (p *VideoThumbnail) markScreenshot(ctx context.Context, entry model.Entry) error {
+	_, err := p.catalog.SetMediaCandidate(ctx, entry.ID, "screenshot", catalog.MediaCandidate{Icon: "file:" + entry.ID})
+	return err
 }

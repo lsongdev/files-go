@@ -3,6 +3,7 @@ listen: ":8088"
 
 data: ""
 
+
 processing:
   workers: 2
   ffprobe: ffprobe
@@ -21,6 +22,11 @@ storages:
     name: Data
     type: local
     path: /Volumes/data
+
+  - id: local_documents
+    name: Local Documents
+    type: local
+    path: /Users/Lsong/Documents
 
 libraries:
   - id: movies
@@ -55,5 +61,5 @@ libraries:
     name: Documents
     type: files
     sources:
-      - storage: data
-        path: Documents
+      - storage: local_documents
+        path: ""

@@ -42,13 +42,21 @@ func (p *ImageMetadata) Match(entry model.Entry) bool {
 }
 
 func (p *ImageMetadata) Process(ctx context.Context, entry model.Entry) error {
+	mediaFile, err := p.inspect(ctx, entry)
+	if err != nil {
+		return err
+	}
+	return writePhotoMedia(ctx, p.catalog, entry, mediaFile)
+}
+
+func (p *ImageMetadata) inspect(ctx context.Context, entry model.Entry) (model.ParsedMedia, error) {
 	backend, ok := p.storages.Get(entry.StorageID)
 	if !ok {
-		return storage.ErrOffline
+		return model.ParsedMedia{}, storage.ErrOffline
 	}
 	file, err := backend.Open(ctx, entry.Path)
 	if err != nil {
-		return err
+		return model.ParsedMedia{}, err
 	}
 	defer file.Close()
 	metadata := map[string]any{}
@@ -75,25 +83,25 @@ func (p *ImageMetadata) Process(ctx context.Context, entry model.Entry) error {
 		}
 	}
 	if _, err := file.Seek(0, 0); err != nil {
-		return err
+		return model.ParsedMedia{}, err
 	}
 	config, format, err := image.DecodeConfig(contextReader{ctx: ctx, reader: file})
 	if err != nil {
-		return err
+		return model.ParsedMedia{}, err
 	}
 	if config.Width <= 0 || config.Height <= 0 || config.Width > 100_000 || config.Height > 100_000 {
-		return errors.New("invalid image dimensions")
+		return model.ParsedMedia{}, errors.New("invalid image dimensions")
 	}
 	metadata["format"] = format
 	encoded, err := json.Marshal(metadata)
 	if err != nil {
-		return err
+		return model.ParsedMedia{}, err
 	}
 	width, height := config.Width, config.Height
-	return p.catalog.UpsertMediaFile(ctx, model.MediaFile{
+	return model.ParsedMedia{
 		EntryID: entry.ID, Kind: "photo", Width: &width, Height: &height, TakenAt: takenAt,
 		Camera: camera, Latitude: latitude, Longitude: longitude, Metadata: encoded,
-	})
+	}, nil
 }
 
 func exifString(document *exif.Exif, name exif.FieldName) string {

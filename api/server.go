@@ -20,6 +20,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/indexer"
 	"github.com/lsongdev/files-go/jobs"
@@ -40,8 +41,9 @@ type Server struct {
 	cacheDir string
 	playback *playback.Manager
 	jobQueue *jobs.Queue
-	matcher  *mediaengine.Matcher
-	poster   *mediaengine.Poster
+	provider mediaengine.MetadataProvider
+	language string
+	artwork  *mediaengine.Artwork
 }
 
 func New(ctx context.Context, catalog *catalog.Catalog, storages *storage.Registry, indexer *indexer.Indexer, logger *log.Logger, cacheDir string, managers ...*playback.Manager) *Server {
@@ -55,9 +57,11 @@ func New(ctx context.Context, catalog *catalog.Catalog, storages *storage.Regist
 
 func (s *Server) Handler() http.Handler { return s.mux }
 
-func (s *Server) SetJobQueue(queue *jobs.Queue)                { s.jobQueue = queue }
-func (s *Server) SetMediaMatcher(matcher *mediaengine.Matcher) { s.matcher = matcher }
-func (s *Server) SetMediaPoster(poster *mediaengine.Poster)    { s.poster = poster }
+func (s *Server) SetJobQueue(queue *jobs.Queue) { s.jobQueue = queue }
+func (s *Server) SetMediaProvider(provider mediaengine.MetadataProvider, language string) {
+	s.provider, s.language = provider, language
+	s.artwork = mediaengine.NewArtwork(s.catalog, s.cacheDir, nil)
+}
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/system", s.system)
@@ -69,6 +73,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/libraries", s.listLibraries)
 	s.mux.HandleFunc("GET /api/v1/search", s.search)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}", s.getEntry)
+	s.mux.HandleFunc("POST /api/v1/entries/{id}/scan", s.scanEntrySubtree)
 	s.mux.HandleFunc("PATCH /api/v1/entries/{id}", s.updateEntry)
 	s.mux.HandleFunc("DELETE /api/v1/entries/{id}", s.deleteEntry)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/children", s.listChildren)
@@ -77,50 +82,20 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/entries/{id}/copies", s.copyEntry)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/content", s.content)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/text", s.text)
-	s.mux.HandleFunc("GET /api/v1/entries/{id}/media", s.getMediaFile)
+	s.mux.HandleFunc("GET /api/v1/entries/{id}/media", s.getEntryMediaV2)
 	s.mux.HandleFunc("GET /api/v1/entries/{id}/thumbnail", s.thumbnail)
-	s.mux.HandleFunc("GET /api/v1/media", s.listMediaItems)
-	s.mux.HandleFunc("GET /api/v1/media/{id}", s.getMediaItem)
-	s.mux.HandleFunc("GET /api/v1/media/{id}/poster", s.mediaPoster)
-	s.mux.HandleFunc("GET /api/v1/entries/{id}/media-item", s.getEntryMediaItem)
-	s.mux.HandleFunc("GET /api/v1/entries/{id}/media-candidates", s.getEntryMediaCandidates)
-	s.mux.HandleFunc("PUT /api/v1/entries/{id}/media-item", s.setEntryMediaItem)
-	s.mux.HandleFunc("DELETE /api/v1/entries/{id}/media-item", s.unmatchEntryMediaItem)
-	s.mux.HandleFunc("POST /api/v1/entries/{id}/media-item/rematch", s.rematchEntryMediaItem)
+	s.mux.HandleFunc("GET /api/v1/entries/{id}/icon", s.mediaIcon)
+	s.mux.HandleFunc("GET /api/v1/entries/{id}/backdrop", s.mediaBackdrop)
+	s.mux.HandleFunc("GET /api/v1/entries/{id}/media-candidates", s.searchMediaCandidatesV2)
+	s.mux.HandleFunc("PUT /api/v1/entries/{id}/media", s.setEntryMediaV2)
+	s.mux.HandleFunc("DELETE /api/v1/entries/{id}/media", s.unmatchEntryMediaV2)
+	s.mux.HandleFunc("POST /api/v1/entries/{id}/media/rematch", s.rematchEntryMediaV2)
 	s.mux.HandleFunc("POST /api/v1/playback/{id}", s.startPlayback)
 	s.mux.HandleFunc("GET /api/v1/playback/sessions/{session}/{file}", s.playbackFile)
 	s.mux.HandleFunc("DELETE /api/v1/playback/sessions/{session}", s.stopPlayback)
-	s.mux.HandleFunc("GET /api/v1/media/{id}/playback-state", s.getPlaybackState)
-	s.mux.HandleFunc("PUT /api/v1/media/{id}/playback-state", s.setPlaybackState)
+	s.mux.HandleFunc("GET /api/v1/entries/{id}/playback-state", s.getPlaybackState)
+	s.mux.HandleFunc("PUT /api/v1/entries/{id}/playback-state", s.setPlaybackState)
 	s.mux.HandleFunc("GET /api/v1/playback/continue", s.continueWatching)
-}
-
-func (s *Server) getEntryMediaCandidates(w http.ResponseWriter, r *http.Request) {
-	if s.matcher == nil {
-		writeError(w, http.StatusServiceUnavailable, "media_provider_unavailable", "media metadata provider is not configured")
-		return
-	}
-	entry, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
-		return
-	}
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	if len([]rune(query)) > 200 {
-		writeError(w, http.StatusBadRequest, "invalid_request", "q must not exceed 200 characters")
-		return
-	}
-	items, err := s.matcher.Candidates(r.Context(), *entry, query)
-	if err != nil {
-		s.logger.Printf("search media candidates for %s: %v", entry.ID, err)
-		writeError(w, http.StatusBadGateway, "media_provider_error", "media metadata provider request failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (s *Server) startPlayback(w http.ResponseWriter, r *http.Request) {
@@ -234,8 +209,8 @@ func (s *Server) setPlaybackState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	if _, err := s.catalog.MediaItem(r.Context(), r.PathValue("id")); errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "media_not_found", "media item not found")
+	if _, err := s.catalog.Entry(r.Context(), r.PathValue("id")); errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
 		return
 	} else if err != nil {
 		s.internalError(w, err)
@@ -245,7 +220,7 @@ func (s *Server) setPlaybackState(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSONBody(w, r, &input); err != nil {
 		return
 	}
-	state, err := s.catalog.UpsertPlaybackState(r.Context(), model.PlaybackState{UserID: user, MediaID: r.PathValue("id"), PositionMS: input.PositionMS, Played: input.Played})
+	state, err := s.catalog.UpsertPlaybackState(r.Context(), model.PlaybackState{UserID: user, EntryID: r.PathValue("id"), PositionMS: input.PositionMS, Played: input.Played})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
@@ -265,264 +240,6 @@ func (s *Server) continueWatching(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
-}
-
-func (s *Server) mediaPoster(w http.ResponseWriter, r *http.Request) {
-	artifact, err := s.catalog.ArtifactForMedia(r.Context(), r.PathValue("id"), "poster", "w500")
-	if errors.Is(err, catalog.ErrNotFound) && s.poster != nil {
-		if item, itemErr := s.catalog.MediaItem(r.Context(), r.PathValue("id")); itemErr == nil {
-			if posterErr := s.poster.ProcessMedia(r.Context(), *item); posterErr != nil {
-				s.logger.Printf("download media poster %s: %v", item.ID, posterErr)
-			} else {
-				artifact, err = s.catalog.ArtifactForMedia(r.Context(), item.ID, "poster", "w500")
-			}
-		}
-	}
-	if errors.Is(err, catalog.ErrNotFound) {
-		s.reprocessMedia(r.Context(), r.PathValue("id"))
-		w.Header().Set("Retry-After", "2")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	parts := strings.Split(artifact.Key, ".")
-	if len(parts) != 2 {
-		s.internalError(w, errors.New("invalid poster artifact key"))
-		return
-	}
-	filename, err := mediaengine.ArtifactPath(s.cacheDir, "posters", parts[0], parts[1])
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	file, err := os.Open(filename)
-	if errors.Is(err, os.ErrNotExist) {
-		s.reprocessMedia(r.Context(), r.PathValue("id"))
-		w.Header().Set("Retry-After", "2")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", artifact.MIME)
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	w.Header().Set("ETag", `"`+parts[0]+`"`)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	http.ServeContent(w, r, artifact.ID+"."+parts[1], info.ModTime(), file)
-}
-
-func (s *Server) reprocessMedia(ctx context.Context, mediaID string) {
-	item, err := s.catalog.MediaItem(ctx, mediaID)
-	if err != nil {
-		return
-	}
-	for _, file := range item.Files {
-		entry, err := s.catalog.Entry(ctx, file.EntryID)
-		if err == nil && entry.Available {
-			s.reprocess(*entry)
-			return
-		}
-	}
-}
-
-func (s *Server) listMediaItems(w http.ResponseWriter, r *http.Request) {
-	limit := 100
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		value, err := strconv.Atoi(raw)
-		if err != nil || value < 1 || value > 500 {
-			writeError(w, http.StatusBadRequest, "invalid_request", "limit must be between 1 and 500")
-			return
-		}
-		limit = value
-	}
-	items, err := s.catalog.MediaItems(r.Context(), r.URL.Query().Get("type"), r.URL.Query().Get("library"), limit)
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
-}
-
-func (s *Server) getMediaItem(w http.ResponseWriter, r *http.Request) {
-	item, err := s.catalog.MediaItem(r.Context(), r.PathValue("id"))
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "media_not_found", "media item not found")
-		return
-	}
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, item)
-}
-
-func (s *Server) getEntryMediaItem(w http.ResponseWriter, r *http.Request) {
-	entry, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
-		return
-	}
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	var item *model.MediaItem
-	if entry.Type == model.EntryDirectory {
-		item, err = s.catalog.MediaItemForEntry(r.Context(), entry.ID, "folder")
-	} else {
-		item, err = s.catalog.MediaItemForEntry(r.Context(), entry.ID, r.URL.Query().Get("role"))
-	}
-	if errors.Is(err, catalog.ErrNotFound) {
-		if r.URL.Query().Get("optional") == "1" {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		writeError(w, http.StatusNotFound, "media_not_matched", "entry is not matched to a media item")
-		return
-	}
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, item)
-}
-
-func (s *Server) setEntryMediaItem(w http.ResponseWriter, r *http.Request) {
-	entry, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
-		return
-	}
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	var input struct {
-		MediaID       string `json:"mediaId"`
-		Role          string `json:"role"`
-		CandidateID   string `json:"candidateId"`
-		CandidateType string `json:"candidateType"`
-	}
-	if err := decodeJSONBody(w, r, &input); err != nil {
-		return
-	}
-	if input.Role == "" {
-		input.Role = "video"
-	}
-	if input.MediaID == "" && input.CandidateID != "" {
-		if s.matcher == nil {
-			writeError(w, http.StatusServiceUnavailable, "media_provider_unavailable", "media metadata provider is not configured")
-			return
-		}
-		item, err := s.matcher.MatchCandidate(r.Context(), *entry, input.CandidateType, input.CandidateID)
-		if err != nil {
-			if errors.Is(err, mediaengine.ErrInvalidManualMatch) {
-				writeError(w, http.StatusBadRequest, "invalid_media_match", "the selected media cannot be matched to this file")
-				return
-			}
-			s.logger.Printf("apply manual media match for %s: %v", entry.ID, err)
-			writeError(w, http.StatusBadGateway, "media_match_failed", "unable to apply the selected media match")
-			return
-		}
-		s.reprocess(*entry)
-		writeJSON(w, http.StatusOK, item)
-		return
-	}
-	if input.MediaID == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "mediaId or candidateId is required")
-		return
-	}
-	item, err := s.catalog.MediaItem(r.Context(), input.MediaID)
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "media_not_found", "media item not found")
-		return
-	}
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	if err := s.catalog.SetMediaMatchSuppressed(r.Context(), entry.ID, false); err == nil {
-		err = s.catalog.UnmatchEntry(r.Context(), entry.ID)
-	}
-	if err == nil {
-		err = s.catalog.AssociateMediaFile(r.Context(), item.ID, entry.ID, input.Role)
-	}
-	if err == nil {
-		err = s.catalog.SetMediaMatchLocked(r.Context(), item.ID, true)
-	}
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	item.MatchLocked = true
-	writeJSON(w, http.StatusOK, item)
-}
-
-func (s *Server) unmatchEntryMediaItem(w http.ResponseWriter, r *http.Request) {
-	if err := s.catalog.UnmatchEntry(r.Context(), r.PathValue("id")); err != nil {
-		s.internalError(w, err)
-		return
-	}
-	if err := s.catalog.SetMediaMatchSuppressed(r.Context(), r.PathValue("id"), true); err != nil {
-		s.internalError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) rematchEntryMediaItem(w http.ResponseWriter, r *http.Request) {
-	entry, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
-	if errors.Is(err, catalog.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
-		return
-	}
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	if err := s.catalog.UnmatchEntry(r.Context(), entry.ID); err != nil {
-		s.internalError(w, err)
-		return
-	}
-	if err := s.catalog.SetMediaMatchSuppressed(r.Context(), entry.ID, false); err != nil {
-		s.internalError(w, err)
-		return
-	}
-	s.reprocess(*entry)
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "matching"})
-}
-
-func (s *Server) getMediaFile(w http.ResponseWriter, r *http.Request) {
-	item, err := s.catalog.MediaFile(r.Context(), r.PathValue("id"))
-	if errors.Is(err, catalog.ErrNotFound) {
-		if entry, entryErr := s.catalog.Entry(r.Context(), r.PathValue("id")); entryErr == nil {
-			s.reprocess(*entry)
-		}
-		if r.URL.Query().Get("optional") == "1" {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		writeError(w, http.StatusNotFound, "metadata_not_ready", "media metadata is not available yet")
-		return
-	}
-	if err != nil {
-		s.internalError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) thumbnail(w http.ResponseWriter, r *http.Request) {
@@ -575,6 +292,80 @@ func (s *Server) thumbnail(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, artifact.ID+".jpg", info.ModTime(), file)
 	go func() { _ = s.catalog.TouchArtifact(s.ctx, artifact.ID) }()
+}
+
+func (s *Server) mediaIcon(w http.ResponseWriter, r *http.Request) {
+	s.serveMediaImage(w, r, "icon")
+}
+
+func (s *Server) mediaBackdrop(w http.ResponseWriter, r *http.Request) {
+	s.serveMediaImage(w, r, "backdrop")
+}
+
+func (s *Server) serveMediaImage(w http.ResponseWriter, r *http.Request, field string) {
+	item, err := s.catalog.MediaForEntry(r.Context(), r.PathValue("id"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	ref := item.Icon
+	if field == "backdrop" {
+		ref = item.Backdrop
+	}
+	if id, ok := strings.CutPrefix(ref, "file:"); ok {
+		if _, err := uuid.Parse(id); err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		size := "medium"
+		if field == "backdrop" {
+			size = "large"
+		}
+		http.Redirect(w, r, "/api/v1/entries/"+id+"/thumbnail?size="+size, http.StatusFound)
+		return
+	}
+	if key, ok := strings.CutPrefix(ref, "cache:posters/"); ok {
+		base, extension, found := strings.Cut(key, ".")
+		if !found {
+			http.NotFound(w, r)
+			return
+		}
+		filename, err := mediaengine.ArtifactPath(s.cacheDir, "posters", base, extension)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		file, err := os.Open(filename)
+		if errors.Is(err, os.ErrNotExist) {
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			s.internalError(w, err)
+			return
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil {
+			s.internalError(w, err)
+			return
+		}
+		mimeType := "image/jpeg"
+		if extension == "png" {
+			mimeType = "image/png"
+		}
+		w.Header().Set("Content-Type", mimeType)
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Header().Set("ETag", `"`+key+`"`)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.ServeContent(w, r, key, info.ModTime(), file)
+		return
+	}
+	http.NotFound(w, r)
 }
 
 func writeThumbnailPending(w http.ResponseWriter) {
@@ -1124,12 +915,58 @@ func (s *Server) scanStorage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "storage_not_found", "storage not found")
 		return
 	}
+	if !s.indexer.CanScanStorage(id) {
+		writeError(w, http.StatusBadRequest, "no_library_sources", "storage has no configured library sources")
+		return
+	}
 	go func() {
 		if err := s.indexer.Scan(s.ctx, id); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, indexer.ErrScanInProgress) {
 			s.logger.Printf("scan storage %s: %v", id, err)
 		}
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "scanning"})
+}
+
+func (s *Server) scanEntrySubtree(w http.ResponseWriter, r *http.Request) {
+	entry, err := s.catalog.Entry(r.Context(), r.PathValue("id"))
+	if errors.Is(err, catalog.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "entry_not_found", "entry not found")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	if !s.indexer.CanScanSubtree(entry.StorageID, entry.Path) {
+		writeError(w, http.StatusBadRequest, "invalid_scan_scope", "select an entry inside a configured library")
+		return
+	}
+	if entry.Type == model.EntryFile {
+		if !entry.Available {
+			writeError(w, http.StatusConflict, "entry_unavailable", "file is not available for processing")
+			return
+		}
+		if err := s.indexer.ReprocessEntry(r.Context(), *entry); err != nil {
+			s.internalError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued", "scope": "file"})
+		return
+	}
+	if entry.Type != model.EntryDirectory {
+		writeError(w, http.StatusBadRequest, "invalid_scan_scope", "select a file or directory inside a configured library")
+		return
+	}
+	if s.indexer.IsScanning(entry.StorageID) {
+		writeError(w, http.StatusConflict, "scan_in_progress", "storage scan already in progress")
+		return
+	}
+	go func() {
+		if err := s.indexer.ScanSubtree(s.ctx, entry.StorageID, entry.Path); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, indexer.ErrScanInProgress) {
+			s.logger.Printf("scan directory %s: %v", entry.Path, err)
+		}
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "scanning", "scope": "subtree"})
 }
 
 func (s *Server) listLibraries(w http.ResponseWriter, r *http.Request) {
@@ -1142,19 +979,45 @@ func (s *Server) listLibraries(w http.ResponseWriter, r *http.Request) {
 }
 
 type entryResponse struct {
-	ID         string              `json:"id"`
-	ParentID   *string             `json:"parentId,omitempty"`
-	Name       string              `json:"name"`
-	Type       model.EntryType     `json:"type"`
-	Size       int64               `json:"size"`
-	MIME       string              `json:"mime,omitempty"`
-	Extension  string              `json:"extension,omitempty"`
-	Available  bool                `json:"available"`
-	ModifiedAt any                 `json:"modifiedAt,omitempty"`
-	CreatedAt  any                 `json:"createdAt"`
-	UpdatedAt  any                 `json:"updatedAt"`
-	Links      map[string]string   `json:"links"`
-	Media      *model.MediaSummary `json:"media,omitempty"`
+	ID         string            `json:"id"`
+	ParentID   *string           `json:"parentId,omitempty"`
+	Name       string            `json:"name"`
+	Type       model.EntryType   `json:"type"`
+	Size       int64             `json:"size"`
+	MIME       string            `json:"mime,omitempty"`
+	Extension  string            `json:"extension,omitempty"`
+	Available  bool              `json:"available"`
+	ModifiedAt any               `json:"modifiedAt,omitempty"`
+	CreatedAt  any               `json:"createdAt"`
+	UpdatedAt  any               `json:"updatedAt"`
+	Links      map[string]string `json:"links"`
+	Media      *mediaResponse    `json:"media,omitempty"`
+}
+
+type mediaResponse struct {
+	Kind        string          `json:"kind"`
+	Title       string          `json:"title"`
+	Icon        string          `json:"icon,omitempty"`
+	Backdrop    string          `json:"backdrop,omitempty"`
+	Year        *int            `json:"year,omitempty"`
+	Line1       string          `json:"line1,omitempty"`
+	Line2       string          `json:"line2,omitempty"`
+	Line3       string          `json:"line3,omitempty"`
+	Data        json.RawMessage `json:"data,omitempty"`
+	MatchLocked bool            `json:"matchLocked,omitempty"`
+}
+
+func mediaView(item model.Media) mediaResponse {
+	view := mediaResponse{Kind: item.Kind, Title: item.Title, Year: item.Year,
+		Line1: item.Line1, Line2: item.Line2, Line3: item.Line3,
+		Data: item.Data, MatchLocked: item.MatchLocked}
+	if item.Icon != "" {
+		view.Icon = "/api/v1/entries/" + item.FileID + "/icon"
+	}
+	if item.Backdrop != "" {
+		view.Backdrop = "/api/v1/entries/" + item.FileID + "/backdrop"
+	}
+	return view
 }
 
 func (s *Server) responsesFor(ctx context.Context, entries []model.Entry) ([]entryResponse, error) {
@@ -1162,20 +1025,18 @@ func (s *Server) responsesFor(ctx context.Context, entries []model.Entry) ([]ent
 	for _, entry := range entries {
 		entryIDs = append(entryIDs, entry.ID)
 	}
-	media, err := s.catalog.MediaSummariesForEntries(ctx, entryIDs)
+	media, err := s.catalog.MediasForEntries(ctx, entryIDs)
 	if err != nil {
 		return nil, err
 	}
 	result := make([]entryResponse, len(entries))
 	for index, entry := range entries {
 		result[index] = responseFor(entry)
-		if summary, ok := media[entry.ID]; ok {
-			copy := summary
-			result[index].Media = &copy
-			if summary.PrimaryEntryID != "" {
-				result[index].Links["thumbnail"] = "/api/v1/entries/" + summary.PrimaryEntryID + "/thumbnail?size=medium"
-			} else if summary.HasPoster {
-				result[index].Links["thumbnail"] = "/api/v1/media/" + summary.ID + "/poster"
+		if item, ok := media[entry.ID]; ok {
+			view := mediaView(item)
+			result[index].Media = &view
+			if view.Icon != "" {
+				result[index].Links["thumbnail"] = view.Icon
 			}
 		}
 	}
@@ -1222,7 +1083,12 @@ func (s *Server) getEntry(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, responseFor(*entry))
+	result, err := s.responsesFor(r.Context(), []model.Entry{*entry})
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result[0])
 }
 
 func (s *Server) listChildren(w http.ResponseWriter, r *http.Request) {

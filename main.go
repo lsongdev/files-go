@@ -18,7 +18,7 @@ import (
 	"github.com/lsongdev/files-go/enrichment"
 	"github.com/lsongdev/files-go/indexer"
 	"github.com/lsongdev/files-go/jobs"
-	mediaengine "github.com/lsongdev/files-go/media"
+	"github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/model"
 	"github.com/lsongdev/files-go/playback"
 	"github.com/lsongdev/files-go/processor"
@@ -45,7 +45,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer readerDB.Close()
-	catalogDB := catalog.NewWithReader(db, readerDB)
+	cat := catalog.NewWithReader(db, readerDB)
 	registry := storage.NewRegistry()
 	for _, item := range cfg.Storages {
 		backend, err := storage.NewLocal(item.Path)
@@ -55,11 +55,11 @@ func main() {
 		if err := registry.Add(item.ID, backend); err != nil {
 			log.Fatal(err)
 		}
-		if err := catalogDB.RegisterStorage(ctx, item.ID, item.Name, item.Type); err != nil {
+		if err := cat.RegisterStorage(ctx, item.ID, item.Name, item.Type); err != nil {
 			log.Fatal(err)
 		}
 	}
-	if err := catalogDB.RecoverInterruptedScans(ctx); err != nil {
+	if err := cat.RecoverInterruptedScans(ctx); err != nil {
 		log.Fatal(err)
 	}
 	for _, item := range cfg.Libraries {
@@ -67,264 +67,55 @@ func main() {
 		for _, source := range item.Sources {
 			library.Sources = append(library.Sources, model.LibrarySource{StorageID: source.Storage, Path: source.Path})
 		}
-		if err := catalogDB.RegisterLibrary(ctx, library); err != nil {
+		if err := cat.RegisterLibrary(ctx, library); err != nil {
 			log.Fatal(err)
 		}
 	}
-	idx := indexer.New(catalogDB, registry)
-	jobQueue := jobs.New(db, 2*time.Minute)
-	thumbnailer := processor.NewThumbnail(catalogDB, registry, cfg.CacheDir)
-	mediaCataloger := mediaengine.NewCataloger(catalogDB)
-	var mediaMatcher *mediaengine.Matcher
-	var mediaPoster *mediaengine.Poster
-	var metadataProvider mediaengine.MetadataProvider
-	if cfg.Media.TMDB.Token != "" {
-		metadataProvider = mediaengine.NewTMDB(cfg.Media.TMDB.Token, nil)
-		mediaMatcher = mediaengine.NewMatcher(catalogDB, metadataProvider, cfg.Media.TMDB.Language)
-		mediaPoster = mediaengine.NewPoster(catalogDB, cfg.CacheDir, nil)
+	configured := make([]string, 0, len(cfg.Libraries))
+	for _, item := range cfg.Libraries {
+		configured = append(configured, item.ID)
 	}
-	sidecarProcessor := mediaengine.NewSidecarWithProvider(catalogDB, registry, metadataProvider, cfg.Media.TMDB.Language)
-	processing := processor.New(catalogDB, jobQueue,
-		enrichment.Image(catalogDB, registry, thumbnailer),
-		enrichment.Ebook(catalogDB, registry, thumbnailer),
-		enrichment.Document(catalogDB, registry, thumbnailer, cfg.CacheDir, cfg.Processing.PDFInfo, cfg.Processing.PDFToPPM),
-		enrichment.Audio(catalogDB, registry, thumbnailer, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
-		enrichment.Video(catalogDB, registry, thumbnailer, mediaMatcher, mediaPoster, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
-		enrichment.Sidecar(sidecarProcessor),
+	if err := cat.PruneUnconfiguredLibraries(ctx, configured); err != nil {
+		log.Fatal(err)
+	}
+	idx := indexer.New(cat, registry)
+	paths := make(map[string][]string)
+	for _, library := range cfg.Libraries {
+		for _, source := range library.Sources {
+			paths[source.Storage] = append(paths[source.Storage], source.Path)
+		}
+	}
+	for _, item := range cfg.Storages {
+		if err := idx.SetScanScope(item.ID, paths[item.ID]); err != nil {
+			log.Fatalf("invalid library scan scope for %s: %v", item.ID, err)
+		}
+		idx.SetPriority(item.ID, paths[item.ID])
+	}
+	queue := jobs.New(db, 2*time.Minute)
+	thumbnailer := processor.NewThumbnail(cat, registry, cfg.CacheDir)
+	var provider media.MetadataProvider
+	if cfg.Media.TMDB.Token != "" {
+		provider = media.NewTMDB(cfg.Media.TMDB.Token, nil)
+	}
+	videoEnricher := media.NewVideoEnricher(cat, provider, cfg.Media.TMDB.Language)
+	directoryEnricher := media.NewDirectoryEnricherWithProvider(cat, registry, provider, cfg.Media.TMDB.Language)
+	artwork := media.NewArtwork(cat, cfg.CacheDir, nil)
+	directoryEnricher.SetArtwork(artwork)
+	idx.SetRemovedEntryReconciler(directoryEnricher.Process)
+	processing := processor.New(cat, queue,
+		enrichment.Image(cat, registry, thumbnailer),
+		enrichment.Ebook(cat, registry, thumbnailer),
+		enrichment.Document(cat, registry, thumbnailer, cfg.CacheDir, cfg.Processing.PDFInfo, cfg.Processing.PDFToPPM),
+		enrichment.Audio(cat, registry, thumbnailer, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
+		enrichment.Video(cat, registry, thumbnailer, videoEnricher, artwork, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
+		enrichment.Sidecar(directoryEnricher),
 	)
 	idx.SetEntrySink(processing)
-	runMediaReconciliation := func() error {
-		refreshMovieMetadata := func() error {
-			if mediaMatcher == nil {
-				return nil
-			}
-			afterID := ""
-			for {
-				entries, err := catalogDB.EntriesNeedingMovieMetadata(ctx, afterID, 500)
-				if err != nil {
-					return err
-				}
-				if len(entries) == 0 {
-					return nil
-				}
-				for _, entry := range entries {
-					if err := ctx.Err(); err != nil {
-						return err
-					}
-					if err := mediaMatcher.Process(ctx, entry); err != nil {
-						log.Printf("match movie %s: %v", entry.ID, err)
-						continue
-					}
-					if mediaPoster != nil {
-						if item, err := catalogDB.MediaItemForEntry(ctx, entry.ID, "video"); err == nil {
-							if err := catalogDB.AssociateMediaLibraryFolder(ctx, entry, *item); err != nil {
-								log.Printf("reconcile movie folder %s: %v", entry.ID, err)
-							}
-							if err := mediaPoster.ProcessMedia(ctx, *item); err != nil {
-								log.Printf("download movie poster %s: %v", entry.ID, err)
-							}
-						}
-					}
-				}
-				afterID = entries[len(entries)-1].ID
-			}
-		}
-		refreshTVFolders := func() error {
-			if mediaMatcher == nil {
-				return nil
-			}
-			entries, err := catalogDB.EntriesNeedingTVFolderMetadata(ctx, 500)
-			if err != nil {
-				return err
-			}
-			for _, entry := range entries {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if err := mediaCataloger.Process(ctx, entry); err != nil {
-					log.Printf("catalog representative TV video %s: %v", entry.ID, err)
-					continue
-				}
-				if err := mediaMatcher.Process(ctx, entry); err != nil {
-					log.Printf("match representative TV video %s: %v", entry.ID, err)
-					continue
-				}
-				if err := sidecarProcessor.Process(ctx, entry); err != nil {
-					log.Printf("reconcile representative TV folder %s: %v", entry.ID, err)
-				}
-			}
-			return nil
-		}
-		// Prioritize visible folder identity before the wider, lower-priority
-		// reconciliation batches.
-		if err := refreshTVFolders(); err != nil {
-			return err
-		}
-		if mediaMatcher != nil {
-			afterID := ""
-			for {
-				entries, err := catalogDB.EntriesAutoMatchedTV(ctx, afterID, 500)
-				if err != nil {
-					return err
-				}
-				if len(entries) == 0 {
-					break
-				}
-				for _, entry := range entries {
-					if err := ctx.Err(); err != nil {
-						return err
-					}
-					if err := mediaMatcher.Process(ctx, entry); err != nil {
-						log.Printf("revalidate TV match %s: %v", entry.ID, err)
-					}
-				}
-				afterID = entries[len(entries)-1].ID
-			}
-		}
-		afterID := ""
-		for {
-			entries, err := catalogDB.EntriesMediaSidecars(ctx, afterID, 500)
-			if err != nil {
-				return err
-			}
-			if len(entries) == 0 {
-				break
-			}
-			for _, entry := range entries {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if err := sidecarProcessor.Process(ctx, entry); err != nil && ctx.Err() == nil {
-					log.Printf("media sidecar %s: %v", entry.ID, err)
-				}
-			}
-			afterID = entries[len(entries)-1].ID
-		}
-		if err := refreshMovieMetadata(); err != nil {
-			return err
-		}
-		for _, backfill := range []struct{ kind, role string }{
-			{"audio", "album"},
-			{"video", "video"},
-			{"photo", "photo"},
-			{"book", "book"},
-		} {
-			afterID := ""
-			for {
-				entries, err := catalogDB.EntriesMissingMediaAssociation(ctx, backfill.kind, backfill.role, afterID, 500)
-				if err != nil {
-					return err
-				}
-				if len(entries) == 0 {
-					break
-				}
-				for _, entry := range entries {
-					if err := ctx.Err(); err != nil {
-						return err
-					}
-					if err := mediaCataloger.Process(ctx, entry); err != nil {
-						log.Printf("catalog media %s: %v", entry.ID, err)
-						continue
-					}
-					if backfill.kind == "video" && mediaMatcher != nil {
-						if err := mediaMatcher.Process(ctx, entry); err != nil {
-							log.Printf("match video %s: %v", entry.ID, err)
-						}
-						if err := sidecarProcessor.Process(ctx, entry); err != nil {
-							log.Printf("reconcile video sidecars %s: %v", entry.ID, err)
-						}
-					}
-				}
-				afterID = entries[len(entries)-1].ID
-			}
-		}
-		afterID = ""
-		for {
-			entries, err := catalogDB.EntriesMissingAudioArtwork(ctx, afterID, 500)
-			if err != nil {
-				return err
-			}
-			if len(entries) == 0 {
-				break
-			}
-			if err := processing.EnqueueEntries(ctx, entries); err != nil {
-				return err
-			}
-			afterID = entries[len(entries)-1].ID
-		}
-		if mediaMatcher != nil {
-			afterID = ""
-			for {
-				entries, err := catalogDB.EntriesNeedingEpisodeMetadata(ctx, afterID, 500)
-				if err != nil {
-					return err
-				}
-				if len(entries) == 0 {
-					break
-				}
-				for _, entry := range entries {
-					if err := ctx.Err(); err != nil {
-						return err
-					}
-					if err := mediaMatcher.Process(ctx, entry); err != nil {
-						log.Printf("enrich episode %s: %v", entry.ID, err)
-					}
-				}
-				afterID = entries[len(entries)-1].ID
-			}
-		}
-		// Recompute derived folder links even when a video's provider match was
-		// created by an older version. This also removes collection projections
-		// once multiple distinct children are known.
-		afterID = ""
-		for {
-			entries, err := catalogDB.EntriesForMediaFolderReconciliation(ctx, afterID, 500)
-			if err != nil {
-				return err
-			}
-			if len(entries) == 0 {
-				break
-			}
-			for _, entry := range entries {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				item, itemErr := catalogDB.MediaItemForEntry(ctx, entry.ID, "series")
-				if itemErr != nil {
-					item, itemErr = catalogDB.MediaItemForEntry(ctx, entry.ID, "video")
-				}
-				if itemErr != nil {
-					continue
-				}
-				if err := catalogDB.AssociateMediaLibraryFolder(ctx, entry, *item); err != nil {
-					log.Printf("reconcile media folder %s: %v", entry.ID, err)
-				}
-				if mediaPoster != nil && (item.Type == "movie" || item.Type == "series") {
-					if err := mediaPoster.ProcessMedia(ctx, *item); err != nil {
-						log.Printf("download media poster %s: %v", entry.ID, err)
-					}
-				}
-			}
-			afterID = entries[len(entries)-1].ID
-		}
-		return nil
-	}
-	workerPool := jobs.NewPool(jobQueue, cfg.Processing.Workers)
+	workerPool := jobs.NewPool(queue, cfg.Processing.Workers)
 	workerPool.Handle(processor.JobProcessEntry, processing.Handle)
 	workerPool.Start(ctx)
-	for _, item := range cfg.Storages {
-		var priority []string
-		for _, library := range cfg.Libraries {
-			for _, source := range library.Sources {
-				if source.Storage == item.ID {
-					priority = append(priority, source.Path)
-				}
-			}
-		}
-		idx.SetPriority(item.ID, priority)
-	}
 	requestScan := func(storageID string) {
-		if idx.IsScanning(storageID) {
+		if !idx.CanScanStorage(storageID) || idx.IsScanning(storageID) {
 			return
 		}
 		go func() {
@@ -334,46 +125,35 @@ func main() {
 		}()
 	}
 	for _, item := range cfg.Storages {
-		if err := probeStorageAvailability(ctx, catalogDB, registry, item.ID, requestScan); err != nil {
+		if err := probeStorageAvailability(ctx, cat, registry, item.ID, requestScan); err != nil {
 			log.Printf("probe storage %s: %v", item.ID, err)
 		}
 	}
-	go func() {
-		if err := runMediaReconciliation(); err != nil && ctx.Err() == nil {
-			log.Printf("media reconciliation: %v", err)
-		}
-	}()
 	for _, item := range cfg.Storages {
-		storageID := item.ID
-		needsScan, err := catalogDB.NeedsInitialScan(ctx, storageID)
+		needsScan, err := cat.NeedsInitialScan(ctx, item.ID)
 		if err != nil {
 			log.Fatal(err)
 		}
-		storageState, err := catalogDB.Storage(ctx, storageID)
+		state, err := cat.Storage(ctx, item.ID)
 		if err != nil {
 			log.Fatal(err)
 		}
-		if storageState.State == "offline" {
-			continue
+		if state.State != "offline" && (needsScan || state.State == "interrupted") {
+			requestScan(item.ID)
 		}
-		resumeScan := storageState.State == "interrupted"
-		if !needsScan && !resumeScan {
-			continue
-		}
-		requestScan(storageID)
 	}
 	go func() {
-		filesystemWatcher, err := indexer.NewWatcher(catalogDB, registry, idx, log.Default())
+		watcher, err := indexer.NewWatcher(cat, registry, idx, log.Default())
 		if err != nil {
 			log.Printf("filesystem watcher unavailable: %v", err)
 			return
 		}
-		storageIDs := make([]string, 0, len(cfg.Storages))
+		ids := make([]string, 0, len(cfg.Storages))
 		for _, item := range cfg.Storages {
-			storageIDs = append(storageIDs, item.ID)
+			ids = append(ids, item.ID)
 		}
-		if err := filesystemWatcher.Start(ctx, storageIDs); err != nil && ctx.Err() == nil {
-			log.Printf("start filesystem watcher: %v", err)
+		if err := watcher.Start(ctx, ids); err != nil && ctx.Err() == nil {
+			log.Printf("filesystem watcher: %v", err)
 		}
 	}()
 	go func() {
@@ -387,7 +167,7 @@ func main() {
 				return
 			case <-availability.C:
 				for _, item := range cfg.Storages {
-					if err := probeStorageAvailability(ctx, catalogDB, registry, item.ID, requestScan); err != nil && ctx.Err() == nil {
+					if err := probeStorageAvailability(ctx, cat, registry, item.ID, requestScan); err != nil && ctx.Err() == nil {
 						log.Printf("probe storage %s: %v", item.ID, err)
 					}
 				}
@@ -398,11 +178,10 @@ func main() {
 			}
 		}
 	}()
-	playbackManager := playback.NewManager(ctx, catalogDB, registry, cfg.Processing.FFmpeg, cfg.CacheDir, 2)
-	apiServer := api.New(ctx, catalogDB, registry, idx, log.Default(), cfg.CacheDir, playbackManager)
-	apiServer.SetJobQueue(jobQueue)
-	apiServer.SetMediaMatcher(mediaMatcher)
-	apiServer.SetMediaPoster(mediaPoster)
+	playbackManager := playback.NewManager(ctx, cat, registry, cfg.Processing.FFmpeg, cfg.CacheDir, 2)
+	apiServer := api.New(ctx, cat, registry, idx, log.Default(), cfg.CacheDir, playbackManager)
+	apiServer.SetJobQueue(queue)
+	apiServer.SetMediaProvider(provider, cfg.Media.TMDB.Language)
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiServer.Handler())
 	mux.Handle("/", web.Handler())

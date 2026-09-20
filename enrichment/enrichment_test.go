@@ -16,7 +16,7 @@ func TestMediaPluginFileMatching(t *testing.T) {
 	plugins := []processor.Plugin{
 		Image(nil, nil, thumbnail), Ebook(nil, nil, thumbnail),
 		Document(nil, nil, thumbnail, "", "", ""), Audio(nil, nil, thumbnail, "", ""),
-		Video(nil, nil, thumbnail, nil, nil, "", ""), Sidecar(mediaengine.NewSidecar(nil, nil)),
+		Video(nil, nil, thumbnail, nil, nil, "", ""), Sidecar(mediaengine.NewDirectoryEnricher(nil, nil)),
 	}
 	tests := []struct {
 		file string
@@ -49,7 +49,7 @@ func TestMediaPluginFileMatching(t *testing.T) {
 	for _, step := range video.Steps() {
 		steps = append(steps, step.Name())
 	}
-	if want := []string{"ffprobe", "video_thumbnail", "media_catalog_video"}; !slices.Equal(steps, want) {
+	if want := []string{"ffprobe", "video_thumbnail"}; !slices.Equal(steps, want) {
 		t.Errorf("video steps = %v, want %v", steps, want)
 	}
 }
