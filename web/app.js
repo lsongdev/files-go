@@ -108,7 +108,7 @@ function copyNameFor(item) {
   return dot > 0 ? `${item.name.slice(0, dot)} copy${item.name.slice(dot)}` : `${item.name} copy`;
 }
 
-function VideoPlayer({ url, startPositionMS = 0, onProgress }) {
+function VideoPlayer({ url }) {
   const videoRef = useRef(null);
   const [playerStatus, setPlayerStatus] = useState('正在缓冲视频…');
   useEffect(() => {
@@ -125,11 +125,9 @@ function VideoPlayer({ url, startPositionMS = 0, onProgress }) {
       video.src = url;
       setPlayerStatus('');
     }
-    const resume = () => { if (startPositionMS > 0 && Number.isFinite(video.duration)) video.currentTime = Math.min(startPositionMS / 1000, Math.max(0, video.duration - 2)); };
-    video.addEventListener('loadedmetadata', resume, { once: true });
     return () => { hls?.destroy(); video.removeAttribute('src'); video.load(); };
-  }, [url, startPositionMS]);
-  return html`<div class="video-player"><video ref=${videoRef} controls autoplay preload="metadata" onTimeUpdate=${(event) => onProgress?.(event.currentTarget, false)} onEnded=${(event) => onProgress?.(event.currentTarget, true)}></video>${playerStatus && html`<span class="video-status">${playerStatus}</span>`}</div>`;
+  }, [url]);
+  return html`<div class="video-player"><video ref=${videoRef} controls autoplay preload="metadata"></video>${playerStatus && html`<span class="video-status">${playerStatus}</span>`}</div>`;
 }
 
 function mediaMetadata(media) {
@@ -227,7 +225,7 @@ function MediaHeader({ item, media, technical, actions }) {
   </section>`;
 }
 
-function FileDetail({ item, media, technical, text, loading, error, playbackURL, startPositionMS, onPlay, onPlaybackProgress, onManage, onMatch }) {
+function FileDetail({ item, media, technical, text, loading, error, playbackURL, onPlay, onManage, onMatch }) {
   if (!item) return null;
   const kind = previewKind(item);
   const contentURL = item.links.content;
@@ -247,7 +245,7 @@ function FileDetail({ item, media, technical, text, loading, error, playbackURL,
     ${media ? html`<${MediaHeader} item=${item} media=${media} technical=${technical} actions=${actions}/>` : html`<header class="plain-detail-head"><div><p>${item.extension?.toUpperCase() || 'FILE'}</p><h1>${item.name}</h1><span>${item.mime || '未知文件类型'}</span></div><div class="media-actions">${actions}</div></header>`}
     <div class="detail-layout">
       <section class=${`detail-preview ${kind}`} aria-label="文件内容">
-        ${!item.available ? html`<div class="preview-message"><h2>文件当前不可用</h2><p>重新连接存储并扫描后即可查看。</p></div>` : kind === 'image' ? html`<img src=${contentURL} alt=${item.name}/>` : kind === 'audio' ? html`<audio src=${contentURL} controls preload="metadata"></audio>` : kind === 'video' ? (playbackURL ? html`<${VideoPlayer} url=${playbackURL} startPositionMS=${startPositionMS} onProgress=${(video, played) => onPlaybackProgress?.(item, video, played)}/>` : html`<button class="play-button" onClick=${onPlay}><span>▶</span>${error || '播放视频'}</button>`) : kind === 'pdf' ? html`<iframe src=${contentURL} title=${item.name}></iframe>` : kind === 'text' ? (loading ? html`<div class="preview-message">正在读取文本…</div>` : error ? html`<div class="preview-message"><h2>无法预览文本</h2><p>${error}</p></div>` : html`<pre>${text}</pre>`) : html`<div class="preview-message"><div class="empty-icon"><${Icon} name="file" size=${30}/></div><h2>此格式没有内置预览</h2><p>仍可下载或管理这个文件。</p></div>`}
+        ${!item.available ? html`<div class="preview-message"><h2>文件当前不可用</h2><p>重新连接存储并扫描后即可查看。</p></div>` : kind === 'image' ? html`<img src=${contentURL} alt=${item.name}/>` : kind === 'audio' ? html`<audio src=${contentURL} controls preload="metadata"></audio>` : kind === 'video' ? (playbackURL ? html`<${VideoPlayer} url=${playbackURL}/>` : html`<button class="play-button" onClick=${onPlay}><span>▶</span>${error || '播放视频'}</button>`) : kind === 'pdf' ? html`<iframe src=${contentURL} title=${item.name}></iframe>` : kind === 'text' ? (loading ? html`<div class="preview-message">正在读取文本…</div>` : error ? html`<div class="preview-message"><h2>无法预览文本</h2><p>${error}</p></div>` : html`<pre>${text}</pre>`) : html`<div class="preview-message"><div class="empty-icon"><${Icon} name="file" size=${30}/></div><h2>此格式没有内置预览</h2><p>仍可下载或管理这个文件。</p></div>`}
       </section>
       <aside class="detail-facts"><h2>文件信息</h2>${facts.map(([label, value]) => html`<div key=${label}><span>${label}</span><strong>${value}</strong></div>`)}</aside>
     </div>
@@ -314,7 +312,6 @@ function App() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState('');
   const [playbackURL, setPlaybackURL] = useState('');
-  const [startPositionMS, setStartPositionMS] = useState(0);
   const [createFolderOpen, setCreateFolderOpen] = useState(false);
   const [folderName, setFolderName] = useState('');
   const [manageItem, setManageItem] = useState(null);
@@ -413,7 +410,6 @@ function App() {
     const session = playbackSessionRef.current;
     playbackSessionRef.current = null;
     setPlaybackURL('');
-    setStartPositionMS(0);
     if (session) fetch(`${API}/playback/sessions/${encodeURIComponent(session)}`, { method: 'DELETE', keepalive: true }).catch(() => {});
   }, []);
 
@@ -638,24 +634,12 @@ function App() {
       const playbackResult = await request(`${API}/playback/${encodeURIComponent(entry.id)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ containers: ['mp4', 'webm', 'ogg'], videoCodecs: ['h264', 'vp8', 'vp9', 'av1'], audioCodecs: ['aac', 'mp3', 'opus', 'vorbis'], hls: true }) });
       const match = playbackResult.url?.match(/\/playback\/sessions\/([^/]+)\//);
       if (match) playbackSessionRef.current = match[1];
-      const state = await request(`${API}/entries/${encodeURIComponent(entry.id)}/playback-state`).catch(() => null);
-      setStartPositionMS(state?.positionMs || 0);
       setPlaybackURL(playbackResult.url);
     } catch (reason) {
       setDetailError(reason.message || '无法开始播放');
     }
   };
 
-  const updatePlaybackProgress = (item, video, played) => {
-    if (!item.id || !Number.isFinite(video.currentTime)) return;
-    const now = Date.now();
-    if (!played && now - Number(video.dataset.savedAt || 0) < 5000) return;
-    video.dataset.savedAt = String(now);
-    fetch(`${API}/entries/${encodeURIComponent(item.id)}/playback-state`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, keepalive: true,
-      body: JSON.stringify({ positionMs: Math.round(video.currentTime * 1000), played }),
-    }).catch(() => {});
-  };
 
   const loadMediaCandidates = async (value = matchQuery) => {
     if (!entry) return;
@@ -971,7 +955,7 @@ function App() {
       ${error && html`<div class="error-banner" role="alert"><span>${error}</span><button onClick=${refresh}>重试</button></div>`}
 
       <section class="browser" aria-live="polite">
-        ${loading ? html`<${Skeleton}/>` : entry?.type === 'file' && !searchTerm ? html`<${FileDetail} item=${entry} media=${entryMedia} technical=${technicalMedia} text=${detailText} loading=${detailLoading} error=${detailError} playbackURL=${playbackURL} startPositionMS=${startPositionMS} onPlay=${startDetailPlayback} onPlaybackProgress=${updatePlaybackProgress} onManage=${() => openManage(entry)} onMatch=${openMatchDialog}/>` : items.length === 0 ? html`<${EmptyState} searchTerm=${searchTerm}/>` : view === 'list' ? html`
+        ${loading ? html`<${Skeleton}/>` : entry?.type === 'file' && !searchTerm ? html`<${FileDetail} item=${entry} media=${entryMedia} technical=${technicalMedia} text=${detailText} loading=${detailLoading} error=${detailError} playbackURL=${playbackURL} onPlay=${startDetailPlayback} onManage=${() => openManage(entry)} onMatch=${openMatchDialog}/>` : items.length === 0 ? html`<${EmptyState} searchTerm=${searchTerm}/>` : view === 'list' ? html`
           <div class="file-table" role="table" aria-label="文件">
             <div class="table-head" role="row"><span>名称</span><span>大小</span><span>修改时间</span><span></span></div>
             ${items.map((item) => html`<div key=${item.id} class="file-row" role="row">

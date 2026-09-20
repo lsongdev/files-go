@@ -61,12 +61,10 @@ func (p *Thumbnail) Process(ctx context.Context, entry model.Entry) error {
 
 func (p *Thumbnail) cached(ctx context.Context, entry model.Entry) bool {
 	for variant := range thumbnailVariants {
-		expected := thumbnailKey(entry, variant)
-		artifact, err := p.catalog.ArtifactForEntry(ctx, entry.ID, "thumbnail", variant)
-		if err != nil || artifact.Key != expected {
+		if ctx.Err() != nil {
 			return false
 		}
-		filename, err := ThumbnailPath(p.cacheDir, artifact.Key)
+		filename, err := ThumbnailPath(p.cacheDir, ThumbnailKey(entry, variant))
 		if err != nil {
 			return false
 		}
@@ -95,21 +93,12 @@ func (p *Thumbnail) writeVariants(ctx context.Context, entry model.Entry, imageV
 			return err
 		}
 		current = resized
-		key := thumbnailKey(entry, item.variant)
+		key := ThumbnailKey(entry, item.variant)
 		filename, err := ThumbnailPath(p.cacheDir, key)
 		if err != nil {
 			return err
 		}
 		if err := writeJPEG(filename, resized); err != nil {
-			return err
-		}
-		info, err := os.Stat(filename)
-		if err != nil {
-			return err
-		}
-		if _, err := p.catalog.UpsertArtifact(ctx, model.Artifact{
-			EntryID: entry.ID, Type: "thumbnail", Variant: item.variant, Key: key, MIME: "image/jpeg", Size: info.Size(),
-		}); err != nil {
 			return err
 		}
 	}
@@ -183,7 +172,9 @@ func (p *Thumbnail) sourceImage(ctx context.Context, entry model.Entry) (image.I
 	return imageValue, nil
 }
 
-func thumbnailKey(entry model.Entry, variant string) string {
+// ThumbnailKey identifies a size variant of the indexed file version. The
+// cache is derived from entries and needs no separate database record.
+func ThumbnailKey(entry model.Entry, variant string) string {
 	value := fmt.Sprintf("%s:%d:%d:thumbnail:%s", entry.ID, entry.ModifiedAt.UnixNano(), entry.Size, variant)
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])

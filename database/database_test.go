@@ -47,7 +47,7 @@ func TestFileCentricSchemaHasNoLegacyMediaTables(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for _, name := range []string{"media_items", "media_item_files", "media_files", "media_match_suppressions"} {
+	for _, name := range []string{"media_items", "media_item_files", "media_files", "media_match_suppressions", "artifacts", "maintenance_tasks", "playback_states"} {
 		var count int
 		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&count); err != nil {
 			t.Fatal(err)
@@ -55,12 +55,5 @@ func TestFileCentricSchemaHasNoLegacyMediaTables(t *testing.T) {
 		if count != 0 {
 			t.Fatalf("legacy table %s remains", name)
 		}
-	}
-	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('playback_states') WHERE name='entry_id'`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("playback must reference entry ID: count=%d err=%v", count, err)
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('artifacts') WHERE name='media_id'`).Scan(&count); err != nil || count != 0 {
-		t.Fatalf("artifact media_id remains: count=%d err=%v", count, err)
 	}
 }

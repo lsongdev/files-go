@@ -63,5 +63,24 @@ func Apply(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
+	// The squashed init is intentionally not a migration path for databases that
+	// stopped partway through the old 001–020 sequence. Reject those instead of
+	// silently treating their recorded 001 as the current schema.
+	for _, check := range []struct {
+		query string
+		want  int
+	}{
+		{`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('storages', 'libraries', 'library_sources', 'entries', 'entry_search', 'jobs', 'scan_checkpoints', 'medias')`, 8},
+		{`SELECT COUNT(*) FROM pragma_table_info('storages') WHERE name='scan_scope'`, 1},
+		{`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('media_files', 'media_items', 'media_item_files', 'media_match_suppressions')`, 0},
+	} {
+		var count int
+		if err := db.QueryRowContext(ctx, check.query).Scan(&count); err != nil {
+			return err
+		}
+		if count != check.want {
+			return fmt.Errorf("database schema is incomplete or from an unsupported pre-squash migration; rebuild the database from configured libraries")
+		}
+	}
 	return nil
 }
