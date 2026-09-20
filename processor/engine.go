@@ -54,6 +54,40 @@ func (p *pipeline) Name() string                 { return p.name }
 func (p *pipeline) Match(entry model.Entry) bool { return p.match(entry) }
 func (p *pipeline) Steps() []Processor           { return append([]Processor(nil), p.steps...) }
 
+// SelectPlugins applies the configured plugin order. An empty order enables
+// every available plugin in its declaration order; otherwise presence means
+// enabled and omission means disabled.
+func SelectPlugins(order []string, available ...Plugin) ([]Plugin, error) {
+	if len(order) == 0 {
+		return append([]Plugin(nil), available...), nil
+	}
+	byName := make(map[string]Plugin, len(available))
+	for _, plugin := range available {
+		if _, exists := byName[plugin.Name()]; exists {
+			return nil, fmt.Errorf("duplicate available plugin %q", plugin.Name())
+		}
+		byName[plugin.Name()] = plugin
+	}
+	selected := make([]Plugin, 0, len(order))
+	seen := make(map[string]bool, len(order))
+	for _, raw := range order {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			return nil, errors.New("plugin name cannot be empty")
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("duplicate plugin %q", name)
+		}
+		plugin, ok := byName[name]
+		if !ok {
+			return nil, fmt.Errorf("unknown plugin %q", name)
+		}
+		seen[name] = true
+		selected = append(selected, plugin)
+	}
+	return selected, nil
+}
+
 type Engine struct {
 	catalog     *catalog.Catalog
 	queue       *jobs.Queue
