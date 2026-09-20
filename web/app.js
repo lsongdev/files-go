@@ -213,15 +213,21 @@ function ThumbnailImage({ item, compact = false }) {
 function MediaHeader({ item, media, technical, actions }) {
   if (!media) return null;
   const metadata = mediaMetadata(media);
-  const details = [media.line1 || mediaTypeLabel(media.kind), media.line2, media.line3, durationLabel(technical?.durationMs)].filter(Boolean);
-  const overview = metadata.overview || metadata.description;
+  const lines = [media.line1 || mediaTypeLabel(media.kind), media.line2, media.line3].filter(Boolean);
+  const summary = media.summary || metadata.overview || metadata.description;
   const backdropURL = media.backdrop;
   const thumbnailURL = media.icon || item?.links?.thumbnail || '';
   return html`<section class="media-header">
     ${backdropURL && html`<div class="media-backdrop" style=${{ backgroundImage: `url(${backdropURL})` }}></div>`}
     <${MediaPoster} key=${`${item.id}:${thumbnailURL}`} media=${media} thumbnailURL=${thumbnailURL}/>
-    <div class="media-copy"><p>${details.join(' · ')}</p><h1>${media.title || item.name}</h1>${metadata.originalTitle && metadata.originalTitle !== media.title && html`<small>${metadata.originalTitle}</small>`}${overview && html`<div class="media-overview">${overview}</div>`}<div class="media-match">${media.matchLocked ? '手工锁定' : media.data?.local_nfo ? '来自本地 NFO' : media.data?.tmdb ? 'TMDB 已匹配' : media.data?.embedded ? '来自文件信息' : '根据文件名识别'}</div></div>
+    <div class="media-copy">
+      <h1>${media.title || item.name}</h1>
+      ${metadata.originalTitle && metadata.originalTitle !== media.title && html`<small>${metadata.originalTitle}</small>`}
+      ${lines.length > 0 && html`<div class="media-lines">${lines.map((line, index) => html`<p key=${index}>${line}</p>`)}</div>`}
+      <div class="media-match">${media.matchLocked ? '手工锁定' : media.data?.local_nfo ? '来自本地 NFO' : media.data?.tmdb ? 'TMDB 已匹配' : media.data?.embedded ? '来自文件信息' : '根据文件名识别'}</div>
+    </div>
     ${actions && html`<div class="media-actions">${actions}</div>`}
+    ${summary && html`<div class="media-summary">${summary}</div>`}
   </section>`;
 }
 
@@ -490,8 +496,12 @@ function App() {
     if (source) {
       await openEntry(source.entryId, { libraryID: library.id });
     } else {
+      ++entryRequestRef.current;
+      loadingMoreRef.current = false;
       setEntry(null);
       setItems([]);
+      setCursor(null);
+      setMoreLoading(false);
       setTrail([{ label: library.name }]);
       setError('资料库尚未完成首次扫描，请稍后刷新。');
       setNavOpen(false);
@@ -571,7 +581,10 @@ function App() {
     try {
       const data = await request(`${API}/entries/${encodeURIComponent(entryID)}/children?limit=100&after=${encodeURIComponent(after)}`);
       if (requestID !== entryRequestRef.current) return;
-      setItems((current) => [...current, ...(data.items || [])]);
+      setItems((current) => {
+        const seen = new Set(current.map((item) => item.id));
+        return [...current, ...(data.items || []).filter((item) => !seen.has(item.id))];
+      });
       setCursor(data.cursor || null);
     } catch (reason) {
       if (requestID === entryRequestRef.current) setError(reason.message || '无法加载更多文件');
@@ -599,20 +612,25 @@ function App() {
       if (entry) await openEntry(entry.id, { history: false, libraryID: activeLibraryID });
       return;
     }
+    const requestID = ++entryRequestRef.current;
+    loadingMoreRef.current = false;
     setLoading(true);
+    setMoreLoading(false);
     setError('');
+    setItems([]);
+    setCursor(null);
     try {
       const parameters = new URLSearchParams({ q: query, limit: '100' });
       if (activeLibraryID) parameters.set('library', activeLibraryID);
       const data = await request(`${API}/search?${parameters}`);
+      if (requestID !== entryRequestRef.current) return;
       setItems(data.items || []);
-      setCursor(null);
       setSearchQuery(query);
       setSearchTerm(query);
     } catch (reason) {
-      setError(reason.message || '搜索失败');
+      if (requestID === entryRequestRef.current) setError(reason.message || '搜索失败');
     } finally {
-      setLoading(false);
+      if (requestID === entryRequestRef.current) setLoading(false);
     }
   };
 
