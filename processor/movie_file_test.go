@@ -40,14 +40,13 @@ func TestMovieFileParsesFilenameBeforeTMDBAndOnlyWritesFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	item, err := cat.MediaForEntry(ctx, video.ID)
-	if err != nil || item.Kind != "movie" || item.Title != "Interstellar" || item.Year == nil || *item.Year != 2014 || item.Line1 != "电影 · 2014" {
+	if err != nil || item.Kind != "movie" || item.Title != "Interstellar" || item.Year == nil || *item.Year != 2014 || item.Line1 != "2014" {
 		t.Fatalf("video media = %#v, %v", item, err)
 	}
 	if _, err := cat.MediaForEntry(ctx, folder.ID); err == nil {
 		t.Fatal("video enrichment was copied to its parent directory")
 	}
 }
-
 
 func TestMovieDisplayKeepsSemanticAndReleaseDetails(t *testing.T) {
 	year := 2014
@@ -59,7 +58,7 @@ func TestMovieDisplayKeepsSemanticAndReleaseDetails(t *testing.T) {
 		Title: "星际穿越", OriginalTitle: "Interstellar", Year: &year, VoteAverage: 8.7,
 	}
 	line1, line2, line3 := MovieDisplay("movie", parsed, &candidate)
-	if line1 != "电影 · 2014" || line2 != "Interstellar" || line3 != "TMDB 8.7 · x264 · DTS" {
+	if line1 != "2014" || line2 != "Interstellar" || line3 != "TMDB 8.7 · x264 · DTS" {
 		t.Fatalf("movie lines = %q / %q / %q", line1, line2, line3)
 	}
 }

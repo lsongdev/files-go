@@ -16,15 +16,12 @@ func MovieDisplay(kind string, parsed MovieName, candidate *tmdb.Candidate) (str
 	if candidate != nil && candidate.Year != nil {
 		year = candidate.Year
 	}
-	line1 := map[string]string{"movie": "电影", "tv": "电视剧", "episode": "剧集"}[kind]
-	if line1 == "" {
-		line1 = "影视"
-	}
+	line1 := ""
 	if kind == "episode" && parsed.Season != nil && parsed.Episode != nil {
-		line1 += fmt.Sprintf(" · S%02dE%02d", *parsed.Season, *parsed.Episode)
+		line1 = fmt.Sprintf("S%02dE%02d", *parsed.Season, *parsed.Episode)
 	}
 	if year != nil {
-		line1 += " · " + strconv.Itoa(*year)
+		line1 = joinDisplay(line1, strconv.Itoa(*year))
 	}
 
 	releaseLine2 := joinDisplay(parsed.Release.Resolution, parsed.Release.Source)

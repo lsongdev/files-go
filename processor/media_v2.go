@@ -32,9 +32,9 @@ func writePhotoMedia(ctx context.Context, cat *catalog.Catalog, entry model.Entr
 	if err != nil {
 		return err
 	}
-	line1 := "照片"
+	line1 := ""
 	if parsed.Width != nil && parsed.Height != nil {
-		line1 = fmt.Sprintf("照片 · %d × %d", *parsed.Width, *parsed.Height)
+		line1 = fmt.Sprintf("%d × %d", *parsed.Width, *parsed.Height)
 	}
 	line3 := ""
 	if parsed.TakenAt != nil {
@@ -68,9 +68,6 @@ func writeBookMedia(ctx context.Context, cat *catalog.Catalog, entry model.Entry
 		title = fileStem(entry.Name)
 	}
 	line1 := strings.Join(details.Authors, "、")
-	if line1 == "" {
-		line1 = "电子书"
-	}
 	line2 := joinDisplay(details.Publisher, strings.ToUpper(details.Language))
 	candidate := catalog.MediaCandidate{
 		Kind: "book", Title: title, Line1: line1, Line2: line2, Line3: "EPUB",
@@ -99,9 +96,6 @@ func writePDFMedia(ctx context.Context, cat *catalog.Catalog, entry model.Entry,
 		title = fileStem(entry.Name)
 	}
 	line1 := strings.TrimSpace(details.Author)
-	if line1 == "" {
-		line1 = "PDF 文档"
-	}
 	line3Parts := []string{}
 	if details.PageCount > 0 {
 		line3Parts = append(line3Parts, fmt.Sprintf("%d 页", details.PageCount))
@@ -130,14 +124,13 @@ func writeAVMedia(ctx context.Context, cat *catalog.Catalog, entry model.Entry, 
 	candidate := catalog.MediaCandidate{Title: fileStem(entry.Name)}
 	if parsed.Kind == "audio" {
 		candidate.Kind = "audio"
-		candidate.Line1 = "音乐"
 		if music, ok := raw["music"].(map[string]any); ok {
 			if title := stringValue(music["title"]); title != "" {
 				candidate.Title = title
 			}
 			artist := firstDisplay(stringValue(music["artist"]), stringValue(music["album_artist"]))
 			album := stringValue(music["album"])
-			candidate.Line1 = firstDisplay(artist, "音乐")
+			candidate.Line1 = artist
 			candidate.Line2 = album
 			candidate.Line3 = joinDisplay(
 				trackLabel(stringValue(music["track"])),
@@ -151,9 +144,8 @@ func writeAVMedia(ctx context.Context, cat *catalog.Catalog, entry model.Entry, 
 		}
 	} else if parsed.Kind == "video" {
 		candidate.Kind = "video"
-		candidate.Line1 = "视频"
 		if parsed.Width != nil && parsed.Height != nil {
-			candidate.Line1 = fmt.Sprintf("视频 · %d × %d", *parsed.Width, *parsed.Height)
+			candidate.Line1 = fmt.Sprintf("%d × %d", *parsed.Width, *parsed.Height)
 		}
 		candidate.Line2 = joinDisplay(strings.ToUpper(parsed.VideoCodec), strings.ToUpper(parsed.AudioCodec))
 		candidate.Line3 = joinDisplay(compactDuration(parsed.DurationMS), displayContainer(parsed.Container))
@@ -255,4 +247,3 @@ func isDirectoryArtwork(name string) bool {
 	}
 	return false
 }
-
