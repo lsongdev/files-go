@@ -111,6 +111,24 @@ func TestListAndGridBothRenderAvailableThumbnails(t *testing.T) {
 	}
 }
 
+func TestFileListsRenderAllMediaDisplayLines(t *testing.T) {
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	body := response.Body.String()
+	for _, expected := range []string{
+		"function entryDisplayLines(item)",
+		"item.media.line1 || mediaTypeLabel(item.media.kind)",
+		"item.media.line2",
+		"item.media.line3",
+		"entryDisplayLines(item).map",
+		"class=\"card-lines\"",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("app.js does not render media display line marker %q", expected)
+		}
+	}
+}
+
 func TestEntryRoutesKeepStableIDAndReadablePath(t *testing.T) {
 	response := httptest.NewRecorder()
 	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
