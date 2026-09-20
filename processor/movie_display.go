@@ -27,22 +27,18 @@ func MovieDisplay(kind string, parsed MovieName, candidate *tmdb.Candidate) (str
 		line1 += " · " + strconv.Itoa(*year)
 	}
 
-	line2 := ""
-	line3 := ""
+	releaseLine2 := joinDisplay(parsed.Release.Resolution, parsed.Release.Source)
+	releaseLine3 := joinDisplay(parsed.Release.VideoCodec, parsed.Release.AudioCodec, parsed.Release.Version)
+	line2 := releaseLine2
+	line3 := releaseLine3
 	if candidate != nil {
 		original := strings.TrimSpace(candidate.OriginalTitle)
 		if original != "" && !strings.EqualFold(original, strings.TrimSpace(candidate.Title)) {
 			line2 = original
 		}
 		if candidate.VoteAverage > 0 {
-			line3 = fmt.Sprintf("TMDB %.1f", candidate.VoteAverage)
+			line3 = joinDisplay(fmt.Sprintf("TMDB %.1f", candidate.VoteAverage), releaseLine3)
 		}
-	}
-	if line2 == "" {
-		line2 = joinDisplay(parsed.Release.Resolution, parsed.Release.Source)
-	}
-	if line3 == "" {
-		line3 = joinDisplay(parsed.Release.VideoCodec, parsed.Release.AudioCodec, parsed.Release.Version)
 	}
 	return line1, line2, line3
 }
