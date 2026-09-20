@@ -114,19 +114,21 @@ func (s *Server) setEntryMediaV2(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "media_provider_error", "media metadata provider request failed")
 		return
 	}
+	parsed := processor.ParseMovieName(entry.Name)
 	kind := input.CandidateType
-	if entry.Type == model.EntryFile && kind == "tv" {
-		parsed := processor.ParseMovieName(entry.Name)
-		if parsed.Season != nil && parsed.Episode != nil {
-			kind = "episode"
-		}
+	if entry.Type == model.EntryFile && kind == "tv" && parsed.Season != nil && parsed.Episode != nil {
+		kind = "episode"
 	}
 	data, err := json.Marshal(item)
 	if err != nil {
 		s.internalError(w, err)
 		return
 	}
-	candidate := catalog.MediaCandidate{Kind: kind, Title: item.Title, Year: item.Year, Summary: strings.TrimSpace(item.Overview), Data: data}
+	line1, line2, line3 := processor.MovieDisplay(kind, parsed, &item)
+	candidate := catalog.MediaCandidate{
+		Kind: kind, Title: item.Title, Year: item.Year, Line1: line1, Line2: line2, Line3: line3,
+		Summary: strings.TrimSpace(item.Overview), Data: data,
+	}
 	resolved, err := s.catalog.SetMediaCandidate(r.Context(), entry.ID, "manual", candidate)
 	if err != nil {
 		s.internalError(w, err)
