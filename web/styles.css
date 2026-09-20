@@ -221,7 +221,7 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .file-table { border: 1px solid var(--line); border-radius: 0.85rem; overflow: hidden; background: var(--panel); }
 .table-head { display: grid; grid-template-columns: minmax(16rem, 1fr) 8rem 11rem 2.5rem; align-items: center; }
 .table-head { min-height: 2.65rem; padding: 0 1rem; border-bottom: 1px solid var(--line); color: var(--muted-2); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; }
-.file-row { width: 100%; min-height: 4rem; display: grid; grid-template-columns: minmax(0, 1fr) 2.5rem; align-items: center; padding: 0 0.5rem 0 1rem; border-bottom: 1px solid var(--line-soft); }
+.file-row { width: 100%; min-height: 5rem; display: grid; grid-template-columns: minmax(0, 1fr) 2.5rem; align-items: center; padding: 0 0.5rem 0 1rem; border-bottom: 1px solid var(--line-soft); }
 .file-row:last-child { border-bottom: 0; }
 .file-row:hover { background: var(--panel-hover); }
 .file-main { min-width: 0; height: 100%; display: grid; grid-template-columns: minmax(16rem, 1fr) 8rem 11rem; align-items: center; overflow: hidden; padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; }
@@ -240,15 +240,15 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .list-thumbnail.pending img { opacity: 0; }
 .list-thumbnail.pending i, .list-thumbnail.failed i { display: grid; }
 .list-thumbnail.failed img { display: none; }
-.name-cell > span { min-width: 0; display: grid; gap: 0.18rem; overflow: hidden; }
+.name-cell > span { min-width: 0; display: grid; gap: 0.12rem; overflow: hidden; }
 .name-cell strong { overflow: hidden; font-size: 0.9rem; font-weight: 570; text-overflow: ellipsis; white-space: nowrap; }
-.name-cell small { min-width: 0; overflow: hidden; color: var(--muted-2); font-size: 0.7rem; text-overflow: ellipsis; white-space: nowrap; }
+.name-cell small { min-width: 0; overflow: hidden; color: var(--muted-2); font-size: 0.7rem; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
 .name-cell em, .file-card em { margin-left: 0.4rem; padding: 0.18rem 0.4rem; border-radius: 1rem; color: var(--unavailable-text); background: var(--unavailable-bg); font-size: 0.68rem; font-style: normal; }
 .size-cell, .date-cell { color: var(--muted); font: 0.78rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
 .file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: 0.75rem; }
-.file-card { position: relative; min-width: 0; min-height: 9.5rem; overflow: hidden; border: 1px solid var(--line); border-radius: 0.8rem; background: var(--panel); }
+.file-card { position: relative; min-width: 0; min-height: 11rem; overflow: hidden; border: 1px solid var(--line); border-radius: 0.8rem; background: var(--panel); }
 .file-card:hover { transform: translateY(-1px); border-color: var(--card-hover-border); background: var(--panel-hover); }
-.card-main { width: 100%; min-height: 9.5rem; display: flex; flex-direction: column; align-items: flex-start; padding: 1rem; border: 0; background: transparent; text-align: left; cursor: pointer; }
+.card-main { width: 100%; min-height: 11rem; display: flex; flex-direction: column; align-items: flex-start; padding: 1rem; border: 0; background: transparent; text-align: left; cursor: pointer; }
 .card-action { position: absolute; top: 0.65rem; right: 0.65rem; }
 .card-icon { width: 3rem; height: 3rem; display: grid; place-items: center; margin-bottom: 1.1rem; border-radius: 0.7rem; color: var(--document-text); background: var(--document-bg); }
 .card-icon.directory { color: var(--folder-text); background: var(--folder-bg); }
@@ -263,7 +263,8 @@ button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .card-thumbnail.failed img { display: none; }
 .card-thumbnail.failed i { display: block; }
 .file-card strong { width: 100%; overflow: hidden; font-size: 0.86rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.file-card small { margin-top: 0.25rem; color: var(--muted-2); font-size: 0.72rem; }
+.card-lines { width: 100%; display: grid; gap: 0.16rem; margin-top: 0.35rem; }
+.file-card small { min-width: 0; overflow: hidden; color: var(--muted-2); font-size: 0.72rem; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
 .file-card em { margin: 0.5rem 0 0; }
 .load-more { display: flex; justify-content: center; padding: 1.5rem 0 0; }
 .load-more button { display: flex; align-items: center; gap: 0.5rem; padding: 0.65rem 1rem; border: 1px solid var(--line); border-radius: 0.6rem; background: var(--panel); cursor: pointer; }
