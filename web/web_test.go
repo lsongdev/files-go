@@ -14,7 +14,7 @@ func TestHandlerServesAssetsAndHistoryFallback(t *testing.T) {
 		contains    string
 	}{
 		{path: "/", contentType: "text/html", contains: "type=\"module\""},
-		{path: "/files/0199-example", contentType: "text/html", contains: `<div id="app">`},
+		{path: "/files/0199-example/Movies/Arrival%20(2016)/Arrival.mkv", contentType: "text/html", contains: `<div id="app">`},
 		{path: "/app.js", contentType: "text/javascript", contains: "standalone.module.js"},
 		{path: "/styles.css", contentType: "text/css", contains: "--blue:"},
 	}
@@ -107,6 +107,17 @@ func TestListAndGridBothRenderAvailableThumbnails(t *testing.T) {
 	for _, expected := range []string{".list-thumbnail", ".list-thumbnail.poster", ".card-thumbnail.poster", "aspect-ratio: 2 / 3", ".card-thumbnail.square", "aspect-ratio: 1"} {
 		if !strings.Contains(styles, expected) {
 			t.Fatalf("styles.css does not include media-aware thumbnail styling %q", expected)
+		}
+	}
+}
+
+func TestEntryRoutesKeepStableIDAndReadablePath(t *testing.T) {
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/app.js", nil))
+	body := response.Body.String()
+	for _, expected := range []string{"function entryRoute(id, trail = [])", ".map((item) => item.name)", "replaceState({ ...window.history.state, ...state }", "/^\\/files\\/([^/]+)(?:\\/|$)/"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("app.js does not contain readable route marker %q", expected)
 		}
 	}
 }
