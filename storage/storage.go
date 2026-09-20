@@ -51,6 +51,12 @@ type NativeRooter interface {
 	NativeRoot() string
 }
 
+// Verifier is an optional capability for backends that can confirm the
+// configured root still refers to the expected storage device.
+type Verifier interface {
+	Verify(context.Context) error
+}
+
 type Registry struct {
 	items map[string]Storage
 }

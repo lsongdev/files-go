@@ -45,3 +45,21 @@ func TestLoadConfigReadsTMDBTokenFileWhenEnvironmentIsEmpty(t *testing.T) {
 		t.Fatalf("TMDB token = %q", cfg.Media.TMDB.Token)
 	}
 }
+
+func TestLoadConfigExpandsAuthTokens(t *testing.T) {
+	previous := ConfigDir
+	ConfigDir = t.TempDir()
+	t.Cleanup(func() { ConfigDir = previous })
+	t.Setenv("FILES_GO_ADMIN_TOKEN", "admin-secret")
+	data := []byte("auth:\n  tokens:\n    - name: admin\n      token: ${FILES_GO_ADMIN_TOKEN}\n      role: admin\nstorages: []\nlibraries: []\n")
+	if err := os.WriteFile(filepath.Join(ConfigDir, "config.yaml"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Auth.Tokens) != 1 || cfg.Auth.Tokens[0].Token != "admin-secret" || cfg.Auth.Tokens[0].Role != "admin" {
+		t.Fatalf("auth config = %#v", cfg.Auth)
+	}
+}

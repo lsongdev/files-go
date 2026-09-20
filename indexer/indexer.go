@@ -330,7 +330,7 @@ func (i *Indexer) Scan(ctx context.Context, storageID string) error {
 		state := "error"
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			state = "interrupted"
-		} else if errors.Is(err, storage.ErrOffline) || errors.Is(err, storage.ErrNotFound) {
+		} else if errors.Is(err, storage.ErrOffline) {
 			state = "offline"
 		}
 		if failErr := i.catalog.FailScan(context.WithoutCancel(ctx), storageID, state, err.Error()); failErr != nil {
@@ -417,6 +417,15 @@ func (i *Indexer) scanDirectory(ctx context.Context, backend storage.Storage, st
 	for index := range entries {
 		if entries[index].Type == model.EntryDirectory {
 			if err := i.scanDirectory(ctx, backend, storageID, &entries[index], generation, progress); err != nil {
+				if errors.Is(err, storage.ErrNotFound) {
+					if markErr := i.catalog.MarkEntryTreeUnavailable(ctx, entries[index]); markErr != nil {
+						return markErr
+					}
+					if reconcileErr := i.reconcileRemovedEntry(ctx, entries[index]); reconcileErr != nil {
+						return reconcileErr
+					}
+					continue
+				}
 				return err
 			}
 		}

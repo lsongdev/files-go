@@ -94,8 +94,8 @@ func TestScanGenerationRenameAndOffline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("offline scan removed catalog entry: %v", err)
 	}
-	if c.Available {
-		t.Fatal("offline entry should be reported unavailable")
+	if !c.Available {
+		t.Fatal("storage outage must not mark a present catalog entry missing")
 	}
 	state, err := cat.Storage(ctx, "disk")
 	if err != nil {
@@ -103,6 +103,66 @@ func TestScanGenerationRenameAndOffline(t *testing.T) {
 	}
 	if state.State != "offline" {
 		t.Fatalf("storage state = %q, want offline", state.State)
+	}
+}
+
+
+func TestHardLinksRemainDistinctAcrossReconciliation(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	original := filepath.Join(root, "a.txt")
+	linked := filepath.Join(root, "b.txt")
+	if err := os.WriteFile(original, []byte("same inode"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(original, linked); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	db, err := database.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := catalog.New(db)
+	if err := cat.RegisterStorage(ctx, "disk", "Disk", "local"); err != nil {
+		t.Fatal(err)
+	}
+	backend, err := storage.NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := storage.NewRegistry()
+	if err := registry.Add("disk", backend); err != nil {
+		t.Fatal(err)
+	}
+	idx := New(cat, registry)
+	if err := idx.Scan(ctx, "disk"); err != nil {
+		t.Fatal(err)
+	}
+	firstA, err := cat.EntryByPath(ctx, "disk", "a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstB, err := cat.EntryByPath(ctx, "disk", "b.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstA.ID == firstB.ID {
+		t.Fatal("hard links collapsed into one entry")
+	}
+	if err := idx.Scan(ctx, "disk"); err != nil {
+		t.Fatal(err)
+	}
+	secondA, err := cat.EntryByPath(ctx, "disk", "a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondB, err := cat.EntryByPath(ctx, "disk", "b.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondA.ID != firstA.ID || secondB.ID != firstB.ID {
+		t.Fatalf("hard-link IDs changed: a %s->%s b %s->%s", firstA.ID, secondA.ID, firstB.ID, secondB.ID)
 	}
 }
 

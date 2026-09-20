@@ -109,6 +109,10 @@ func (s *Server) startPlayback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "media_not_found", "entry or media metadata not found")
 		return
 	}
+	if errors.Is(err, storage.ErrOffline) {
+		writeError(w, http.StatusServiceUnavailable, "storage_offline", "storage is offline")
+		return
+	}
 	if err != nil {
 		s.internalError(w, err)
 		return
@@ -954,8 +958,19 @@ func (s *Server) responsesFor(ctx context.Context, entries []model.Entry) ([]ent
 		return nil, err
 	}
 	result := make([]entryResponse, len(entries))
+	storageOnline := make(map[string]bool)
 	for index, entry := range entries {
+		online, known := storageOnline[entry.StorageID]
+		if !known {
+			state, err := s.catalog.Storage(ctx, entry.StorageID)
+			if err != nil {
+				return nil, err
+			}
+			online = state.State != "offline"
+			storageOnline[entry.StorageID] = online
+		}
 		result[index] = responseFor(entry)
+		result[index].Available = entry.Available && online
 		if item, ok := media[entry.ID]; ok {
 			view := mediaView(item)
 			result[index].Media = &view
@@ -1121,7 +1136,11 @@ func (s *Server) content(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	file, err := backend.Open(r.Context(), entry.Path)
-	if errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrOffline) {
+	if errors.Is(err, storage.ErrOffline) {
+		writeError(w, http.StatusServiceUnavailable, "storage_offline", "storage is offline")
+		return
+	}
+	if errors.Is(err, storage.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "file_not_found", "file not found")
 		return
 	}
@@ -1180,7 +1199,11 @@ func (s *Server) text(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	file, err := backend.Open(r.Context(), entry.Path)
-	if errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrOffline) {
+	if errors.Is(err, storage.ErrOffline) {
+		writeError(w, http.StatusServiceUnavailable, "storage_offline", "storage is offline")
+		return
+	}
+	if errors.Is(err, storage.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "file_not_found", "file not found")
 		return
 	}
