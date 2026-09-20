@@ -24,11 +24,12 @@ import (
 	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/indexer"
 	"github.com/lsongdev/files-go/jobs"
-	mediaengine "github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/model"
 	"github.com/lsongdev/files-go/playback"
+	"github.com/lsongdev/files-go/plugins"
 	"github.com/lsongdev/files-go/processor"
 	"github.com/lsongdev/files-go/storage"
+	"github.com/lsongdev/files-go/tmdb"
 )
 
 type Server struct {
@@ -41,9 +42,9 @@ type Server struct {
 	cacheDir string
 	playback *playback.Manager
 	jobQueue *jobs.Queue
-	provider mediaengine.MetadataProvider
+	provider tmdb.Provider
 	language string
-	artwork  *mediaengine.Artwork
+	artwork  *tmdb.Artwork
 }
 
 func New(ctx context.Context, catalog *catalog.Catalog, storages *storage.Registry, indexer *indexer.Indexer, logger *log.Logger, cacheDir string, managers ...*playback.Manager) *Server {
@@ -58,9 +59,9 @@ func New(ctx context.Context, catalog *catalog.Catalog, storages *storage.Regist
 func (s *Server) Handler() http.Handler { return s.mux }
 
 func (s *Server) SetJobQueue(queue *jobs.Queue) { s.jobQueue = queue }
-func (s *Server) SetMediaProvider(provider mediaengine.MetadataProvider, language string) {
+func (s *Server) SetMediaProvider(provider tmdb.Provider, language string) {
 	s.provider, s.language = provider, language
-	s.artwork = mediaengine.NewArtwork(s.catalog, s.cacheDir, nil)
+	s.artwork = tmdb.NewArtwork(s.catalog, s.cacheDir, nil)
 }
 
 func (s *Server) routes() {
@@ -259,7 +260,7 @@ func (s *Server) serveMediaImage(w http.ResponseWriter, r *http.Request, field s
 			http.NotFound(w, r)
 			return
 		}
-		filename, err := mediaengine.ArtifactPath(s.cacheDir, "posters", base, extension)
+		filename, err := tmdb.ArtifactPath(s.cacheDir, "posters", base, extension)
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -793,7 +794,7 @@ func (s *Server) systemStatus(w http.ResponseWriter, r *http.Request) {
 	stats := jobs.Stats{}
 	var err error
 	if s.jobQueue != nil {
-		stats, err = s.jobQueue.Stats(r.Context(), processor.JobProcessEntry)
+		stats, err = s.jobQueue.Stats(r.Context(), plugins.JobProcessEntry)
 	}
 	if err != nil {
 		s.internalError(w, err)
@@ -807,7 +808,7 @@ func (s *Server) systemFailures(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": []jobs.FailureGroup{}})
 		return
 	}
-	groups, err := s.jobQueue.FailureGroups(r.Context(), processor.JobProcessEntry, 30)
+	groups, err := s.jobQueue.FailureGroups(r.Context(), plugins.JobProcessEntry, 30)
 	if err != nil {
 		s.internalError(w, err)
 		return
