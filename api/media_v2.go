@@ -7,8 +7,9 @@ import (
 	"strings"
 
 	"github.com/lsongdev/files-go/catalog"
-	mediaengine "github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/model"
+	"github.com/lsongdev/files-go/processor"
+	"github.com/lsongdev/files-go/tmdb"
 )
 
 func (s *Server) getEntryMediaV2(w http.ResponseWriter, r *http.Request) {
@@ -60,7 +61,7 @@ func (s *Server) searchMediaCandidatesV2(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid_request", "q must not exceed 200 characters")
 		return
 	}
-	parsed := mediaengine.ParseName(entry.Name)
+	parsed := processor.ParseMovieName(entry.Name)
 	if query == "" {
 		query = parsed.Title
 	}
@@ -73,7 +74,7 @@ func (s *Server) searchMediaCandidatesV2(w http.ResponseWriter, r *http.Request)
 		s.internalError(w, err)
 		return
 	}
-	results, err := s.provider.Search(r.Context(), mediaengine.Query{Type: kind, Title: query, Year: parsed.Year, Language: s.language})
+	results, err := s.provider.Search(r.Context(), tmdb.Query{Type: kind, Title: query, Year: parsed.Year, Language: s.language})
 	if err != nil {
 		s.logger.Printf("search media candidates %s: %v", entry.ID, err)
 		writeError(w, http.StatusBadGateway, "media_provider_error", "media metadata provider request failed")
@@ -115,7 +116,7 @@ func (s *Server) setEntryMediaV2(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := input.CandidateType
 	if entry.Type == model.EntryFile && kind == "tv" {
-		parsed := mediaengine.ParseName(entry.Name)
+		parsed := processor.ParseMovieName(entry.Name)
 		if parsed.Season != nil && parsed.Episode != nil {
 			kind = "episode"
 		}
