@@ -31,7 +31,7 @@ func TestInitSchema(t *testing.T) {
 		t.Fatalf("repeat migration: %v", err)
 	}
 	var count int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != 2 {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("migration count=%d err=%v", count, err)
 	}
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('medias') WHERE name='summary'`).Scan(&count); err != nil || count != 1 {

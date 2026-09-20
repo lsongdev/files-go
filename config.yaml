@@ -6,6 +6,9 @@ data: ""
 
 processing:
   workers: 2
+  # Presence means enabled; list order is processing order.
+  # Omit plugins entirely to use this built-in order.
+  plugins: [image, video, movies, music, ebook, document]
   ffprobe: ffprobe
   ffmpeg: ffmpeg
   pdfinfo: pdfinfo

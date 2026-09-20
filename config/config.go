@@ -48,12 +48,13 @@ type TMDB struct {
 }
 
 type Processing struct {
-	Workers    int    `yaml:"workers"`
-	WatchLimit int    `yaml:"watch_limit,omitempty"`
-	FFProbe    string `yaml:"ffprobe"`
-	FFmpeg     string `yaml:"ffmpeg"`
-	PDFInfo    string `yaml:"pdfinfo"`
-	PDFToPPM   string `yaml:"pdftoppm"`
+	Workers    int      `yaml:"workers"`
+	WatchLimit int      `yaml:"watch_limit,omitempty"`
+	Plugins    []string `yaml:"plugins,omitempty"`
+	FFProbe    string   `yaml:"ffprobe"`
+	FFmpeg     string   `yaml:"ffmpeg"`
+	PDFInfo    string   `yaml:"pdfinfo"`
+	PDFToPPM   string   `yaml:"pdftoppm"`
 }
 
 type Library struct {

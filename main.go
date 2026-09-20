@@ -101,15 +101,24 @@ func main() {
 	directoryEnricher := media.NewDirectoryEnricherWithProvider(cat, registry, provider, cfg.Media.TMDB.Language)
 	artwork := media.NewArtwork(cat, cfg.CacheDir, nil)
 	directoryEnricher.SetArtwork(artwork)
-	idx.SetRemovedEntryReconciler(directoryEnricher.Process)
-	processing := processor.New(cat, queue,
+	plugins, err := processor.SelectPlugins(cfg.Processing.Plugins,
 		enrichment.Image(cat, registry, thumbnailer),
+		enrichment.Video(cat, registry, thumbnailer, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
+		enrichment.Movies(videoEnricher, directoryEnricher, artwork),
+		enrichment.Music(cat, registry, thumbnailer, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
 		enrichment.Ebook(cat, registry, thumbnailer),
 		enrichment.Document(cat, registry, thumbnailer, cfg.CacheDir, cfg.Processing.PDFInfo, cfg.Processing.PDFToPPM),
-		enrichment.Audio(cat, registry, thumbnailer, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
-		enrichment.Video(cat, registry, thumbnailer, videoEnricher, artwork, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
-		enrichment.Sidecar(directoryEnricher),
 	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, plugin := range plugins {
+		if plugin.Name() == "movies" {
+			idx.SetRemovedEntryReconciler(directoryEnricher.Process)
+			break
+		}
+	}
+	processing := processor.New(cat, queue, plugins...)
 	idx.SetEntrySink(processing)
 	workerPool := jobs.NewPool(queue, cfg.Processing.Workers)
 	workerPool.Handle(processor.JobProcessEntry, processing.Handle)
