@@ -48,7 +48,7 @@ func main() {
 	cat := catalog.NewWithReader(db, readerDB)
 	registry := storage.NewRegistry()
 	for _, item := range cfg.Storages {
-		backend, err := storage.NewLocal(item.Path)
+		backend, err := storage.NewLocalWithDevice(item.Path, item.DeviceUUID)
 		if err != nil {
 			log.Fatalf("configure storage %s: %v", item.ID, err)
 		}
