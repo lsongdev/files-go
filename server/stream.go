@@ -27,7 +27,8 @@ func directVideo(f store.File, m media.Meta) bool {
 
 // stream remuxes or transcodes a media file with ffmpeg into fragmented MP4
 // written straight to the response. Seeking restarts the stream at ?t=sec.
-// H.264 video is copied; anything else is transcoded to 1080p H.264.
+// Codecs browsers decode are copied (cheap even for 8K); others, or all with
+// ?transcode=1 (the player's fallback), become 1080p H.264 and AAC.
 func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	f, ok := s.lookup(w, r)
 	if !ok {
@@ -50,6 +51,7 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m := meta(f)
+	transcode := r.URL.Query().Get("transcode") == "1"
 	start, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
 	args := []string{"-v", "error", "-nostdin"}
 	if start > 0 {
@@ -62,19 +64,22 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 		args = append(args, "-map", "0:a:0", "-vn")
 	} else {
 		args = append(args, "-map", "0:v:0", "-map", "0:a:0?")
-		if m.Video == "h264" {
+		switch {
+		case !transcode && (m.Video == "h264" || m.Video == "vp9" || m.Video == "av1"):
 			args = append(args, "-c:v", "copy")
-		} else {
+		case !transcode && m.Video == "hevc":
+			args = append(args, "-c:v", "copy", "-tag:v", "hvc1")
+		default:
 			args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-				"-vf", "scale=-2:'min(1080,ih)'")
+				"-g", "48", "-vf", "scale=-2:'min(1080,ih)'")
 		}
 	}
-	if m.Audio == "aac" {
+	if !transcode && (m.Audio == "aac" || m.Audio == "mp3" || m.Audio == "opus") {
 		args = append(args, "-c:a", "copy")
 	} else {
 		args = append(args, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
 	}
-	args = append(args, "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "pipe:1")
+	args = append(args, "-strict", "-2", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "pipe:1")
 
 	cmd := exec.CommandContext(r.Context(), s.cfg.FFmpeg, args...)
 	stdout, err := cmd.StdoutPipe()

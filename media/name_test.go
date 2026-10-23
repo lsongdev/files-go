@@ -61,6 +61,9 @@ func TestMatchScore(t *testing.T) {
 	if s := matchScore("The Last of Us", 0, []string{"最后生还者", "The Last of Us"}, 2023); s < .8 {
 		t.Errorf("alias match = %v", s)
 	}
+	if s := matchScore("Amelie", 0, []string{"Amélie"}, 2001); s < .8 {
+		t.Errorf("accented title = %v", s)
+	}
 	if s := matchScore("Dune", 2021, []string{"Dune"}, 1984); s >= .8 {
 		t.Errorf("wrong year accepted: %v", s)
 	}

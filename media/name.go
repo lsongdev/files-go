@@ -106,7 +106,14 @@ func firstMatch(re *regexp.Regexp, s string) string {
 
 var nonWord = regexp.MustCompile(`[^\pL\pN]+`)
 
-func normalize(s string) string { return nonWord.ReplaceAllString(strings.ToLower(s), "") }
+var accents = strings.NewReplacer("à", "a", "á", "a", "â", "a", "ã", "a", "ä", "a", "å", "a", "ç", "c", "è", "e", "é", "e", "ê", "e", "ë", "e",
+	"ì", "i", "í", "i", "î", "i", "ï", "i", "ñ", "n", "ò", "o", "ó", "o", "ô", "o", "õ", "o", "ö", "o", "ø", "o", "ù", "u", "ú", "u", "û", "u", "ü", "u", "ý", "y", "ÿ", "y")
+
+// normalize compares titles by letters and digits only, ignoring case and
+// common Latin accents ("Amélie" matches "Amelie").
+func normalize(s string) string {
+	return nonWord.ReplaceAllString(accents.Replace(strings.ToLower(s)), "")
+}
 
 // matchScore rates how well a candidate title/year fits the parsed name.
 // 0.8 is an exact normalized title match; the year adds or subtracts.
