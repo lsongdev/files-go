@@ -104,14 +104,26 @@ function Listing({ items, view, onOpen }) {
 }
 
 // Playback falls back step by step when the browser cannot decode a mode:
-// the original file, then a remux to MP4, then a full transcode. Codecs the
-// browser reports as unsupported skip straight to transcoding.
+// the original file, then an HLS remux, then an HLS transcode. Codecs the
+// browser says it cannot play skip ahead. Safari plays HLS natively; other
+// browsers load hls.js on demand.
 const PLAY_MODES = ['direct', 'stream', 'transcode'];
+const HLS_JS = 'https://unpkg.com/hls.js@1.6.13/dist/hls.mjs';
 const CODEC_TYPES = { h264: 'avc1.640028', hevc: 'hvc1.1.6.L120.90', vp9: 'vp09.00.40.08', av1: 'av01.0.08M.08' };
+const CONTAINER_TYPES = { mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm' };
+const probe = document.createElement('video');
+const canPlay = (type) => probe.canPlayType(type) !== '';
+// Apple's own HLS player is the most capable on Safari and iOS; elsewhere
+// (Chrome's newer built-in HLS stalls on growing playlists) use hls.js.
+const nativeHLS = /Apple/.test(navigator.vendor) && canPlay('application/vnd.apple.mpegurl');
+
 function initialMode(item) {
+  if (item.kind !== 'video') return item.play;
   const codec = CODEC_TYPES[item.meta?.video];
-  const supported = !codec || !window.MediaSource || MediaSource.isTypeSupported(`video/mp4; codecs="${codec}"`);
-  return supported || item.kind !== 'video' ? item.play : 'transcode';
+  if (codec && !canPlay(`video/mp4; codecs="${codec}"`)) return 'transcode';
+  const container = CONTAINER_TYPES[item.name.split('.').pop().toLowerCase()];
+  if (item.play === 'direct' && container && !canPlay(container)) return 'stream';
+  return item.play;
 }
 
 // Streams restart at an offset, so subtitle cues are shifted to match.
@@ -122,29 +134,64 @@ function shiftCues(track, offset) {
 
 function Player({ item }) {
   const m = item.meta || {};
+  const ref = useRef(null);
+  const usingHlsJS = useRef(false); // hls.js reports its own errors
   const [mode, setMode] = useState(() => initialMode(item));
   const [offset, setOffset] = useState(0);
   const [time, setTime] = useState(0);
   const [tracks, setTracks] = useState([]);
+  const [status, setStatus] = useState('');
+  const fallback = useCallback(() => {
+    const next = PLAY_MODES[PLAY_MODES.indexOf(mode) + 1];
+    if (!next) { setStatus('这个文件在当前浏览器里无法播放'); return; }
+    setOffset((o) => o + Math.floor(ref.current?.currentTime || 0));
+    setTime(0);
+    setMode(next);
+  }, [mode]);
   useEffect(() => {
     if (item.kind !== 'video') return;
     api(`/api/files/${item.id}/subtitles`).then((data) => setTracks(data.items || [])).catch(() => {});
   }, [item.id]);
-  const src = mode === 'direct' ? `/api/files/${item.id}/raw` : `/api/files/${item.id}/stream?t=${offset}${mode === 'transcode' ? '&transcode=1' : ''}`;
-  const fallback = (e) => {
-    const next = PLAY_MODES[PLAY_MODES.indexOf(mode) + 1];
-    if (next && e.target.error?.code !== 1) { setTime(0); setOffset(Math.floor(e.target.currentTime || 0) + offset); setMode(next); }
-  };
+  useEffect(() => {
+    const video = ref.current;
+    let live = true;
+    let hls;
+    setStatus('');
+    if (mode === 'direct') {
+      video.src = `/api/files/${item.id}/raw`;
+    } else {
+      setStatus(mode === 'transcode' ? '正在准备转码…' : '正在准备…');
+      api(`/api/files/${item.id}/play?t=${offset}${mode === 'transcode' ? '&transcode=1' : ''}`).then(async ({ url }) => {
+        if (!live) return;
+        if (nativeHLS) {
+          video.src = url;
+        } else {
+          const { default: Hls } = await import(HLS_JS);
+          if (!live) return;
+          hls = new Hls({ enableWorker: false });
+          usingHlsJS.current = true;
+          hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal && live) fallback(); });
+          hls.loadSource(url);
+          hls.attachMedia(video);
+        }
+        setStatus('');
+        video.play().catch(() => {});
+      }).catch((e) => { if (live) { if (mode === 'transcode') setStatus(`无法播放：${e.message}`); else fallback(); } });
+    }
+    return () => { live = false; usingHlsJS.current = false; hls?.destroy(); video.removeAttribute('src'); video.load(); };
+  }, [mode, offset, item.id]);
   const Tag = item.kind === 'audio' ? 'audio' : 'video';
+  const shift = mode === 'direct' ? 0 : offset;
   return html`<div class=${`player ${Tag}`}>
-    <${Tag} key=${src} src=${src} controls autoplay playsinline preload="metadata" onError=${fallback} onTimeUpdate=${(e) => setTime(e.target.currentTime)}>
-      ${tracks.map((t) => html`<track key=${t.id} kind="subtitles" label=${t.label} srclang=${t.lang || ''} default=${t.default}
-        src=${`/api/files/${item.id}/subtitles/${t.id}.vtt`} onLoad=${(e) => shiftCues(e.target.track, mode === 'direct' ? 0 : offset)}/>`)}
+    <${Tag} ref=${ref} controls autoplay playsinline preload="metadata" onError=${(e) => { if (!usingHlsJS.current && e.target.getAttribute('src')) fallback(); }} onTimeUpdate=${(e) => setTime(e.target.currentTime)}>
+      ${tracks.map((t) => html`<track key=${`${t.id}-${shift}`} kind="subtitles" label=${t.label} srclang=${t.lang || ''} default=${t.default}
+        src=${`/api/files/${item.id}/subtitles/${t.id}.vtt`} onLoad=${(e) => shiftCues(e.target.track, shift)}/>`)}
     </${Tag}>
+    ${status && html`<small class="hint">${status}</small>`}
     ${mode !== 'direct' && m.duration > 0 && html`<label class="seek"><span>${formatDuration(offset + time)}</span>
       <input type="range" min="0" max=${Math.floor(m.duration)} value=${Math.floor(offset + time)} onChange=${(e) => { setTime(0); setOffset(Number(e.target.value)); }}/>
       <span>${formatDuration(m.duration)}</span></label>`}
-    ${mode !== 'direct' && html`<small class="hint">${mode === 'transcode' ? '正在实时转码' : '正在实时转封装'}，拖动下方进度条跳转</small>`}
+    ${mode !== 'direct' && !status && html`<small class="hint">${mode === 'transcode' || (item.kind === 'video' && !CODEC_TYPES[m.video]) ? '正在实时转码' : '正在实时转封装'}，拖动下方进度条跳转</small>`}
   </div>`;
 }
 

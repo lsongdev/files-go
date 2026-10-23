@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,7 +30,7 @@ type Server struct {
 	pipeline *media.Pipeline
 	tmdb     *media.TMDB
 	thumbs   *Thumbs
-	streams  chan struct{}
+	hls      *hls
 	vaapi    string // render device when hardware transcoding works
 
 	statsMu sync.Mutex
@@ -39,9 +40,9 @@ type Server struct {
 
 func New(ctx context.Context, cfg *config.Config, st *store.Store, scanner *store.Scanner, pipeline *media.Pipeline, client *media.TMDB) *Server {
 	return &Server{ctx: ctx, cfg: cfg, store: st, scanner: scanner, pipeline: pipeline, tmdb: client,
-		thumbs:  NewThumbs(cfg, st, scanner, client),
-		streams: make(chan struct{}, 2),
-		vaapi:   detectVAAPI(cfg.FFmpeg, cfg.HWAccel, cfg.HWDevice)}
+		thumbs: NewThumbs(cfg, st, scanner, client),
+		hls:    newHLS(ctx, filepath.Join(cfg.Data, "cache", "hls")),
+		vaapi:  detectVAAPI(cfg.FFmpeg, cfg.HWAccel, cfg.HWDevice)}
 }
 
 // Handler serves the API and wraps everything (including web) in auth.
@@ -58,7 +59,8 @@ func (s *Server) Handler(web http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/files/{id}/raw", s.raw)
 	mux.HandleFunc("GET /api/files/{id}/thumb", s.thumb)
 	mux.HandleFunc("GET /api/files/{id}/backdrop", s.thumb)
-	mux.HandleFunc("GET /api/files/{id}/stream", s.stream)
+	mux.HandleFunc("GET /api/files/{id}/play", s.play)
+	mux.HandleFunc("GET /api/hls/{key}/{name}", s.segment)
 	mux.HandleFunc("GET /api/files/{id}/subtitles", s.subtitles)
 	mux.HandleFunc("GET /api/files/{id}/subtitles/{track}", s.subtitle)
 	mux.HandleFunc("GET /api/files/{id}/match", s.candidates)
@@ -73,6 +75,12 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// HLS segments are addressed by an unguessable session key; native
+		// players (iOS) do not reliably resend the page's credentials.
+		if strings.HasPrefix(r.URL.Path, "/api/hls/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		user, password, ok := r.BasicAuth()
 		if !ok || subtle.ConstantTimeCompare([]byte(password), []byte(s.cfg.Auth.Password)) != 1 ||
 			s.cfg.Auth.Username != "" && user != s.cfg.Auth.Username {
