@@ -1,116 +1,114 @@
-
 # files-go
 
-`files-go` is a NAS file intelligence layer. It indexes local storage into a
-rebuildable SQLite catalog so directory browsing and metadata requests never
-need to wake or enumerate disks.
+A lightweight file index and media browser for a NAS. It indexes any number
+of directories into SQLite, so browsing and searching never list the disks,
+then enriches files in the background by type, name and embedded metadata:
 
-The current implementation provides the Phase 1/2 core and substantial parts
-of the Phase 3-5 media and playback roadmap described in
-[`docs/design.md`](docs/design.md). The design document is a roadmap rather
-than a claim that every section is implemented.
+| Files | Enrichment |
+| --- | --- |
+| Movies / TV | release-name parsing, folder layout, `movie.nfo` / `tvshow.nfo`, local `poster.jpg` / `fanart.jpg`, TMDB (cached) |
+| Video / audio | ffprobe: duration, resolution, codecs, tags, embedded cover |
+| Photos | dimensions and EXIF (time, camera, lens, exposure, GPS) |
+| Books / documents | EPUB, MOBI/AZW3, DOCX/XLSX/PPTX, PDF (with `pdfinfo`) |
+| Apps | APK (package, version, SDK, icon), Windows PE version info, ELF, Mach-O |
+| Archives | ZIP entry count and size |
 
-- local storage isolation with traversal and symlink-escape protection;
-- an opaque-ID filesystem catalog and SQLite migrations;
-- generation-based scanning with offline-storage preservation;
-- cursor-paginated entry APIs that do not expose physical paths;
-- direct file content and HTTP Range support.
-- a responsive Preact list/grid UI with persistent light and dark themes;
-- SQLite FTS5 file search scoped by library, type, or extension.
-- native image, audio, video, PDF, and size-limited text previews.
-- storage-first directory creation, recursive copy, rename/move, and safe non-recursive delete.
-- streaming multipart uploads that never buffer an entire file in memory.
-- a persistent SQLite job queue with deduplication, retries, leases, and a bounded worker pool.
-- image dimensions and cached small/medium/large thumbnails;
-- ffprobe-backed video, audio, and normalized music metadata;
-- bounded EPUB package parsing and pdfinfo-backed PDF metadata.
-- file-centric movie, TV, audio, photo, and book enhancements;
-- optional TMDB movie/TV matching with confidence scoring and manual override APIs;
-- cached TMDB posters, episode details, and media annotations attached to the
-  physical file/folder views.
-- capability-based direct play, remux, and single-profile HLS transcoding;
+Videos and music play in the browser: directly when the browser supports the
+file, otherwise remuxed (or, as a last resort, transcoded) by ffmpeg into a
+fragmented MP4 stream. Thumbnails are generated on first view and cached.
 
-The current [database structure](docs/database-schema.md) keeps files and media
-enhancements separate. Thumbnails are derived disk caches; playback progress
-is not recorded and videos do not resume automatically.
+The service is read-only: it opens indexed files read-only and has no
+upload, rename or delete operations.
 
-Important design work that is still outstanding includes authentication,
-permissions and sharing, health and metrics endpoints, cache GC and supported
-SQLite backup tooling, mount identity verification beyond root availability,
-and optional extensions such as archive browsing, waveform
-generation, and non-local storage adapters.
+## Design
+
+- **One table.** `files` holds one row per file or folder, with the
+  enrichment result as JSON in the same row (`meta`). A full-text trigram
+  index covers names and titles; a small `cache` table keeps TMDB responses.
+  The index is derived data: an incompatible schema is simply rebuilt.
+- **The table is the queue.** `meta_ver` is the enrichment version a row was
+  processed with. Rows below the current version are pending, so changed
+  files, new enrichers or configuration changes (TMDB on/off, root types)
+  re-enrich automatically, and nothing is lost on restart.
+- **Scanning** reconciles one directory at a time against the index and only
+  writes what changed. An empty or missing root is treated as an unmounted
+  disk and leaves the index untouched. A full rescan runs periodically; when
+  a folder is browsed, one `stat` detects whether it changed and resyncs just
+  that level.
+- **Enrichers** share one interface (`Match`, `Enrich`) and run in order on
+  the same metadata, so the movie lookup can build on ffprobe's result.
+  Manual TMDB matches are locked and survive re-enrichment.
+
+```
+config/   configuration
+store/    SQLite index and scanner
+media/    enrichers and the background pipeline
+tmdb/     TMDB client
+server/   HTTP API, thumbnails, streaming
+web/      Preact UI (embedded)
+```
 
 ## Configuration
 
-Copy `config.yaml` to `~/.filesgo/config.yaml` and adjust the storage paths:
-
 ```yaml
 listen: ":8088"
-data: "/var/lib/files-go"
-
-processing:
-  workers: 2
-  ffprobe: ffprobe
-  ffmpeg: ffmpeg
-  pdfinfo: pdfinfo
-
-media:
-  tmdb:
-    token: "${TMDB_TOKEN}"
-    language: zh-CN
-
-storages:
-  - id: data
-    name: Data
-    type: local
-    path: /mnt/data
-
-libraries:
-  - id: movies
-    name: Movies
-    type: movies
-    sources:
-      - storage: data
-        path: Movies
+data: /var/lib/files-go       # database and thumbnail cache
+workers: 4                    # concurrent enrichment jobs
+scan_interval: 6h
+auth:                         # HTTP basic auth; omit to run without auth
+  username: me
+  password: secret
+tmdb:
+  key: "${TMDB_KEY}"          # v3 API key or v4 read token; omit to stay offline
+  language: zh-CN
+# exclude: [".*", "node_modules", ...]   # name patterns, these are the defaults
+roots:
+  - name: Videos
+    path: /data/Videos
+    types:                    # media hints for subfolders
+      Movies: movies
+      TV Shows: tv
+  - name: Music
+    path: /data/Music
+    type: music
+  - name: Documents
+    path: /data/Documents
 ```
 
-Start the server with `go run .`. Use `-d` to select another configuration
-directory.
+`type` is a hint for identification. Under `movies`, each folder or loose
+video is looked up as a film; under `tv`, the folders directly below are
+shows, `S01` / `Season 1` folders are seasons, and files are episodes.
+Elsewhere, only release-style names (title, year and a quality tag) are
+looked up, and plain videos stay plain videos.
+
+Run with `files-go -c config.yaml`. `ffmpeg` / `ffprobe` are needed for video
+and audio; `pdfinfo` / `pdftoppm` (poppler) are optional for PDFs.
+
+See [`deploy/`](deploy) for a systemd unit that additionally enforces
+read-only access to the data volume.
 
 ## API
 
-The HTTP API is rooted at `/api/v1`. Core endpoints include:
-
 ```text
-GET  /api/v1/system
-GET  /api/v1/storages
-POST /api/v1/storages/{id}/scan
-GET  /api/v1/libraries
-GET  /api/v1/search?q={query}
-GET  /api/v1/entries/{id}
-PATCH /api/v1/entries/{id}
-DELETE /api/v1/entries/{id}
-GET  /api/v1/entries/{id}/children
-POST /api/v1/entries/{id}/directories
-POST /api/v1/entries/{id}/files
-POST /api/v1/entries/{id}/copies
-GET  /api/v1/entries/{id}/content
-HEAD /api/v1/entries/{id}/content
-GET  /api/v1/entries/{id}/text
-GET  /api/v1/entries/{id}/media
-GET  /api/v1/entries/{id}/thumbnail?size=medium
-GET  /api/v1/entries/{id}/icon
-GET  /api/v1/entries/{id}/backdrop
-GET  /api/v1/entries/{id}/media-candidates
-PUT  /api/v1/entries/{id}/media
-DELETE /api/v1/entries/{id}/media
-POST /api/v1/entries/{id}/media/rematch
-POST /api/v1/playback/{id}
-GET  /api/v1/playback/sessions/{session}/{file}
-DELETE /api/v1/playback/sessions/{session}
+GET    /api/roots                    configured roots and scan state
+POST   /api/roots/{root}/scan        rescan a root
+GET    /api/status                   counts, scan and enrichment progress
+GET    /api/search?q=&root=&kind=
+GET    /api/files/{id}               file with metadata and ancestors
+GET    /api/files/{id}/children?offset=&limit=
+POST   /api/files/{id}/refresh       resync a folder / re-enrich a file
+GET    /api/files/{id}/raw           content, supports Range; ?download
+GET    /api/files/{id}/thumb         thumbnail or poster
+GET    /api/files/{id}/backdrop
+GET    /api/files/{id}/stream?t=     ffmpeg fMP4 stream from t seconds; &transcode=1
+GET    /api/files/{id}/match?q=&type=movie|tv     TMDB candidates
+PUT    /api/files/{id}/match         {"tmdb": "movie/123"} lock a match
+DELETE /api/files/{id}/match         unlock and re-identify
 ```
 
 ## Development
 
-Run `go test ./...` to exercise catalog scanning, offline behavior, path
-security, path redaction, cursor listing, and HTTP Range streaming.
+```sh
+go test ./...
+go run . -c config.yaml
+```

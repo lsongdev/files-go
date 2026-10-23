@@ -4,224 +4,108 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
-	"github.com/lsongdev/files-go/api"
-	"github.com/lsongdev/files-go/auth"
-	"github.com/lsongdev/files-go/catalog"
 	"github.com/lsongdev/files-go/config"
-	"github.com/lsongdev/files-go/database"
-	"github.com/lsongdev/files-go/indexer"
-	"github.com/lsongdev/files-go/jobs"
-	"github.com/lsongdev/files-go/model"
-	"github.com/lsongdev/files-go/playback"
-	"github.com/lsongdev/files-go/plugins"
-	"github.com/lsongdev/files-go/processor"
-	"github.com/lsongdev/files-go/storage"
+	"github.com/lsongdev/files-go/media"
+	"github.com/lsongdev/files-go/server"
+	"github.com/lsongdev/files-go/store"
 	"github.com/lsongdev/files-go/tmdb"
 	"github.com/lsongdev/files-go/web"
 )
 
 func main() {
-	flag.StringVar(&config.ConfigDir, "d", config.ConfigDir, "config directory")
+	home, _ := os.UserHomeDir()
+	configPath := flag.String("c", filepath.Join(home, ".filesgo", "config.yaml"), "config file")
 	flag.Parse()
-	cfg, err := config.LoadConfig()
+	cfg, err := config.Load(*configPath)
 	if err != nil {
+		log.Fatal(err)
+	}
+	if err := os.MkdirAll(cfg.Data, 0o755); err != nil {
 		log.Fatal(err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	db, err := database.Open(ctx, cfg.Data)
+
+	st, err := store.Open(filepath.Join(cfg.Data, "files.db"))
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer db.Close()
-	readerDB, err := database.OpenReader(ctx, cfg.Data)
-	if err != nil {
+	defer st.Close()
+	scanner := store.NewScanner(st, cfg.Roots, cfg.Exclude, media.Classify)
+	if err := scanner.Init(ctx); err != nil {
 		log.Fatal(err)
 	}
-	defer readerDB.Close()
-	cat := catalog.NewWithReader(db, readerDB)
-	registry := storage.NewRegistry()
-	for _, item := range cfg.Storages {
-		backend, err := storage.NewLocalWithDevice(item.Path, item.DeviceUUID)
-		if err != nil {
-			log.Fatalf("configure storage %s: %v", item.ID, err)
-		}
-		if err := registry.Add(item.ID, backend); err != nil {
-			log.Fatal(err)
-		}
-		if err := cat.RegisterStorage(ctx, item.ID, item.Name, item.Type); err != nil {
-			log.Fatal(err)
-		}
+
+	var client *tmdb.Client
+	if cfg.TMDB.Key != "" {
+		client = tmdb.New(cfg.TMDB.Key, cfg.TMDB.Language, st)
 	}
-	if err := cat.RecoverInterruptedScans(ctx); err != nil {
-		log.Fatal(err)
-	}
-	for _, item := range cfg.Libraries {
-		library := model.Library{ID: item.ID, Name: item.Name, Type: item.Type}
-		for _, source := range item.Sources {
-			library.Sources = append(library.Sources, model.LibrarySource{StorageID: source.Storage, Path: source.Path})
-		}
-		if err := cat.RegisterLibrary(ctx, library); err != nil {
-			log.Fatal(err)
+	pdfinfo, _ := exec.LookPath("pdfinfo")
+	resolve := scanner.Abs
+	library := &media.Library{Store: st, TMDB: client, Path: resolve, Hint: func(f store.File) (string, string) {
+		root, _ := scanner.Root(f.Root)
+		return root.TypeOf(f.Path)
+	}}
+	// Anything that changes enrichment results is part of the version tag,
+	// so changing it re-enriches the affected files in the background.
+	hints := map[string]string{}
+	for _, root := range cfg.Roots {
+		if root.Type != "" || len(root.Types) > 0 {
+			hints[root.ID] = fmt.Sprint(root.Type, root.Types) // maps print sorted
 		}
 	}
-	configured := make([]string, 0, len(cfg.Libraries))
-	for _, item := range cfg.Libraries {
-		configured = append(configured, item.ID)
-	}
-	if err := cat.PruneUnconfiguredLibraries(ctx, configured); err != nil {
-		log.Fatal(err)
-	}
-	idx := indexer.New(cat, registry)
-	paths := make(map[string][]string)
-	for _, library := range cfg.Libraries {
-		for _, source := range library.Sources {
-			paths[source.Storage] = append(paths[source.Storage], source.Path)
-		}
-	}
-	for _, item := range cfg.Storages {
-		// The storage catalog represents the whole configured filesystem. Library
-		// sources are projections and scan priorities, not catalog boundaries.
-		idx.SetPriority(item.ID, paths[item.ID])
-	}
-	queue := jobs.New(db, 2*time.Minute)
-	thumbnailer := processor.NewThumbnail(cat, registry, cfg.CacheDir)
-	var provider tmdb.Provider
-	if cfg.Media.TMDB.Token != "" {
-		provider = tmdb.New(cfg.Media.TMDB.Token, nil)
-	}
-	movieFile := processor.NewMovieFile(cat, provider, cfg.Media.TMDB.Language)
-	movieDirectory := processor.NewMovieDirectoryWithProvider(cat, registry, provider, cfg.Media.TMDB.Language)
-	artwork := tmdb.NewArtwork(cat, cfg.CacheDir, nil)
-	selected, err := plugins.SelectPlugins(cfg.Processing.Plugins,
-		plugins.Image(cat, registry, thumbnailer),
-		plugins.Video(cat, registry, thumbnailer, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
-		plugins.Movies(movieFile, movieDirectory, artwork),
-		plugins.Music(cat, registry, thumbnailer, cfg.Processing.FFProbe, cfg.Processing.FFmpeg),
-		plugins.Ebook(cat, registry, thumbnailer),
-		plugins.Document(cat, registry, thumbnailer, cfg.CacheDir, cfg.Processing.PDFInfo, cfg.Processing.PDFToPPM),
+	tag := fmt.Sprintf("tmdb=%t/%s pdf=%t hints=%v", client != nil, cfg.TMDB.Language, pdfinfo != "", hints)
+	pipeline, err := media.NewPipeline(ctx, st, tag,
+		&media.Probe{Bin: cfg.FFprobe, Path: resolve},
+		library.Videos(),
+		library.Folders(),
+		media.Photo{Path: resolve},
+		media.Document{Path: resolve, PDFInfo: pdfinfo},
+		media.App{Path: resolve},
+		media.Archive{Path: resolve},
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
-	for _, plugin := range selected {
-		if plugin.Name() == "movies" {
-			idx.SetRemovedEntryReconciler(movieDirectory.Process)
-			break
-		}
-	}
-	processing := plugins.New(cat, queue, selected...)
-	idx.SetEntrySink(processing)
-	workerPool := jobs.NewPool(queue, cfg.Processing.Workers)
-	workerPool.Handle(plugins.JobProcessEntry, processing.Handle)
-	workerPool.Start(ctx)
-	requestScan := func(storageID string) {
-		if !idx.CanScanStorage(storageID) || idx.IsScanning(storageID) {
-			return
-		}
-		go func() {
-			if err := idx.Scan(ctx, storageID); err != nil && !errors.Is(err, indexer.ErrScanInProgress) && ctx.Err() == nil {
-				log.Printf("storage reconciliation %s: %v", storageID, err)
-			}
-		}()
-	}
-	for _, item := range cfg.Storages {
-		if err := probeStorageAvailability(ctx, cat, registry, item.ID, requestScan); err != nil {
-			log.Printf("probe storage %s: %v", item.ID, err)
-		}
-	}
-	for _, item := range cfg.Storages {
-		needsScan, err := cat.NeedsInitialScan(ctx, item.ID)
-		if err != nil {
-			log.Fatal(err)
-		}
-		state, err := cat.Storage(ctx, item.ID)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if state.State != "offline" && (needsScan || state.State == "interrupted") {
-			requestScan(item.ID)
-		}
-	}
+	go pipeline.Run(ctx, cfg.Workers)
 	go func() {
-		watcher, err := indexer.NewWatcherWithLimit(cat, registry, idx, log.Default(), cfg.Processing.WatchLimit)
-		if err != nil {
-			log.Printf("filesystem watcher unavailable: %v", err)
-			return
-		}
-		ids := make([]string, 0, len(cfg.Storages))
-		for _, item := range cfg.Storages {
-			ids = append(ids, item.ID)
-		}
-		if err := watcher.Start(ctx, ids); err != nil && ctx.Err() == nil {
-			log.Printf("filesystem watcher: %v", err)
-		}
-	}()
-	go func() {
-		availability := time.NewTicker(time.Minute)
-		defer availability.Stop()
-		reconciliation := time.NewTicker(24 * time.Hour)
-		defer reconciliation.Stop()
-		jobCleanup := time.NewTicker(24 * time.Hour)
-		defer jobCleanup.Stop()
 		for {
+			scanner.ScanAll(ctx)
+			pipeline.Wake()
 			select {
 			case <-ctx.Done():
 				return
-			case <-availability.C:
-				for _, item := range cfg.Storages {
-					if err := probeStorageAvailability(ctx, cat, registry, item.ID, requestScan); err != nil && ctx.Err() == nil {
-						log.Printf("probe storage %s: %v", item.ID, err)
-					}
-				}
-			case <-reconciliation.C:
-				for _, item := range cfg.Storages {
-					requestScan(item.ID)
-				}
-			case <-jobCleanup.C:
-				if _, err := queue.CleanupHistory(ctx, 30*24*time.Hour); err != nil && ctx.Err() == nil {
-					log.Printf("cleanup job history: %v", err)
-				}
+			case <-time.After(cfg.ScanInterval):
 			}
 		}
 	}()
-	playbackManager := playback.NewManager(ctx, cat, registry, cfg.Processing.FFmpeg, cfg.CacheDir, 2)
-	apiServer := api.New(ctx, cat, registry, idx, log.Default(), cfg.CacheDir, playbackManager)
-	apiServer.SetJobQueue(queue)
-	apiServer.SetMediaProvider(provider, cfg.Media.TMDB.Language)
-	authTokens := make([]auth.Token, 0, len(cfg.Auth.Tokens))
-	for _, item := range cfg.Auth.Tokens {
-		role, ok := auth.ParseRole(item.Role)
-		if !ok {
-			log.Fatalf("invalid auth role %q", item.Role)
-		}
-		authTokens = append(authTokens, auth.Token{Name: item.Name, Secret: item.Token, Role: role})
+
+	srv := &http.Server{
+		Addr:              cfg.Listen,
+		Handler:           server.New(ctx, cfg, st, scanner, pipeline, client).Handler(web.Handler()),
+		ReadHeaderTimeout: 10 * time.Second,
 	}
-	mux := http.NewServeMux()
-	mux.Handle("/api/", auth.Middleware(authTokens)(apiServer.Handler()))
-	mux.Handle("/", web.Handler())
-	httpServer := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	shutdownDone := make(chan struct{})
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = httpServer.Shutdown(shutdownCtx)
-		close(shutdownDone)
+		_ = srv.Shutdown(shutdown)
 	}()
-	log.Printf("files-go API listening on http://%s", cfg.Listen)
-	serveErr := httpServer.ListenAndServe()
-	stop()
-	<-shutdownDone
-	workerPool.Wait()
-	if serveErr != nil && serveErr != http.ErrServerClosed {
-		log.Fatal(serveErr)
+	if cfg.Auth.Password == "" {
+		log.Printf("warning: no auth.password configured, the server is open to anyone who can reach it")
+	}
+	log.Printf("listening on %s", cfg.Listen)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal(err)
 	}
 }
