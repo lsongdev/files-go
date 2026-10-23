@@ -125,7 +125,7 @@ function Player({ item }) {
   }, [item.id]);
   return html`<div class=${`player ${item.kind}`}>
     ${!ready && html`<div class="player-placeholder"><span class="spinner"></span></div>`}
-    <div ref=${ref}></div>
+    <div class="player-stage" ref=${ref}></div>
     ${status && html`<small class="hint">${status}</small>`}
   </div>`;
 }
