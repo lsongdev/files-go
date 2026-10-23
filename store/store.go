@@ -333,3 +333,23 @@ func (s *Store) CachePut(ctx context.Context, key string, value []byte) error {
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value, at=excluded.at`, key, value, time.Now().Unix())
 	return err
 }
+
+// Version returns the enrichment version for a configuration tag. Versions
+// only grow: a tag different from the last one gets a number above every
+// stored row, so "meta_ver < version" means "needs enrichment".
+func (s *Store) Version(ctx context.Context, tag string) (int, error) {
+	var last struct {
+		Tag     string
+		Version int
+	}
+	if data, ok := s.CacheGet(ctx, "pipeline:version", 1<<62); ok && json.Unmarshal(data, &last) == nil && last.Tag == tag {
+		return last.Version, nil
+	}
+	var highest int
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(meta_ver), 0) FROM files`).Scan(&highest); err != nil {
+		return 0, err
+	}
+	last.Tag, last.Version = tag, max(highest, last.Version)+1
+	data, _ := json.Marshal(last)
+	return last.Version, s.CachePut(ctx, "pipeline:version", data)
+}
