@@ -43,6 +43,7 @@ main { min-width: 0; padding: 0 1.5rem 3rem; }
 .icon-button { display: grid; place-items: center; width: 2.4rem; height: 2.4rem; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); }
 .icon-button:hover { background: var(--hover); }
 .menu { display: none; }
+.scrim { display: none; }
 .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; padding: .2rem 0 1rem; color: var(--muted); }
 .crumbs button { color: var(--muted); padding: .1rem .2rem; border-radius: 4px; }
 .crumbs button:hover:not(:disabled) { color: var(--text); background: var(--hover); }
@@ -126,6 +127,7 @@ pre.text { max-height: 70vh; overflow: auto; padding: 1rem 1.2rem; border: 1px s
   .app { grid-template-columns: 1fr; }
   aside { position: fixed; z-index: 10; width: var(--sidebar); transform: translateX(-100%); transition: transform .2s; }
   .nav-open aside { transform: none; box-shadow: 0 0 40px rgba(0,0,0,.5); }
+  .scrim { display: block; position: fixed; inset: 0; z-index: 9; background: rgba(0,0,0,.45); }
   .menu { display: grid; }
   main { padding: 0 1rem 3rem; }
   .row { grid-template-columns: 2.6rem minmax(0, 1fr) 5rem; }
