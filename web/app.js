@@ -1,7 +1,9 @@
 import { html, render, useCallback, useEffect, useRef, useState } from 'https://unpkg.com/htm@3.1.1/preact/standalone.module.js';
 
+// Absolute URLs keep fetch working when the page was opened as http://user:pass@host/.
+const request = (url, options) => fetch(new URL(url, location.origin), options);
 const api = async (url, options) => {
-  const response = await fetch(url, options);
+  const response = await request(url, options);
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || `请求失败 (${response.status})`);
   return body;
@@ -21,7 +23,7 @@ const Icon = ({ name, size = 18 }) => html`<svg class="icon" width=${size} heigh
 const kindIcon = (item) => item.dir ? 'folder' : ({ video: 'video', audio: 'music', image: 'photos', book: 'books', app: 'app', archive: 'archive' }[item.kind] || 'file');
 const rootIcon = (type) => ({ movies: 'movies', tv: 'tv', music: 'music', photos: 'photos', books: 'books' }[type] || 'folder');
 
-const KIND_LABEL = { movie: '电影', show: '剧集', season: '季', episode: '单集', video: '视频', audio: '音频', photo: '照片', book: '图书', document: '文档', app: '应用', archive: '压缩包' };
+const KIND_LABEL = { movie: '电影', show: '剧集', season: '季', episode: '单集', video: '视频', audio: '音频', photo: '照片', image: '图片', book: '图书', document: '文档', app: '应用', archive: '压缩包', text: '文本', code: '代码', font: '字体', torrent: '种子', folder: '文件夹' };
 const INFO_LABEL = { Release: '版本', Bitrate: '码率', Channels: '声道', 'Sample rate': '采样率', Subtitles: '字幕', Track: '音轨', Disc: '碟', Composer: '作曲', Format: '格式', Taken: '拍摄时间', Camera: '相机', Lens: '镜头', Exposure: '快门', Aperture: '光圈', ISO: 'ISO', 'Focal length': '焦距', Location: '位置', Publisher: '出版社', Language: '语言', Pages: '页数', Slides: '幻灯片', Application: '应用程序', Subject: '主题', Creator: '创建工具', Producer: '生成工具', Package: '包名', Version: '版本', 'Version code': '版本号', 'Min SDK': '最低 SDK', 'Target SDK': '目标 SDK', Architecture: '架构', Type: '类型', Description: '描述', 'File version': '文件版本', Copyright: '版权', Files: '文件数', Uncompressed: '解压后', Runtime: '片长', 'Embedded title': '内嵌标题' };
 
 const formatSize = (bytes) => {
@@ -95,20 +97,26 @@ function Listing({ items, view, onOpen }) {
     </button>`)}</div>`;
 }
 
+// Playback falls back step by step when the browser cannot decode a mode:
+// the original file, then a remux to MP4, then a full transcode.
+const PLAY_MODES = ['direct', 'stream', 'transcode'];
 function Player({ item }) {
-  const ref = useRef(null);
   const m = item.meta || {};
+  const [mode, setMode] = useState(item.play);
   const [offset, setOffset] = useState(0);
   const [time, setTime] = useState(0);
-  const direct = item.play === 'direct';
-  const src = direct ? `/api/files/${item.id}/raw` : `/api/files/${item.id}/stream?t=${offset}`;
+  const src = mode === 'direct' ? `/api/files/${item.id}/raw` : `/api/files/${item.id}/stream?t=${offset}${mode === 'transcode' ? '&transcode=1' : ''}`;
+  const fallback = (e) => {
+    const next = PLAY_MODES[PLAY_MODES.indexOf(mode) + 1];
+    if (next && e.target.error?.code !== 1) { setTime(0); setOffset(Math.floor(e.target.currentTime || 0) + offset); setMode(next); }
+  };
   const Tag = item.kind === 'audio' ? 'audio' : 'video';
   return html`<div class=${`player ${Tag}`}>
-    <${Tag} ref=${ref} src=${src} controls autoplay playsinline preload="metadata" onTimeUpdate=${(e) => setTime(e.target.currentTime)}/>
-    ${!direct && m.duration > 0 && html`<label class="seek"><span>${formatDuration(offset + time)}</span>
+    <${Tag} key=${src} src=${src} controls autoplay playsinline preload="metadata" onError=${fallback} onTimeUpdate=${(e) => setTime(e.target.currentTime)}/>
+    ${mode !== 'direct' && m.duration > 0 && html`<label class="seek"><span>${formatDuration(offset + time)}</span>
       <input type="range" min="0" max=${Math.floor(m.duration)} value=${Math.floor(offset + time)} onChange=${(e) => { setTime(0); setOffset(Number(e.target.value)); }}/>
       <span>${formatDuration(m.duration)}</span></label>`}
-    ${!direct && html`<small class="hint">${m.video && m.video !== 'h264' ? '正在实时转码' : '正在实时转封装'}，拖动下方进度条跳转</small>`}
+    ${mode !== 'direct' && html`<small class="hint">${mode === 'transcode' ? '正在实时转码' : '正在实时转封装'}，拖动下方进度条跳转</small>`}
   </div>`;
 }
 
@@ -116,7 +124,7 @@ function TextPreview({ item }) {
   const [text, setText] = useState('加载中…');
   useEffect(() => {
     let live = true;
-    fetch(`/api/files/${item.id}/raw`, { headers: { Range: 'bytes=0-262143' } })
+    request(`/api/files/${item.id}/raw`, { headers: { Range: 'bytes=0-262143' } })
       .then((r) => r.arrayBuffer())
       .then((buffer) => {
         let value;
@@ -142,7 +150,7 @@ function Preview({ item }) {
 function Details({ item, onMatch, onRefresh }) {
   const m = item.meta || {};
   const rows = [
-    ['类型', KIND_LABEL[m.kind] || item.kind || (item.dir ? '文件夹' : '文件')],
+    ['类型', KIND_LABEL[m.kind] || KIND_LABEL[item.kind] || item.kind || '文件'],
     !item.dir && ['大小', formatSize(item.size)], ['修改时间', formatDate(item.mtime)],
     m.original && ['原名', m.original], m.author && ['作者', m.author], m.artist && ['艺术家', m.artist], m.album && ['专辑', m.album],
     m.duration && ['时长', formatDuration(m.duration)], m.width && ['分辨率', `${m.width}×${m.height}`],

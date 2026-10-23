@@ -251,10 +251,13 @@ func (l *Library) find(ctx context.Context, m *Meta, kind, title string, year in
 	if id, ok := strings.CutPrefix(m.TMDB, kind+"/"); ok {
 		n, _ := strconv.Atoi(id)
 		item, err := l.TMDB.Details(ctx, kind, n)
-		if err != nil {
+		if err == nil {
+			return &item, nil
+		}
+		if !tmdb.IsNotFound(err) {
 			return nil, transient(err)
 		}
-		return &item, nil
+		m.TMDB, m.Locked = "", false // a stale id, e.g. from an old NFO: search instead
 	}
 	if title == "" {
 		return nil, nil
