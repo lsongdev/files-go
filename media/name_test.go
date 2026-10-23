@@ -75,3 +75,12 @@ func TestMatchScore(t *testing.T) {
 		t.Errorf("wrong year accepted: %v", s)
 	}
 }
+
+func TestIsExtra(t *testing.T) {
+	for name, want := range map[string]bool{"Sample.mkv": true, "movie-sample.mkv": true, "Dune.Trailer.mp4": true, "预告.mp4": true,
+		"Dune.2021.mkv": false, "Samples.of.Life.mkv": false} {
+		if isExtra(name) != want {
+			t.Errorf("isExtra(%q) = %v", name, !want)
+		}
+	}
+}
