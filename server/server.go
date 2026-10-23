@@ -30,6 +30,7 @@ type Server struct {
 	tmdb     *media.TMDB
 	thumbs   *Thumbs
 	streams  chan struct{}
+	vaapi    string // render device when hardware transcoding works
 
 	statsMu sync.Mutex
 	stats   store.Stats
@@ -39,7 +40,8 @@ type Server struct {
 func New(ctx context.Context, cfg *config.Config, st *store.Store, scanner *store.Scanner, pipeline *media.Pipeline, client *media.TMDB) *Server {
 	return &Server{ctx: ctx, cfg: cfg, store: st, scanner: scanner, pipeline: pipeline, tmdb: client,
 		thumbs:  NewThumbs(cfg, st, scanner, client),
-		streams: make(chan struct{}, 2)}
+		streams: make(chan struct{}, 2),
+		vaapi:   detectVAAPI(cfg.FFmpeg, cfg.HWAccel, cfg.HWDevice)}
 }
 
 // Handler serves the API and wraps everything (including web) in auth.
@@ -56,6 +58,8 @@ func (s *Server) Handler(web http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/files/{id}/thumb", s.thumb)
 	mux.HandleFunc("GET /api/files/{id}/backdrop", s.thumb)
 	mux.HandleFunc("GET /api/files/{id}/stream", s.stream)
+	mux.HandleFunc("GET /api/files/{id}/subtitles", s.subtitles)
+	mux.HandleFunc("GET /api/files/{id}/subtitles/{track}", s.subtitle)
 	mux.HandleFunc("GET /api/files/{id}/match", s.candidates)
 	mux.HandleFunc("PUT /api/files/{id}/match", s.match)
 	mux.HandleFunc("DELETE /api/files/{id}/match", s.match)

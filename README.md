@@ -15,7 +15,10 @@ then enriches files in the background by type, name and embedded metadata:
 
 Videos and music play in the browser: directly when the browser supports the
 file, otherwise remuxed (or, as a last resort, transcoded) by ffmpeg into a
-fragmented MP4 stream. Thumbnails are generated on first view and cached.
+fragmented MP4 stream. Transcoding uses Intel/AMD GPUs through VAAPI when
+available. Embedded text subtitles and external `.srt` / `.ass` files next to
+a video are offered as WebVTT tracks. Thumbnails are generated on first view
+and cached.
 
 The service is read-only: it opens indexed files read-only and has no
 upload, rename or delete operations.
@@ -55,6 +58,8 @@ listen: ":8088"
 data: /var/lib/files-go       # database and thumbnail cache
 workers: 4                    # concurrent enrichment jobs
 scan_interval: 6h
+hwaccel: auto                 # auto | vaapi | none; checked with a test encode at startup
+# hwaccel_device: /dev/dri/renderD128
 auth:                         # HTTP basic auth; omit to run without auth
   username: me
   password: secret
@@ -85,7 +90,7 @@ Run with `files-go -c config.yaml`. `ffmpeg` / `ffprobe` are needed for video
 and audio; `pdfinfo` / `pdftoppm` (poppler) are optional for PDFs.
 
 See [`deploy/`](deploy) for a systemd unit that additionally enforces
-read-only access to the data volume.
+read-only access to the data volume; it joins the `render` group for VAAPI.
 
 ## API
 
@@ -101,6 +106,8 @@ GET    /api/files/{id}/raw           content, supports Range; ?download
 GET    /api/files/{id}/thumb         thumbnail or poster
 GET    /api/files/{id}/backdrop
 GET    /api/files/{id}/stream?t=     ffmpeg fMP4 stream from t seconds; &transcode=1
+GET    /api/files/{id}/subtitles     subtitle tracks (embedded and external)
+GET    /api/files/{id}/subtitles/{track}.vtt
 GET    /api/files/{id}/match?q=&type=movie|tv     TMDB candidates
 PUT    /api/files/{id}/match         {"tmdb": "movie/123"} lock a match
 DELETE /api/files/{id}/match         unlock and re-identify

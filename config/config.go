@@ -18,6 +18,8 @@ type Config struct {
 	Exclude      []string      `yaml:"exclude"`
 	FFmpeg       string        `yaml:"ffmpeg"`
 	FFprobe      string        `yaml:"ffprobe"`
+	HWAccel      string        `yaml:"hwaccel"`        // auto (default), vaapi or none
+	HWDevice     string        `yaml:"hwaccel_device"` // default /dev/dri/renderD128
 	Auth         Auth          `yaml:"auth"`
 	TMDB         TMDB          `yaml:"tmdb"`
 	Roots        []Root        `yaml:"roots"`
@@ -88,6 +90,12 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.FFprobe == "" {
 		cfg.FFprobe = "ffprobe"
+	}
+	if cfg.HWAccel == "" {
+		cfg.HWAccel = "auto"
+	}
+	if cfg.HWDevice == "" {
+		cfg.HWDevice = "/dev/dri/renderD128"
 	}
 	if cfg.TMDB.Language == "" {
 		cfg.TMDB.Language = "zh-CN"

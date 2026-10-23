@@ -50,6 +50,7 @@ type probeOutput struct {
 	Streams []struct {
 		CodecType   string            `json:"codec_type"`
 		CodecName   string            `json:"codec_name"`
+		PixFmt      string            `json:"pix_fmt"`
 		Width       int               `json:"width"`
 		Height      int               `json:"height"`
 		Channels    int               `json:"channels"`
@@ -57,6 +58,8 @@ type probeOutput struct {
 		Tags        map[string]string `json:"tags"`
 		Disposition struct {
 			AttachedPic int `json:"attached_pic"`
+			Default     int `json:"default"`
+			Forced      int `json:"forced"`
 		} `json:"disposition"`
 	} `json:"streams"`
 	Format struct {
@@ -77,13 +80,15 @@ func parseProbe(data []byte, f *store.File, m *Meta) error {
 	if rate, err := strconv.ParseInt(out.Format.BitRate, 10, 64); err == nil && rate > 0 {
 		m.Set("Bitrate", fmt.Sprintf("%d kb/s", rate/1000))
 	}
-	var subtitles []string
 	for _, s := range out.Streams {
 		switch {
 		case s.Disposition.AttachedPic != 0:
 			m.Poster = "self"
 		case s.CodecType == "video" && m.Video == "":
 			m.Video, m.Width, m.Height = s.CodecName, s.Width, s.Height
+			if m.Depth = 8; strings.Contains(s.PixFmt, "10") || strings.Contains(s.PixFmt, "12") {
+				m.Depth = 10
+			}
 		case s.CodecType == "audio" && m.Audio == "":
 			m.Audio = s.CodecName
 			if s.Channels > 0 {
@@ -93,12 +98,11 @@ func parseProbe(data []byte, f *store.File, m *Meta) error {
 				m.Set("Sample rate", s.SampleRate+" Hz")
 			}
 		case s.CodecType == "subtitle":
-			if lang := s.Tags["language"]; lang != "" {
-				subtitles = append(subtitles, lang)
-			}
+			// Index counts subtitle streams only, as in ffmpeg's -map 0:s:N.
+			m.Subtitles = append(m.Subtitles, Subtitle{Index: len(m.Subtitles), Codec: s.CodecName,
+				Lang: s.Tags["language"], Title: s.Tags["title"], Default: s.Disposition.Default != 0, Forced: s.Disposition.Forced != 0})
 		}
 	}
-	m.Set("Subtitles", strings.Join(subtitles, ", "))
 	switch {
 	case m.Video != "":
 		f.Kind, m.Kind = "video", "video"

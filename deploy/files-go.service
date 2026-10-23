@@ -6,6 +6,7 @@ Wants=network-online.target
 [Service]
 User=files
 Group=files
+SupplementaryGroups=render
 ExecStart=/opt/files-go/files-go -c /etc/files-go/config.yaml
 Restart=on-failure
 Nice=5

@@ -98,13 +98,32 @@ function Listing({ items, view, onOpen }) {
 }
 
 // Playback falls back step by step when the browser cannot decode a mode:
-// the original file, then a remux to MP4, then a full transcode.
+// the original file, then a remux to MP4, then a full transcode. Codecs the
+// browser reports as unsupported skip straight to transcoding.
 const PLAY_MODES = ['direct', 'stream', 'transcode'];
+const CODEC_TYPES = { h264: 'avc1.640028', hevc: 'hvc1.1.6.L120.90', vp9: 'vp09.00.40.08', av1: 'av01.0.08M.08' };
+function initialMode(item) {
+  const codec = CODEC_TYPES[item.meta?.video];
+  const supported = !codec || !window.MediaSource || MediaSource.isTypeSupported(`video/mp4; codecs="${codec}"`);
+  return supported || item.kind !== 'video' ? item.play : 'transcode';
+}
+
+// Streams restart at an offset, so subtitle cues are shifted to match.
+function shiftCues(track, offset) {
+  if (!offset || !track.cues) return;
+  for (const cue of Array.from(track.cues)) { cue.startTime -= offset; cue.endTime -= offset; }
+}
+
 function Player({ item }) {
   const m = item.meta || {};
-  const [mode, setMode] = useState(item.play);
+  const [mode, setMode] = useState(() => initialMode(item));
   const [offset, setOffset] = useState(0);
   const [time, setTime] = useState(0);
+  const [tracks, setTracks] = useState([]);
+  useEffect(() => {
+    if (item.kind !== 'video') return;
+    api(`/api/files/${item.id}/subtitles`).then((data) => setTracks(data.items || [])).catch(() => {});
+  }, [item.id]);
   const src = mode === 'direct' ? `/api/files/${item.id}/raw` : `/api/files/${item.id}/stream?t=${offset}${mode === 'transcode' ? '&transcode=1' : ''}`;
   const fallback = (e) => {
     const next = PLAY_MODES[PLAY_MODES.indexOf(mode) + 1];
@@ -112,7 +131,10 @@ function Player({ item }) {
   };
   const Tag = item.kind === 'audio' ? 'audio' : 'video';
   return html`<div class=${`player ${Tag}`}>
-    <${Tag} key=${src} src=${src} controls autoplay playsinline preload="metadata" onError=${fallback} onTimeUpdate=${(e) => setTime(e.target.currentTime)}/>
+    <${Tag} key=${src} src=${src} controls autoplay playsinline preload="metadata" onError=${fallback} onTimeUpdate=${(e) => setTime(e.target.currentTime)}>
+      ${tracks.map((t) => html`<track key=${t.id} kind="subtitles" label=${t.label} srclang=${t.lang || ''} default=${t.default}
+        src=${`/api/files/${item.id}/subtitles/${t.id}.vtt`} onLoad=${(e) => shiftCues(e.target.track, mode === 'direct' ? 0 : offset)}/>`)}
+    </${Tag}>
     ${mode !== 'direct' && m.duration > 0 && html`<label class="seek"><span>${formatDuration(offset + time)}</span>
       <input type="range" min="0" max=${Math.floor(m.duration)} value=${Math.floor(offset + time)} onChange=${(e) => { setTime(0); setOffset(Number(e.target.value)); }}/>
       <span>${formatDuration(m.duration)}</span></label>`}
@@ -155,7 +177,8 @@ function Details({ item, onMatch, onRefresh }) {
     m.original && ['原名', m.original], m.author && ['作者', m.author], m.artist && ['艺术家', m.artist], m.album && ['专辑', m.album],
     m.duration && ['时长', formatDuration(m.duration)], m.width && ['分辨率', `${m.width}×${m.height}`],
     m.video && ['编码', join(m.video, m.audio, m.container)], !m.video && m.audio && ['编码', join(m.audio, m.container)],
-    m.genres?.length && ['类型标签', m.genres.join(' / ')], m.tmdb && ['TMDB', html`<a href=${`https://www.themoviedb.org/${m.tmdb}`} target="_blank" rel="noreferrer">${m.tmdb}${m.locked ? '（已锁定）' : ''}</a>`],
+    m.genres?.length && ['类型标签', m.genres.join(' / ')],
+    m.subtitles?.length && ['内嵌字幕', m.subtitles.map((x) => x.title || x.lang || x.codec).join(' / ')], m.tmdb && ['TMDB', html`<a href=${`https://www.themoviedb.org/${m.tmdb}`} target="_blank" rel="noreferrer">${m.tmdb}${m.locked ? '（已锁定）' : ''}</a>`],
     ...Object.entries(m.info || {}).map(([k, v]) => [INFO_LABEL[k] || k, v]),
     item.error && ['增强错误', item.error],
   ].filter(Boolean);
