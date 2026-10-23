@@ -337,16 +337,33 @@ func (l *Library) find(ctx context.Context, m *Meta, kind, title string, year in
 	if title == "" {
 		return nil, nil
 	}
-	items, err := l.TMDB.Search(ctx, kind, title, year)
-	if err == nil && len(items) == 0 && year > 0 {
-		items, err = l.TMDB.Search(ctx, kind, title, 0) // the year in names is often off by one
+	candidates, err := l.rank(ctx, kind, title, year, ev)
+	if err == nil && year > 0 && (len(candidates) == 0 || candidates[0].score < .8) {
+		// The year in names and NFOs is often off; try again without it.
+		candidates, err = l.rank(ctx, kind, title, 0, ev)
 	}
 	if err != nil {
 		return nil, transient(err)
 	}
-	type candidate struct {
-		item  Item
-		score float64
+	if len(candidates) == 0 || candidates[0].score < .8 {
+		return nil, nil
+	}
+	if m.Review == "" && len(candidates) > 1 && candidates[1].score >= .8 && candidates[0].score-candidates[1].score < .05 {
+		m.Review = "ambiguous"
+	}
+	return &candidates[0].item, nil
+}
+
+type candidate struct {
+	item  Item
+	score float64
+}
+
+// rank searches TMDB and orders the results by score, best first.
+func (l *Library) rank(ctx context.Context, kind, title string, year int, ev evidence) ([]candidate, error) {
+	items, err := l.TMDB.Search(ctx, kind, title, year)
+	if err != nil {
+		return nil, err
 	}
 	var candidates []candidate
 	for _, it := range items {
@@ -362,21 +379,16 @@ func (l *Library) find(ctx context.Context, m *Meta, kind, title string, year in
 	if !ev.empty() {
 		n = 4
 	}
-	for i := range candidates[:min(n, len(candidates))] {
-		details, err := l.TMDB.Details(ctx, kind, candidates[i].item.ID)
+	top := candidates[:min(n, len(candidates))]
+	for i := range top {
+		details, err := l.TMDB.Details(ctx, kind, top[i].item.ID)
 		if err != nil {
-			return nil, transient(err)
+			return nil, err
 		}
-		candidates[i].item, candidates[i].score = details, candidates[i].score+ev.fit(details)
+		top[i].item, top[i].score = details, top[i].score+ev.fit(details)
 	}
-	sort.SliceStable(candidates[:min(n, len(candidates))], func(i, j int) bool { return candidates[i].score > candidates[j].score })
-	if len(candidates) == 0 || candidates[0].score < .8 {
-		return nil, nil
-	}
-	if m.Review == "" && len(candidates) > 1 && candidates[1].score >= .8 && candidates[0].score-candidates[1].score < .05 {
-		m.Review = "ambiguous"
-	}
-	return &candidates[0].item, nil
+	sort.SliceStable(top, func(i, j int) bool { return top[i].score > top[j].score })
+	return candidates, nil
 }
 
 // showEvidence counts the episode files below a show folder.

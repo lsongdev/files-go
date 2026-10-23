@@ -168,7 +168,9 @@ func TestDisambiguation(t *testing.T) {
 		if r.URL.Query().Get("language") == "en-US" {
 			table = english
 		}
-		if body, ok := table[key]; ok {
+		if r.URL.Query().Get("first_air_date_year") == "2021" { // the NFO's wrong year finds only the remake
+			w.Write([]byte(`{"results":[{"id":111110,"name":"ONE PIECE","popularity":300}]}`))
+		} else if body, ok := table[key]; ok {
 			w.Write([]byte(body))
 		} else if body, ok := details[r.URL.Path]; ok {
 			w.Write([]byte(body))
@@ -184,7 +186,7 @@ func TestDisambiguation(t *testing.T) {
 	root := filepath.Join(dir, "root")
 	files := map[string]string{
 		"TV/One.Piece/OnePiece.ep840.mp4":       "x",
-		"TV/One.Piece/tvshow.nfo":               `<tvshow><title>ONE PIECE</title><tmdbid>111110</tmdbid></tvshow>`,
+		"TV/One.Piece/tvshow.nfo":               `<tvshow><title>ONE PIECE</title><year>2021</year><tmdbid>111110</tmdbid></tvshow>`,
 		"Movies/Before/Before.Sunrise.1995.mkv": "x",
 		"Movies/Before/Before.Sunset.2004.mkv":  "x",
 		"Movies/Alien/Alien.mkv":                "x",
