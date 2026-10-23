@@ -15,7 +15,10 @@ then enriches files in the background by type, name and embedded metadata:
 
 Videos and music play in the browser: directly when the browser supports the
 file, otherwise remuxed (or, as a last resort, transcoded) by ffmpeg into
-HLS, which Safari and iOS play natively and other browsers through hls.js. Transcoding uses Intel/AMD GPUs through VAAPI when
+HLS, which Safari and iOS play natively and other browsers through hls.js.
+The player ([Media Chrome](https://www.media-chrome.org) controls) shows a
+file's whole timeline and restarts the stream when seeking past what has
+been produced. Transcoding uses Intel/AMD GPUs through VAAPI when
 available. Embedded text subtitles and external `.srt` / `.ass` files next to
 a video are offered as WebVTT tracks. Thumbnails are generated on first view
 and cached.
