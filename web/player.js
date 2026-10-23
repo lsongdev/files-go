@@ -212,7 +212,16 @@ export function createPlayer(container, item, onStatus) {
   container.append(theme);
   const media = theme.querySelector('files-video');
   media.addEventListener('status', (e) => onStatus?.(e.detail));
+  // Our own spinner: the theme's SVG one relies on SMIL animation, which
+  // does not run everywhere. Loading means playing without enough data yet.
+  const spinner = Object.assign(document.createElement('span'), { className: 'spinner player-loading' });
+  container.append(spinner);
+  container.classList.add('loading'); // until the first media event says otherwise
+  const update = () => container.classList.toggle('loading', !media.paused && media.nativeEl.readyState < 3);
+  for (const type of ['loadstart', 'waiting', 'play', 'playing', 'pause', 'canplay', 'canplaythrough', 'seeking', 'seeked', 'emptied', 'error']) {
+    media.addEventListener(type, update);
+  }
   const tracks = audio ? Promise.resolve([]) : getJSON(`/api/files/${item.id}/subtitles`).then((d) => d.items || []).catch(() => []);
   tracks.then((list) => media.load(item, list));
-  return { destroy: () => { media.destroy(); theme.remove(); } };
+  return { destroy: () => { media.destroy(); theme.remove(); spinner.remove(); } };
 }
