@@ -65,7 +65,7 @@ func TestHLS(t *testing.T) {
 		return string(body)
 	}
 	playlist := get(started.URL)
-	if !strings.Contains(playlist, "#EXT-X-MAP:URI=\"init.mp4\"") || !strings.Contains(playlist, "seg-00000.m4s") {
+	if !strings.Contains(playlist, "#EXT-X-START:TIME-OFFSET=0") || !strings.Contains(playlist, "#EXT-X-MAP:URI=\"init.mp4\"") || !strings.Contains(playlist, "seg-00000.m4s") {
 		t.Fatalf("playlist = %s", playlist)
 	}
 	base := strings.TrimSuffix(started.URL, "index.m3u8")
