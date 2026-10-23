@@ -267,14 +267,16 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var err error
+	// A folder is resynced with the disk first, then re-identified itself.
 	if f.Dir {
-		err = s.scanner.SyncDir(r.Context(), f)
+		if err := s.scanner.SyncDir(r.Context(), f); err != nil {
+			s.fail(w, err)
+			return
+		}
 		s.pipeline.Wake()
-	} else {
-		err = s.pipeline.Rematch(r.Context(), f)
+		f, _ = s.store.Get(r.Context(), f.ID)
 	}
-	if err != nil {
+	if err := s.pipeline.Rematch(r.Context(), f); err != nil {
 		s.fail(w, err)
 		return
 	}
