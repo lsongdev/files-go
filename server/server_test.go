@@ -109,6 +109,12 @@ func TestAPI(t *testing.T) {
 		t.Fatalf("thumbnail: %v %v", err, thumb)
 	}
 
+	var issues struct{ Items []View }
+	decode(get("/api/issues?type=error"), &issues)
+	if len(issues.Items) != 0 {
+		t.Fatalf("unexpected failures: %+v", issues.Items)
+	}
+
 	var detail struct {
 		File      View
 		Ancestors []View

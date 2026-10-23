@@ -28,7 +28,7 @@ var (
 	sourceTag      = regexp.MustCompile(`(?i)\b(blu-?ray|bdrip|web-?dl|webrip|hdtv|dvdrip|remux|uhd)\b`)
 	codecTag       = regexp.MustCompile(`(?i)\b(x26[45]|h\.?26[45]|hevc|av1)\b`)
 	seasonDir      = regexp.MustCompile(`(?i)^(?:s|season)[ ._-]*(\d{1,2})$|^第\s*(\d{1,2})\s*季$`)
-	episodeOnly    = regexp.MustCompile(`(?i)(?:^|[ ._-])(?:E|EP)[ ._-]?(\d{1,3})(?:$|[ ._-])|^0*(\d{1,3})$|第\s*(\d{1,3})\s*集`)
+	episodeOnly    = regexp.MustCompile(`(?i)(?:^|[ ._-])(?:E|EP)[ ._-]?(\d{1,4})(?:$|[ ._-])|^0*(\d{1,4})$|第\s*(\d{1,4})\s*集`)
 )
 
 // ParseName extracts title, year, season/episode and release tags from a
@@ -85,16 +85,23 @@ func SeasonNumber(dir string) (int, bool) {
 	return n, true
 }
 
-// EpisodeNumber parses names that carry only an episode number,
-// e.g. "E05.mkv", "05.mp4" or "第5集.mp4".
+// EpisodeNumber parses names that carry only an episode number, e.g.
+// "E05.mkv", "05.mp4", "第5集.mp4" or "[site]人民的名义.DVD版.05.HD1080p.mp4".
+// It is meant for files known to be in a TV folder.
 func EpisodeNumber(filename string) (int, bool) {
 	stem := strings.TrimSuffix(filename, path.Ext(filename))
-	m := episodeOnly.FindStringSubmatch(stem)
-	if m == nil {
-		return 0, false
+	if m := episodeOnly.FindStringSubmatch(stem); m != nil {
+		n, _ := strconv.Atoi(m[1] + m[2] + m[3])
+		return n, true
 	}
-	n, _ := strconv.Atoi(m[1] + m[2] + m[3])
-	return n, true
+	// Otherwise a standalone number that is not a year.
+	tokens := strings.FieldsFunc(bracketPattern.ReplaceAllString(stem, " "), func(r rune) bool { return strings.ContainsRune(" ._-", r) })
+	for _, token := range tokens {
+		if n, err := strconv.Atoi(token); err == nil && len(token) <= 4 && n > 0 && (n < 1900 || n > 2100) {
+			return n, true
+		}
+	}
+	return 0, false
 }
 
 func firstMatch(re *regexp.Regexp, s string) string {
@@ -128,8 +135,8 @@ func matchScore(title string, year int, titles []string, candidateYear int) floa
 		case got == "":
 		case got == want:
 			score = max(score, .8)
-		case strings.Contains(got, want) || strings.Contains(want, got):
-			score = max(score, .6)
+		case strings.Contains(got, want) || strings.Contains(want, got) || similarity(got, want) >= .85:
+			score = max(score, .6) // "In the Name of People" for "In the Name of the People"
 		}
 	}
 	if year > 0 && candidateYear > 0 {
@@ -143,6 +150,31 @@ func matchScore(title string, year int, titles []string, candidateYear int) floa
 		}
 	}
 	return score
+}
+
+// similarity is the Dice coefficient of the character bigrams of a and b.
+func similarity(a, b string) float64 {
+	bigrams := func(s string) map[string]int {
+		r := []rune(s)
+		m := map[string]int{}
+		for i := 0; i+1 < len(r); i++ {
+			m[string(r[i:i+2])]++
+		}
+		return m
+	}
+	x, y := bigrams(a), bigrams(b)
+	common, total := 0, 0
+	for k, n := range x {
+		common += min(n, y[k])
+		total += n
+	}
+	for _, n := range y {
+		total += n
+	}
+	if total == 0 {
+		return 0
+	}
+	return 2 * float64(common) / float64(total)
 }
 
 func abs(v int) int {

@@ -51,6 +51,7 @@ func (s *Server) Handler(web http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/roots/{root}/scan", s.scan)
 	mux.HandleFunc("GET /api/status", s.status)
 	mux.HandleFunc("GET /api/search", s.search)
+	mux.HandleFunc("GET /api/issues", s.issues)
 	mux.HandleFunc("GET /api/files/{id}", s.file)
 	mux.HandleFunc("GET /api/files/{id}/children", s.children)
 	mux.HandleFunc("POST /api/files/{id}/refresh", s.refresh)
@@ -189,6 +190,25 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"items": s.views(files)})
+}
+
+// issues lists files to review (?type=review) or that failed enrichment.
+func (s *Server) issues(w http.ResponseWriter, r *http.Request) {
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	files, err := s.store.Issues(r.Context(), r.URL.Query().Get("type"), max(offset, 0), limit+1)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	more := len(files) > limit
+	if more {
+		files = files[:limit]
+	}
+	writeJSON(w, map[string]any{"items": s.views(files), "more": more})
 }
 
 func (s *Server) file(w http.ResponseWriter, r *http.Request) {

@@ -40,6 +40,7 @@ type Meta struct {
 	Genres    []string          `json:"genres,omitempty"`
 	TMDB      string            `json:"tmdb,omitempty"` // movie/123, tv/456
 	Locked    bool              `json:"locked,omitempty"`
+	Review    string            `json:"review,omitempty"` // ambiguous or unmatched: worth a manual look
 	Info      map[string]string `json:"info,omitempty"`
 	// Poster and Backdrop reference artwork: "self" (frame or embedded cover
 	// of this file), "zip:<entry>", "file:<id>" or "tmdb:<path>".
@@ -111,7 +112,7 @@ type Pipeline struct {
 // configuration tag (e.g. whether TMDB is enabled), so changing either
 // re-enriches everything in the background.
 func NewPipeline(ctx context.Context, st *store.Store, tag string, enrichers ...Enricher) (*Pipeline, error) {
-	version, err := st.Version(ctx, "v3:"+tag)
+	version, err := st.Version(ctx, "v4:"+tag)
 	if err != nil {
 		return nil, err
 	}

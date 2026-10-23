@@ -43,6 +43,11 @@ upload, rename or delete operations.
 - **Enrichers** share one interface (`Match`, `Enrich`) and run in order on
   the same metadata, so the movie lookup can build on ffprobe's result.
   Manual TMDB matches are locked and survive re-enrichment.
+- **Identification** scores TMDB candidates on title (exact, partial or
+  near), year, popularity and local evidence: the main video's duration
+  against the movie runtime, and episode files, highest episode and season
+  against the show's totals. NFO ids are trusted unless the files contradict
+  them. Close calls, contradictions and misses are listed for review.
 
 ```
 config/   configuration
@@ -101,6 +106,7 @@ GET    /api/roots                    configured roots and scan state
 POST   /api/roots/{root}/scan        rescan a root
 GET    /api/status                   counts, scan and enrichment progress
 GET    /api/search?q=&root=&kind=
+GET    /api/issues?type=review|error      matches to confirm / failed files
 GET    /api/files/{id}               file with metadata and ancestors
 GET    /api/files/{id}/children?offset=&limit=
 POST   /api/files/{id}/refresh       resync a folder / re-enrich a file
