@@ -39,8 +39,8 @@ type videos struct{ *Library }
 func (videos) Match(f *store.File) bool { return f.Kind == "video" }
 
 func (v videos) Enrich(ctx context.Context, f *store.File, m *Meta) error {
-	if m.Kind != "video" {
-		return nil // not a playable video after probing
+	if m.Kind != "video" || isExtra(f.Name) {
+		return nil // not playable, or a sample/trailer next to the real thing
 	}
 	hint, base := v.Hint(*f)
 	n := ParseName(f.Name)
@@ -60,7 +60,7 @@ func (v videos) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 		m.Kind, m.Title, m.Year = "movie", n.Title, n.Year
 		if item != nil {
 			apply(m, item)
-		} else if !isExtra(f.Name) {
+		} else {
 			m.Review = "unmatched"
 		}
 	}
