@@ -43,7 +43,7 @@ func TestAPI(t *testing.T) {
 	if err := scanner.Scan(ctx, "home"); err != nil {
 		t.Fatal(err)
 	}
-	pipeline := media.NewPipeline(st, "test", media.Photo{Path: scanner.Abs})
+	pipeline, _ := media.NewPipeline(ctx, st, "test", media.Photo{Path: scanner.Abs})
 	pending, _ := st.Pending(ctx, pipeline.Version, store.Cursor{}, 100)
 	for _, f := range pending {
 		if err := pipeline.Rematch(ctx, f); err != nil {

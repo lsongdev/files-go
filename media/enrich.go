@@ -6,8 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"hash/fnv"
 	"log"
 	"strings"
 	"sync"
@@ -87,13 +85,16 @@ type Pipeline struct {
 	paused   time.Time      // set after a transient failure
 }
 
-// NewPipeline derives Version from the code version plus a configuration
-// tag (e.g. whether TMDB is enabled), so changing either re-enriches.
-func NewPipeline(st *store.Store, tag string, enrichers ...Enricher) *Pipeline {
-	h := fnv.New32a()
-	fmt.Fprintf(h, "v2:%s", tag)
-	return &Pipeline{Version: int(h.Sum32() >> 1), store: st, enrichers: enrichers,
-		hot: make(chan int64, 512), wake: make(chan struct{}, 1), inflight: map[int64]bool{}}
+// NewPipeline gets its Version from the store for the code version plus a
+// configuration tag (e.g. whether TMDB is enabled), so changing either
+// re-enriches everything in the background.
+func NewPipeline(ctx context.Context, st *store.Store, tag string, enrichers ...Enricher) (*Pipeline, error) {
+	version, err := st.Version(ctx, "v2:"+tag)
+	if err != nil {
+		return nil, err
+	}
+	return &Pipeline{Version: version, store: st, enrichers: enrichers,
+		hot: make(chan int64, 512), wake: make(chan struct{}, 1), inflight: map[int64]bool{}}, nil
 }
 
 // Prioritize moves files a user is looking at to the front of the queue.

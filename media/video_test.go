@@ -78,7 +78,7 @@ func TestIdentifyMoviesAndEpisodes(t *testing.T) {
 	client := tmdb.New("key", "zh-CN", st)
 	client.SetBaseURL(api.URL, api.URL)
 	library := &Library{Store: st, TMDB: client, Path: scanner.Abs, Hint: func(f store.File) (string, string) { return cfgRoot.TypeOf(f.Path) }}
-	pipeline := NewPipeline(st, "test", fakeVideo{}, library.Videos(), library.Folders())
+	pipeline, _ := NewPipeline(ctx, st, "test", fakeVideo{}, library.Videos(), library.Folders())
 	run, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() { pipeline.Run(run, 3); close(done) }()

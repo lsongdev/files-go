@@ -65,7 +65,7 @@ func main() {
 		}
 	}
 	tag := fmt.Sprintf("tmdb=%t/%s pdf=%t hints=%v", client != nil, cfg.TMDB.Language, pdfinfo != "", hints)
-	pipeline := media.NewPipeline(st, tag,
+	pipeline, err := media.NewPipeline(ctx, st, tag,
 		&media.Probe{Bin: cfg.FFprobe, Path: resolve},
 		library.Videos(),
 		library.Folders(),
@@ -74,6 +74,9 @@ func main() {
 		media.App{Path: resolve},
 		media.Archive{Path: resolve},
 	)
+	if err != nil {
+		log.Fatal(err)
+	}
 	go pipeline.Run(ctx, cfg.Workers)
 	go func() {
 		for {

@@ -197,3 +197,18 @@ func TestSearchFollowsTitles(t *testing.T) {
 		t.Fatalf("pending after save = %d, want 5", len(pending))
 	}
 }
+
+func TestVersionGrows(t *testing.T) {
+	ctx := context.Background()
+	st, _, _ := setup(t)
+	a, _ := st.Version(ctx, "a")
+	if again, _ := st.Version(ctx, "a"); again != a {
+		t.Fatalf("same tag got %d then %d", a, again)
+	}
+	st.db.Exec(`UPDATE files SET meta_ver=?`, a)
+	b, _ := st.Version(ctx, "b")
+	back, _ := st.Version(ctx, "a")
+	if b <= a || back <= b {
+		t.Fatalf("versions must grow on every tag change: a=%d b=%d a'=%d", a, b, back)
+	}
+}
