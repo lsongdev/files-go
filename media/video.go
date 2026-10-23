@@ -221,6 +221,10 @@ func (d folders) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	m.Kind = map[string]string{"tv": "show", "movie": "movie"}[kind]
 	m.Title, m.Year = first(m.Title, n.Title), max(m.Year, n.Year)
 	if item != nil {
+		if m.Review == "conflict" {
+			// Local artwork came from the same scraper as the wrong NFO.
+			m.Poster, m.Backdrop = "", ""
+		}
 		apply(m, item)
 	}
 	return nil
