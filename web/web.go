@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-//go:embed index.html app.js styles.css
+//go:embed index.html app.js player.js styles.css
 var files embed.FS
 
 var started = time.Now()
@@ -19,14 +19,14 @@ var started = time.Now()
 // version busts browser caches when the embedded assets change.
 var version = func() string {
 	h := sha256.New()
-	for _, name := range []string{"app.js", "styles.css"} {
+	for _, name := range []string{"app.js", "player.js", "styles.css"} {
 		data, _ := files.ReadFile(name)
 		h.Write(data)
 	}
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }()
 
-const csp = "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org; media-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'none'"
+const csp = "default-src 'self'; script-src 'self' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org; media-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'none'"
 
 // Handler serves static assets and falls back to index.html for app routes.
 func Handler() http.Handler {
