@@ -283,6 +283,12 @@ function App() {
 
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem('theme', theme); }, [theme]);
   useEffect(() => { localStorage.setItem('view', view); }, [view]);
+  useEffect(() => {
+    if (!nav) return undefined;
+    const close = (e) => e.key === 'Escape' && setNav(false);
+    addEventListener('keydown', close);
+    return () => removeEventListener('keydown', close);
+  }, [nav]);
 
   const loadStatus = useCallback(() => api('/api/status').then(setStatus).catch(() => {}), []);
   useEffect(() => {
@@ -392,6 +398,7 @@ function App() {
       </nav>`}
       <${Status} status=${status}/>
     </aside>
+    ${nav && html`<div class="scrim" onClick=${() => setNav(false)}></div>`}
     <main>
       <header class="top">
         <button class="icon-button menu" onClick=${() => setNav(!nav)}><${Icon} name="menu"/></button>
