@@ -1,0 +1,22 @@
+[Unit]
+Description=files-go file index and media server
+After=network-online.target local-fs.target
+Wants=network-online.target
+
+[Service]
+User=files
+Group=files
+ExecStart=/opt/files-go/files-go -c /etc/files-go/config.yaml
+Restart=on-failure
+Nice=5
+IOSchedulingClass=idle
+# The indexed volume is read-only for this service; only its data directory
+# (config "data") is writable. Create that directory before starting.
+ProtectSystem=strict
+ReadOnlyPaths=/data
+ReadWritePaths=/var/lib/files-go
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

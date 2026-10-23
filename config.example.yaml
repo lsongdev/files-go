@@ -1,0 +1,24 @@
+listen: ":8088"
+data: /var/lib/files-go
+workers: 4
+scan_interval: 6h
+auth:
+  username: me
+  password: change-me
+tmdb:
+  key: "${TMDB_KEY}"
+  language: zh-CN
+roots:
+  - name: Videos
+    path: /data/Videos
+    types:
+      Movies: movies
+      TV Shows: tv
+  - name: Music
+    path: /data/Music
+    type: music
+  - name: Pictures
+    path: /data/Pictures
+    type: photos
+  - name: Documents
+    path: /data/Documents

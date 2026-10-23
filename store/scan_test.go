@@ -166,3 +166,34 @@ func TestSyncDirAndAncestors(t *testing.T) {
 		t.Fatalf("ancestors = %+v", ancestors)
 	}
 }
+
+func TestSearchFollowsTitles(t *testing.T) {
+	ctx := context.Background()
+	st, scanner, _ := setup(t)
+	if err := scanner.Scan(ctx, "r"); err != nil {
+		t.Fatal(err)
+	}
+	movie, _ := st.ByPath(ctx, "r", "Movies/Dune (2021)/Dune.2021.mkv")
+	save := func(title string) {
+		if err := st.SaveResults(ctx, []Result{{ID: movie.ID, Kind: "video", Title: title, Meta: []byte(`{}`), Version: 3}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save("沙丘：第一部")
+	if found, _ := st.Search(ctx, SearchOptions{Query: "沙丘"}); len(found) != 1 || found[0].ID != movie.ID {
+		t.Fatalf("short title search = %+v", found)
+	}
+	if found, _ := st.Search(ctx, SearchOptions{Query: "第一部"}); len(found) != 1 {
+		t.Fatalf("trigram title search = %+v", found)
+	}
+	save("Arrival")
+	if found, _ := st.Search(ctx, SearchOptions{Query: "第一部"}); len(found) != 0 {
+		t.Fatalf("stale title still indexed: %+v", found)
+	}
+	if found, _ := st.Search(ctx, SearchOptions{Query: "arrival"}); len(found) != 1 {
+		t.Fatalf("new title not indexed: %+v", found)
+	}
+	if pending, _ := st.Pending(ctx, 3, Cursor{}, 100); len(pending) != 5 {
+		t.Fatalf("pending after save = %d, want 5", len(pending))
+	}
+}

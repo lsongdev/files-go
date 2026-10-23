@@ -48,12 +48,18 @@ END;
 CREATE TRIGGER files_ad AFTER DELETE ON files BEGIN
 	INSERT INTO files_fts(files_fts, rowid, name, title) VALUES ('delete', old.id, old.name, old.title);
 END;
-CREATE TRIGGER files_au AFTER UPDATE OF name, title ON files BEGIN
+
+CREATE TABLE cache (key TEXT PRIMARY KEY, value BLOB NOT NULL, at INTEGER NOT NULL);
+`
+
+// triggers are (re)created on every open so fixes apply without a rebuild.
+const triggers = `
+DROP TRIGGER IF EXISTS files_au;
+CREATE TRIGGER files_au AFTER UPDATE OF name, title ON files
+WHEN old.name IS NOT new.name OR old.title IS NOT new.title BEGIN
 	INSERT INTO files_fts(files_fts, rowid, name, title) VALUES ('delete', old.id, old.name, old.title);
 	INSERT INTO files_fts(rowid, name, title) VALUES (new.id, new.name, new.title);
 END;
-
-CREATE TABLE cache (key TEXT PRIMARY KEY, value BLOB NOT NULL, at INTEGER NOT NULL);
 `
 
 type File struct {
@@ -90,6 +96,10 @@ func Open(path string) (*Store, error) {
 			db.Close()
 			return nil, fmt.Errorf("create schema: %w", err)
 		}
+	}
+	if _, err := db.Exec(triggers); err != nil {
+		db.Close()
+		return nil, err
 	}
 	return &Store{db: db}, nil
 }
@@ -239,10 +249,17 @@ type Cursor struct {
 	ID      int64
 }
 
-// Pending returns rows whose enrichment is older than version, after cursor.
+// Pending returns rows whose enrichment is older than version, after
+// cursor. It is split in two queries so both seek in files_pending.
 func (s *Store) Pending(ctx context.Context, version int, after Cursor, limit int) ([]File, error) {
-	return s.query(ctx, `SELECT `+columns+` FROM files WHERE meta_ver<? AND (meta_ver>? OR (meta_ver=? AND id>?))
-		ORDER BY meta_ver, id LIMIT ?`, version, after.MetaVer, after.MetaVer, after.ID, limit)
+	files, err := s.query(ctx, `SELECT `+columns+` FROM files INDEXED BY files_pending
+		WHERE meta_ver=? AND id>? ORDER BY id LIMIT ?`, after.MetaVer, after.ID, limit)
+	if err != nil || len(files) == limit {
+		return files, err
+	}
+	more, err := s.query(ctx, `SELECT `+columns+` FROM files INDEXED BY files_pending
+		WHERE meta_ver>? AND meta_ver<? ORDER BY meta_ver, id LIMIT ?`, after.MetaVer, version, limit-len(files))
+	return append(files, more...), err
 }
 
 type Result struct {
