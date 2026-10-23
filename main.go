@@ -58,7 +58,13 @@ func main() {
 	}}
 	// Anything that changes enrichment results is part of the version tag,
 	// so changing it re-enriches the affected files in the background.
-	tag := fmt.Sprintf("tmdb=%t/%s pdf=%t roots=%v", client != nil, cfg.TMDB.Language, pdfinfo != "", cfg.Roots)
+	hints := map[string]string{}
+	for _, root := range cfg.Roots {
+		if root.Type != "" || len(root.Types) > 0 {
+			hints[root.ID] = fmt.Sprint(root.Type, root.Types) // maps print sorted
+		}
+	}
+	tag := fmt.Sprintf("tmdb=%t/%s pdf=%t hints=%v", client != nil, cfg.TMDB.Language, pdfinfo != "", hints)
 	pipeline := media.NewPipeline(st, tag,
 		&media.Probe{Bin: cfg.FFprobe, Path: resolve},
 		library.Videos(),
