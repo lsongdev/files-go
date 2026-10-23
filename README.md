@@ -34,8 +34,10 @@ upload, rename or delete operations.
   files, new enrichers or configuration changes (TMDB on/off, root types)
   re-enrich automatically, and nothing is lost on restart.
 - **Scanning** reconciles one directory at a time against the index and only
-  writes what changed. An empty or missing root is treated as an unmounted
-  disk and leaves the index untouched. A full rescan runs periodically; when
+  writes what changed. A missing root, or one that turned empty and now sits
+  on another filesystem than before, is treated as an unmounted disk and
+  leaves the index untouched (`POST /api/roots/{root}/scan?force=1` confirms
+  a root that is really empty). A full rescan runs periodically; when
   a folder is browsed, one `stat` detects whether it changed and resyncs just
   that level.
 - **Enrichers** share one interface (`Match`, `Enrich`) and run in order on

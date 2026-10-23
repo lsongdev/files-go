@@ -54,7 +54,7 @@ func count(t *testing.T, st *Store) int {
 func TestScanReconcile(t *testing.T) {
 	ctx := context.Background()
 	st, scanner, root := setup(t)
-	if err := scanner.Scan(ctx, "r"); err != nil {
+	if err := scanner.Scan(ctx, "r", false); err != nil {
 		t.Fatal(err)
 	}
 	// root, Movies, Dune (2021), Dune.2021.mkv, poster.jpg, notes.txt; hidden and node_modules excluded
@@ -85,7 +85,7 @@ func TestScanReconcile(t *testing.T) {
 	os.Chtimes(filepath.Join(root, "Movies", "Dune (2021)", "Dune.2021.mkv"), future, future)
 	write(t, filepath.Join(root, "new.mp3"), "audio")
 	os.RemoveAll(filepath.Join(root, "Movies", "poster.jpg"))
-	if err := scanner.Scan(ctx, "r"); err != nil {
+	if err := scanner.Scan(ctx, "r", false); err != nil {
 		t.Fatal(err)
 	}
 	changed, _ := st.ByPath(ctx, "r", "Movies/Dune (2021)/Dune.2021.mkv")
@@ -104,7 +104,7 @@ func TestScanReconcile(t *testing.T) {
 
 	// Removing a directory drops its whole subtree.
 	os.RemoveAll(filepath.Join(root, "Movies"))
-	if err := scanner.Scan(ctx, "r"); err != nil {
+	if err := scanner.Scan(ctx, "r", false); err != nil {
 		t.Fatal(err)
 	}
 	if n := count(t, st); n != 3 {
@@ -112,37 +112,57 @@ func TestScanReconcile(t *testing.T) {
 	}
 }
 
-func TestScanOfflineKeepsIndex(t *testing.T) {
+func TestScanEmptyRoot(t *testing.T) {
 	ctx := context.Background()
 	st, scanner, root := setup(t)
-	if err := scanner.Scan(ctx, "r"); err != nil {
+	if err := scanner.Scan(ctx, "r", false); err != nil {
 		t.Fatal(err)
 	}
 	before := count(t, st)
-	// An empty mount point looks like an unmounted disk.
-	entries, _ := os.ReadDir(root)
-	for _, e := range entries {
-		os.RemoveAll(filepath.Join(root, e.Name()))
+	empty := func() {
+		entries, _ := os.ReadDir(root)
+		for _, e := range entries {
+			os.RemoveAll(filepath.Join(root, e.Name()))
+		}
 	}
-	if err := scanner.Scan(ctx, "r"); !errors.Is(err, ErrOffline) {
-		t.Fatalf("scan of empty root = %v, want ErrOffline", err)
+	// Emptied on the same filesystem as before: a real deletion.
+	empty()
+	if err := scanner.Scan(ctx, "r", false); err != nil {
+		t.Fatalf("emptied root: %v", err)
 	}
+	if n := count(t, st); n != 1 {
+		t.Fatalf("emptied root kept %d rows", n)
+	}
+
+	// Empty on another filesystem than last time: an unmounted disk.
+	write(t, filepath.Join(root, "a.txt"), "x")
+	if err := scanner.Scan(ctx, "r", false); err != nil {
+		t.Fatal(err)
+	}
+	before = count(t, st)
+	st.CachePut(ctx, "root-device:r", []byte("12345"))
+	empty()
+	if err := scanner.Scan(ctx, "r", false); !errors.Is(err, ErrOffline) {
+		t.Fatalf("scan of unmounted root = %v, want ErrOffline", err)
+	}
+	if status := scanner.Status()[0]; status.State != "offline" || count(t, st) != before {
+		t.Fatalf("offline scan changed the index or state: %q", status.State)
+	}
+	// The user can confirm that it is really empty.
+	if err := scanner.Scan(ctx, "r", true); err != nil || count(t, st) != 1 {
+		t.Fatalf("forced scan: %v, %d rows", err, count(t, st))
+	}
+
 	os.RemoveAll(root)
-	if err := scanner.Scan(ctx, "r"); !errors.Is(err, ErrOffline) {
+	if err := scanner.Scan(ctx, "r", true); !errors.Is(err, ErrOffline) {
 		t.Fatalf("scan of missing root = %v, want ErrOffline", err)
-	}
-	if after := count(t, st); after != before {
-		t.Fatalf("offline scan changed the index: %d -> %d", before, after)
-	}
-	if status := scanner.Status()[0]; status.State != "offline" {
-		t.Fatalf("state = %q", status.State)
 	}
 }
 
 func TestSyncDirAndAncestors(t *testing.T) {
 	ctx := context.Background()
 	st, scanner, root := setup(t)
-	if err := scanner.Scan(ctx, "r"); err != nil {
+	if err := scanner.Scan(ctx, "r", false); err != nil {
 		t.Fatal(err)
 	}
 	dir, _ := st.ByPath(ctx, "r", "Movies/Dune (2021)")
@@ -170,7 +190,7 @@ func TestSyncDirAndAncestors(t *testing.T) {
 func TestSearchFollowsTitles(t *testing.T) {
 	ctx := context.Background()
 	st, scanner, _ := setup(t)
-	if err := scanner.Scan(ctx, "r"); err != nil {
+	if err := scanner.Scan(ctx, "r", false); err != nil {
 		t.Fatal(err)
 	}
 	movie, _ := st.ByPath(ctx, "r", "Movies/Dune (2021)/Dune.2021.mkv")

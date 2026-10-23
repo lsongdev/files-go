@@ -40,7 +40,7 @@ func TestAPI(t *testing.T) {
 	defer st.Close()
 	scanner := store.NewScanner(st, cfg.Roots, config.DefaultExclude, media.Classify)
 	scanner.Init(ctx)
-	if err := scanner.Scan(ctx, "home"); err != nil {
+	if err := scanner.Scan(ctx, "home", false); err != nil {
 		t.Fatal(err)
 	}
 	pipeline, _ := media.NewPipeline(ctx, st, "test", media.Photo{Path: scanner.Abs})

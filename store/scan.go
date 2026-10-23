@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -118,14 +119,15 @@ func (s *Scanner) ensureRoot(ctx context.Context, root config.Root) (File, error
 // ScanAll walks every root sequentially.
 func (s *Scanner) ScanAll(ctx context.Context) {
 	for _, root := range s.roots {
-		if err := s.Scan(ctx, root.ID); err != nil && ctx.Err() == nil {
+		if err := s.Scan(ctx, root.ID, false); err != nil && ctx.Err() == nil {
 			log.Printf("scan %s: %v", root.ID, err)
 		}
 	}
 }
 
-// Scan reconciles a whole root with the filesystem.
-func (s *Scanner) Scan(ctx context.Context, rootID string) (err error) {
+// Scan reconciles a whole root with the filesystem. force accepts a root
+// that became empty although it cannot be told apart from an unmounted disk.
+func (s *Scanner) Scan(ctx context.Context, rootID string, force bool) (err error) {
 	root, ok := s.Root(rootID)
 	if !ok {
 		return fmt.Errorf("unknown root %q", rootID)
@@ -164,7 +166,7 @@ func (s *Scanner) Scan(ctx context.Context, rootID string) (err error) {
 		}
 		dir := queue[len(queue)-1]
 		queue = queue[:len(queue)-1]
-		children, err := s.sync(ctx, root, dir)
+		children, err := s.sync(ctx, root, dir, force)
 		if errors.Is(err, fs.ErrNotExist) && dir.Path != "" {
 			continue // removed while scanning; the parent's next sync drops it
 		}
@@ -188,7 +190,7 @@ func (s *Scanner) SyncDir(ctx context.Context, dir File) error {
 	if !ok {
 		return fmt.Errorf("unknown root %q", dir.Root)
 	}
-	_, err := s.sync(ctx, root, dir)
+	_, err := s.sync(ctx, root, dir, false)
 	return err
 }
 
@@ -219,7 +221,7 @@ type known struct {
 
 // sync lists one directory, applies inserts, updates and deletions, and
 // returns the current children.
-func (s *Scanner) sync(ctx context.Context, root config.Root, dir File) ([]File, error) {
+func (s *Scanner) sync(ctx context.Context, root config.Root, dir File, force bool) ([]File, error) {
 	abs := filepath.Join(root.Path, filepath.FromSlash(dir.Path))
 	self, err := os.Stat(abs)
 	if err != nil || !self.IsDir() {
@@ -272,9 +274,22 @@ func (s *Scanner) sync(ctx context.Context, root config.Root, dir File) ([]File,
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// An empty mount point usually means an unmounted disk, not a deleted tree.
-	if dir.Path == "" && len(current) == 0 && len(existing) > 0 {
-		return nil, ErrOffline
+	if dir.Path == "" {
+		// A root that turned empty is either a directory that was emptied
+		// or the mount point of a disk that is gone. Only the latter shows up
+		// on a different filesystem than last time; when unsure, keep the
+		// index unless forced.
+		key := "root-device:" + root.ID
+		device := strconv.FormatUint(deviceOf(self), 10)
+		known, _ := s.store.CacheGet(ctx, key, 1<<62)
+		if len(current) == 0 && len(existing) > 0 && !force && (device == "0" || string(known) != device) {
+			return nil, ErrOffline
+		}
+		if device != "0" && string(known) != device {
+			if err := s.store.CachePut(ctx, key, []byte(device)); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	var changed []File
