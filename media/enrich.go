@@ -1,0 +1,288 @@
+// Package media enriches indexed files with metadata derived from their
+// type, name and embedded information.
+package media
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"hash/fnv"
+	"log"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/lsongdev/files-go/store"
+)
+
+// Meta is the enrichment result stored as JSON on the file row. Detailed,
+// type-specific values go into Info as display-ready key/value pairs.
+type Meta struct {
+	Kind      string            `json:"kind,omitempty"` // movie, episode, show, season, video, audio, photo, book, app ...
+	Title     string            `json:"title,omitempty"`
+	Original  string            `json:"original,omitempty"`
+	Year      int               `json:"year,omitempty"`
+	Season    int               `json:"season,omitempty"`
+	Episode   int               `json:"episode,omitempty"`
+	Show      string            `json:"show,omitempty"`
+	Summary   string            `json:"summary,omitempty"`
+	Artist    string            `json:"artist,omitempty"`
+	Album     string            `json:"album,omitempty"`
+	Author    string            `json:"author,omitempty"`
+	Duration  float64           `json:"duration,omitempty"` // seconds
+	Width     int               `json:"width,omitempty"`
+	Height    int               `json:"height,omitempty"`
+	Container string            `json:"container,omitempty"`
+	Video     string            `json:"video,omitempty"` // codec
+	Audio     string            `json:"audio,omitempty"` // codec
+	Rating    float64           `json:"rating,omitempty"`
+	Genres    []string          `json:"genres,omitempty"`
+	TMDB      string            `json:"tmdb,omitempty"` // movie/123, tv/456
+	Locked    bool              `json:"locked,omitempty"`
+	Info      map[string]string `json:"info,omitempty"`
+	// Poster and Backdrop reference artwork: "self" (frame or embedded cover
+	// of this file), "zip:<entry>", "file:<id>" or "tmdb:<path>".
+	Poster   string `json:"poster,omitempty"`
+	Backdrop string `json:"backdrop,omitempty"`
+}
+
+func (m *Meta) Set(key, value string) {
+	if value = strings.TrimSpace(value); value == "" {
+		return
+	}
+	if m.Info == nil {
+		m.Info = map[string]string{}
+	}
+	m.Info[key] = value
+}
+
+func (m *Meta) empty() bool {
+	b, _ := json.Marshal(m)
+	return string(b) == "{}"
+}
+
+// Enricher adds one kind of metadata. Enrichers run in order on the same
+// Meta, so later ones can build on earlier results (e.g. movie lookup after
+// ffprobe). Enrich may adjust f.Kind when the content disagrees with the name.
+type Enricher interface {
+	Match(f *store.File) bool
+	Enrich(ctx context.Context, f *store.File, m *Meta) error
+}
+
+// ErrTransient marks failures worth retrying later, e.g. network errors.
+var ErrTransient = errors.New("temporary failure")
+
+// Pipeline runs enrichers in the background over rows whose meta_ver is
+// older than Version; the files table itself is the work queue.
+type Pipeline struct {
+	Version   int
+	store     *store.Store
+	enrichers []Enricher
+	hot       chan int64
+	wake      chan struct{}
+
+	mu       sync.Mutex
+	inflight map[int64]bool // sent to a worker and not yet saved
+	paused   time.Time      // set after a transient failure
+}
+
+// NewPipeline derives Version from the code version plus a configuration
+// tag (e.g. whether TMDB is enabled), so changing either re-enriches.
+func NewPipeline(st *store.Store, tag string, enrichers ...Enricher) *Pipeline {
+	h := fnv.New32a()
+	fmt.Fprintf(h, "v1:%s", tag)
+	return &Pipeline{Version: int(h.Sum32() >> 1), store: st, enrichers: enrichers,
+		hot: make(chan int64, 512), wake: make(chan struct{}, 1), inflight: map[int64]bool{}}
+}
+
+// Prioritize moves files a user is looking at to the front of the queue.
+func (p *Pipeline) Prioritize(files []store.File) {
+	for _, f := range files {
+		if f.MetaVer != p.Version {
+			select {
+			case p.hot <- f.ID:
+			default:
+			}
+		}
+	}
+	p.Wake()
+}
+
+func (p *Pipeline) Wake() {
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Run feeds pending rows to a pool of workers and saves results in small
+// batches. A slow file (a large probe, a TMDB round trip) only occupies
+// its own worker.
+func (p *Pipeline) Run(ctx context.Context, workers int) {
+	jobs := make(chan store.File)
+	results := make(chan store.Result, 64)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for f := range jobs {
+				result, err := p.Enrich(ctx, f)
+				if err != nil { // transient: leave it pending and back off
+					p.mu.Lock()
+					p.paused = time.Now().Add(5 * time.Minute)
+					delete(p.inflight, f.ID)
+					p.mu.Unlock()
+					if ctx.Err() == nil {
+						log.Printf("enrichment paused: %v", err)
+					}
+					continue
+				}
+				results <- result
+			}
+		}()
+	}
+	saved := make(chan struct{})
+	go func() {
+		defer close(saved)
+		p.save(ctx, results)
+	}()
+	p.feed(ctx, jobs)
+	close(jobs)
+	wg.Wait()
+	close(results)
+	<-saved
+}
+
+func (p *Pipeline) feed(ctx context.Context, jobs chan<- store.File) {
+	send := func(f store.File) bool {
+		p.mu.Lock()
+		busy := p.inflight[f.ID]
+		p.inflight[f.ID] = true
+		p.mu.Unlock()
+		if busy {
+			return true
+		}
+		select {
+		case jobs <- f:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	var cursor store.Cursor
+	for ctx.Err() == nil {
+		p.mu.Lock()
+		wait := time.Until(p.paused)
+		p.mu.Unlock()
+		if wait > 0 {
+			select {
+			case <-ctx.Done():
+			case <-time.After(wait):
+			}
+			continue
+		}
+		select {
+		case id := <-p.hot:
+			if f, err := p.store.Get(ctx, id); err == nil && f.MetaVer != p.Version {
+				send(f)
+			}
+			continue
+		default:
+		}
+		files, err := p.store.Pending(ctx, p.Version, cursor, 32)
+		if err != nil && ctx.Err() == nil {
+			log.Printf("load pending files: %v", err)
+		}
+		if len(files) == 0 {
+			if cursor == (store.Cursor{}) {
+				select { // nothing pending at all
+				case <-ctx.Done():
+				case <-p.wake:
+				case <-time.After(time.Minute):
+				}
+			}
+			cursor = store.Cursor{} // start over to pick up rows changed behind the cursor
+			continue
+		}
+		for _, f := range files {
+			cursor = store.Cursor{MetaVer: f.MetaVer, ID: f.ID}
+			if !send(f) {
+				return
+			}
+		}
+	}
+}
+
+func (p *Pipeline) save(ctx context.Context, results <-chan store.Result) {
+	var batch []store.Result
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		if err := p.store.SaveResults(context.WithoutCancel(ctx), batch); err != nil {
+			log.Printf("save enrichment: %v", err)
+		}
+		p.mu.Lock()
+		for _, r := range batch {
+			delete(p.inflight, r.ID)
+		}
+		p.mu.Unlock()
+		batch = batch[:0]
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case r, ok := <-results:
+			if !ok {
+				flush()
+				return
+			}
+			if batch = append(batch, r); len(batch) >= 200 {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		}
+	}
+}
+
+// Enrich runs all matching enrichers for one file.
+func (p *Pipeline) Enrich(ctx context.Context, f store.File) (store.Result, error) {
+	m := &Meta{}
+	var previous Meta
+	if len(f.Meta) > 0 && json.Unmarshal(f.Meta, &previous) == nil && previous.Locked {
+		m.Locked, m.TMDB = true, previous.TMDB // manual matches survive re-enrichment
+	}
+	var failures []string
+	for _, e := range p.enrichers {
+		if !e.Match(&f) {
+			continue
+		}
+		if err := e.Enrich(ctx, &f, m); err != nil {
+			if errors.Is(err, ErrTransient) || ctx.Err() != nil {
+				return store.Result{}, err
+			}
+			failures = append(failures, err.Error())
+		}
+	}
+	result := store.Result{ID: f.ID, Kind: f.Kind, Version: p.Version, Err: strings.Join(failures, "; ")}
+	if !m.empty() {
+		result.Meta, _ = json.Marshal(m)
+		if m.Title != "" && m.Title != f.Name {
+			result.Title = m.Title
+		}
+	}
+	return result, nil
+}
+
+// Rematch re-runs enrichment for one file immediately.
+func (p *Pipeline) Rematch(ctx context.Context, f store.File) error {
+	result, err := p.Enrich(ctx, f)
+	if err != nil {
+		return err
+	}
+	return p.store.SaveResults(ctx, []store.Result{result})
+}
