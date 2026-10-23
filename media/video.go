@@ -268,7 +268,8 @@ func (d folders) readNFO(nfo store.File, m *Meta) error {
 			id = u.Value
 		}
 	}
-	if id = strings.TrimSpace(id); id != "" && !m.Locked {
+	if n, _ := strconv.Atoi(strings.TrimSpace(id)); n > 0 && !m.Locked {
+		id = strconv.Itoa(n)
 		kind := map[bool]string{true: "tv", false: "movie"}[strings.EqualFold(nfo.Name, "tvshow.nfo")]
 		m.TMDB = kind + "/" + id // trusted unless the local files disagree
 	}
