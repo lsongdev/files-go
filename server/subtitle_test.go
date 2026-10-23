@@ -41,7 +41,7 @@ func TestSubtitles(t *testing.T) {
 	defer st.Close()
 	scanner := store.NewScanner(st, cfg.Roots, nil, media.Classify)
 	scanner.Init(ctx)
-	scanner.Scan(ctx, "r")
+	scanner.Scan(ctx, "r", false)
 	pipeline, _ := media.NewPipeline(ctx, st, "test")
 	srv := httptest.NewServer(New(ctx, cfg, st, scanner, pipeline, nil).Handler(http.NotFoundHandler()))
 	defer srv.Close()

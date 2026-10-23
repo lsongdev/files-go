@@ -156,8 +156,9 @@ func (s *Server) scan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "root not found")
 		return
 	}
+	force := r.URL.Query().Get("force") == "1" // the root really is empty
 	go func() {
-		if err := s.scanner.Scan(s.ctx, root); err != nil {
+		if err := s.scanner.Scan(s.ctx, root, force); err != nil {
 			log.Printf("scan %s: %v", root, err)
 		}
 		s.pipeline.Wake()

@@ -72,7 +72,7 @@ func TestIdentifyMoviesAndEpisodes(t *testing.T) {
 		}
 		return "video"
 	})
-	if err := scanner.Scan(ctx, "r"); err != nil {
+	if err := scanner.Scan(ctx, "r", false); err != nil {
 		t.Fatal(err)
 	}
 	client := newTMDB(tmdb.Options{Key: "key", Language: "zh-CN", BaseURL: api.URL, Cache: storeCache{st}})
