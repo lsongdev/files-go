@@ -328,6 +328,13 @@ func (s *Store) CacheGet(ctx context.Context, key string, maxAge time.Duration) 
 	return value, time.Since(time.Unix(at, 0)) < maxAge
 }
 
+// CachePrune deletes cache entries under prefix that are older than maxAge.
+func (s *Store) CachePrune(ctx context.Context, prefix string, maxAge time.Duration) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM cache WHERE key >= ? AND key < ? AND at < ?`,
+		prefix, prefix+"\xff", time.Now().Add(-maxAge).Unix())
+	return err
+}
+
 func (s *Store) CachePut(ctx context.Context, key string, value []byte) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO cache(key, value, at) VALUES (?, ?, ?)
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value, at=excluded.at`, key, value, time.Now().Unix())

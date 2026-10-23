@@ -18,7 +18,6 @@ import (
 	"github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/server"
 	"github.com/lsongdev/files-go/store"
-	"github.com/lsongdev/files-go/tmdb"
 	"github.com/lsongdev/files-go/web"
 )
 
@@ -46,9 +45,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	var client *tmdb.Client
+	var client *media.TMDB
 	if cfg.TMDB.Key != "" {
-		client = tmdb.New(cfg.TMDB.Key, cfg.TMDB.Language, st)
+		client = media.NewTMDB(cfg.TMDB.Key, cfg.TMDB.Language, st)
 	}
 	pdfinfo, _ := exec.LookPath("pdfinfo")
 	resolve := scanner.Abs

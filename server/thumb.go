@@ -28,12 +28,15 @@ import (
 	"github.com/lsongdev/files-go/config"
 	"github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/store"
-	"github.com/lsongdev/files-go/tmdb"
+	"github.com/lsongdev/tmdb-go"
 )
 
 const thumbSize = 480
 
-var errNoThumb = errors.New("no thumbnail")
+var (
+	errNoThumb = errors.New("no thumbnail")
+	errRetry   = errors.New("temporary failure") // not cached
+)
 
 // Thumbs renders thumbnails lazily on first request and caches them on
 // disk. A failed attempt is cached as an empty file so it is not retried.
@@ -43,14 +46,14 @@ type Thumbs struct {
 	pdftoppm string
 	store    *store.Store
 	scanner  *store.Scanner
-	tmdb     *tmdb.Client
+	tmdb     *media.TMDB
 	slots    chan struct{}
 
 	mu       sync.Mutex
 	inflight map[string]*sync.WaitGroup
 }
 
-func NewThumbs(cfg *config.Config, st *store.Store, scanner *store.Scanner, client *tmdb.Client) *Thumbs {
+func NewThumbs(cfg *config.Config, st *store.Store, scanner *store.Scanner, client *media.TMDB) *Thumbs {
 	pdftoppm, _ := exec.LookPath("pdftoppm")
 	return &Thumbs{dir: filepath.Join(cfg.Data, "cache"), ffmpeg: cfg.FFmpeg, pdftoppm: pdftoppm, store: st,
 		scanner: scanner, tmdb: client, slots: make(chan struct{}, runtime.NumCPU()), inflight: map[string]*sync.WaitGroup{}}
@@ -150,7 +153,7 @@ func (t *Thumbs) Get(ctx context.Context, f store.File, m media.Meta, ref, size 
 	data, err := t.render(genCtx, f, m, ref, size)
 	if err != nil {
 		log.Printf("thumbnail %s/%s: %v", f.Root, f.Path, err)
-		if errors.Is(err, tmdb.ErrUnavailable) {
+		if errors.Is(err, errRetry) {
 			return "", errNoThumb // do not cache network failures
 		}
 		data = nil
@@ -171,7 +174,10 @@ func (t *Thumbs) render(ctx context.Context, f store.File, m media.Meta, ref, si
 		}
 		body, err := t.tmdb.Image(ctx, size, p)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", tmdb.ErrUnavailable, err)
+			if tmdb.IsNotFound(err) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("%w: %v", errRetry, err)
 		}
 		defer body.Close()
 		return io.ReadAll(io.LimitReader(body, 10<<20))

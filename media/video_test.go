@@ -13,7 +13,7 @@ import (
 
 	"github.com/lsongdev/files-go/config"
 	"github.com/lsongdev/files-go/store"
-	"github.com/lsongdev/files-go/tmdb"
+	"github.com/lsongdev/tmdb-go"
 )
 
 // fakeVideo stands in for ffprobe.
@@ -35,8 +35,8 @@ func TestIdentifyMoviesAndEpisodes(t *testing.T) {
 			w.Write([]byte(`{"results":[{"id":100,"name":"最后生还者","original_name":"The Last of Us","first_air_date":"2023-01-15","poster_path":"/tlou.jpg"}]}`))
 		case "/tv/100":
 			w.Write([]byte(`{"id":100,"name":"最后生还者","original_name":"The Last of Us","first_air_date":"2023-01-15","poster_path":"/tlou.jpg","genres":[{"name":"剧情"}]}`))
-		case "/tv/100/season/1/episode/3", "/tv/100/season/1/episode/4":
-			w.Write([]byte(`{"name":"漫长岁月","air_date":"2023-01-29","still_path":"/still.jpg"}`))
+		case "/tv/100/season/1":
+			w.Write([]byte(`{"season_number":1,"episodes":[{"episode_number":3,"name":"漫长岁月","air_date":"2023-01-29","still_path":"/still.jpg"},{"episode_number":4,"name":"请抓紧我的手"}]}`))
 		case "/search/movie":
 			searches.Add(1)
 			w.Write([]byte(`{"results":[{"id":7,"title":"Dune (1984)","release_date":"1984-12-14"},{"id":200,"title":"沙丘","original_title":"Dune","release_date":"2021-09-15"}]}`))
@@ -75,8 +75,7 @@ func TestIdentifyMoviesAndEpisodes(t *testing.T) {
 	if err := scanner.Scan(ctx, "r"); err != nil {
 		t.Fatal(err)
 	}
-	client := tmdb.New("key", "zh-CN", st)
-	client.SetBaseURL(api.URL, api.URL)
+	client := newTMDB(tmdb.Options{Key: "key", Language: "zh-CN", BaseURL: api.URL, Cache: storeCache{st}})
 	library := &Library{Store: st, TMDB: client, Path: scanner.Abs, Hint: func(f store.File) (string, string) { return cfgRoot.TypeOf(f.Path) }}
 	pipeline, _ := NewPipeline(ctx, st, "test", fakeVideo{}, library.Videos(), library.Folders())
 	run, stop := context.WithCancel(ctx)

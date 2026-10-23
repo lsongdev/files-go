@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/lsongdev/files-go/store"
-	"github.com/lsongdev/files-go/tmdb"
+	"github.com/lsongdev/tmdb-go"
 )
 
 // Library identifies movies and TV episodes from names, folder structure,
@@ -21,7 +20,7 @@ import (
 // the folder that type applies from (show folders sit directly below it).
 type Library struct {
 	Store *store.Store
-	TMDB  *tmdb.Client // nil disables online lookups
+	TMDB  *TMDB // nil disables online lookups
 	Path  Resolver
 	Hint  func(store.File) (hint, base string)
 }
@@ -125,9 +124,9 @@ func (v videos) episode(ctx context.Context, f *store.File, m *Meta, n Name, hin
 	if err != nil {
 		return transient(err)
 	}
-	m.Title, m.Summary, m.Rating, m.Year = ep.Name, ep.Overview, ep.Rating, leadingYear(ep.AirDate)
-	if ep.Still != "" {
-		m.Poster = "tmdb:" + ep.Still
+	m.Title, m.Summary, m.Rating, m.Year = ep.Name, ep.Overview, ep.VoteAverage, leadingYear(ep.AirDate)
+	if ep.StillPath != "" {
+		m.Poster = "tmdb:" + ep.StillPath
 	}
 	return nil
 }
@@ -244,7 +243,7 @@ func (d folders) readNFO(nfo store.File, m *Meta) error {
 
 // find resolves a TMDB item: a locked or known id is fetched directly,
 // otherwise the best search result above the confidence threshold.
-func (l *Library) find(ctx context.Context, m *Meta, kind, title string, year int) (*tmdb.Item, error) {
+func (l *Library) find(ctx context.Context, m *Meta, kind, title string, year int) (*Item, error) {
 	if l.TMDB == nil {
 		return nil, nil
 	}
@@ -269,7 +268,7 @@ func (l *Library) find(ctx context.Context, m *Meta, kind, title string, year in
 	if err != nil {
 		return nil, transient(err)
 	}
-	var best *tmdb.Item
+	var best *Item
 	bestScore := .8
 	for i, it := range items {
 		score := matchScore(title, year, append([]string{it.Title, it.Original}, it.Aliases...), it.Year) + min(it.Popularity/1000, .05)
@@ -287,7 +286,7 @@ func (l *Library) find(ctx context.Context, m *Meta, kind, title string, year in
 	return &item, nil
 }
 
-func apply(m *Meta, it *tmdb.Item) {
+func apply(m *Meta, it *Item) {
 	m.Title, m.Year, m.Summary, m.Rating, m.Genres = it.Title, it.Year, it.Overview, it.Rating, it.Genres
 	m.TMDB = fmt.Sprintf("%s/%d", it.Type, it.ID)
 	if it.Original != it.Title {
@@ -305,7 +304,7 @@ func apply(m *Meta, it *tmdb.Item) {
 }
 
 func transient(err error) error {
-	if errors.Is(err, tmdb.ErrUnavailable) {
+	if tmdb.IsTemporary(err) {
 		return fmt.Errorf("%w: %v", ErrTransient, err)
 	}
 	return err

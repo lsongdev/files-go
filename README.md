@@ -42,8 +42,8 @@ upload, rename or delete operations.
 ```
 config/   configuration
 store/    SQLite index and scanner
-media/    enrichers and the background pipeline
-tmdb/     TMDB client
+media/    enrichers, the background pipeline and the TMDB adapter
+           (github.com/lsongdev/tmdb-go)
 server/   HTTP API, thumbnails, streaming
 web/      Preact UI (embedded)
 ```
