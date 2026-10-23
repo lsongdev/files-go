@@ -107,18 +107,27 @@ function Listing({ items, view, onOpen }) {
 // with the same cache-busting version as this file.
 const asset = (name) => new URL(name + new URL(import.meta.url).search, import.meta.url).href;
 
+const loadPlayer = () => import(asset('./player.js'));
+// Fetch the player while the page is idle, so it is ready when needed.
+(window.requestIdleCallback || setTimeout)(() => loadPlayer().catch(() => {}));
+
 function Player({ item }) {
   const ref = useRef(null);
   const [status, setStatus] = useState('');
+  const [ready, setReady] = useState(false);
   useEffect(() => {
     let player;
     let live = true;
-    import(asset('./player.js'))
-      .then(({ createPlayer }) => { if (live) player = createPlayer(ref.current, item, setStatus); })
+    loadPlayer()
+      .then(({ createPlayer }) => { if (live) { player = createPlayer(ref.current, item, setStatus); setReady(true); } })
       .catch((e) => setStatus(`播放器加载失败：${e.message}`));
     return () => { live = false; player?.destroy(); };
   }, [item.id]);
-  return html`<div class=${`player ${item.kind}`}><div ref=${ref}></div>${status && html`<small class="hint">${status}</small>`}</div>`;
+  return html`<div class=${`player ${item.kind}`}>
+    ${!ready && html`<div class="player-placeholder"><span class="spinner"></span></div>`}
+    <div ref=${ref}></div>
+    ${status && html`<small class="hint">${status}</small>`}
+  </div>`;
 }
 
 function TextPreview({ item }) {
