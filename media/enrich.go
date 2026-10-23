@@ -34,6 +34,8 @@ type Meta struct {
 	Container string            `json:"container,omitempty"`
 	Video     string            `json:"video,omitempty"` // codec
 	Audio     string            `json:"audio,omitempty"` // codec
+	Depth     int               `json:"depth,omitempty"` // video bit depth
+	Subtitles []Subtitle        `json:"subtitles,omitempty"`
 	Rating    float64           `json:"rating,omitempty"`
 	Genres    []string          `json:"genres,omitempty"`
 	TMDB      string            `json:"tmdb,omitempty"` // movie/123, tv/456
@@ -43,6 +45,26 @@ type Meta struct {
 	// of this file), "zip:<entry>", "file:<id>" or "tmdb:<path>".
 	Poster   string `json:"poster,omitempty"`
 	Backdrop string `json:"backdrop,omitempty"`
+}
+
+// Subtitle is an embedded subtitle stream.
+type Subtitle struct {
+	Index   int    `json:"index"` // among subtitle streams
+	Codec   string `json:"codec"`
+	Lang    string `json:"lang,omitempty"`
+	Title   string `json:"title,omitempty"`
+	Default bool   `json:"default,omitempty"`
+	Forced  bool   `json:"forced,omitempty"`
+}
+
+// Text reports whether the stream can be converted to WebVTT; bitmap
+// subtitles (PGS, VobSub) cannot.
+func (s Subtitle) Text() bool {
+	switch s.Codec {
+	case "subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "text":
+		return true
+	}
+	return false
 }
 
 func (m *Meta) Set(key, value string) {
@@ -89,7 +111,7 @@ type Pipeline struct {
 // configuration tag (e.g. whether TMDB is enabled), so changing either
 // re-enriches everything in the background.
 func NewPipeline(ctx context.Context, st *store.Store, tag string, enrichers ...Enricher) (*Pipeline, error) {
-	version, err := st.Version(ctx, "v2:"+tag)
+	version, err := st.Version(ctx, "v3:"+tag)
 	if err != nil {
 		return nil, err
 	}

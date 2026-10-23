@@ -2,13 +2,16 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/store"
@@ -53,32 +56,43 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	m := meta(f)
 	transcode := r.URL.Query().Get("transcode") == "1"
 	start, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
-	args := []string{"-v", "error", "-nostdin"}
-	if start > 0 {
-		args = append(args, "-ss", strconv.FormatFloat(start, 'f', 3, 64))
-	}
-	args = append(args, "-i", src)
+	var in, out []string
 	contentType := "video/mp4"
 	if f.Kind == "audio" || m.Video == "" {
 		contentType = "audio/mp4"
-		args = append(args, "-map", "0:a:0", "-vn")
+		out = append(out, "-map", "0:a:0", "-vn")
 	} else {
-		args = append(args, "-map", "0:v:0", "-map", "0:a:0?")
+		out = append(out, "-map", "0:v:0", "-map", "0:a:0?")
 		switch {
 		case !transcode && (m.Video == "h264" || m.Video == "vp9" || m.Video == "av1"):
-			args = append(args, "-c:v", "copy")
+			out = append(out, "-c:v", "copy")
 		case !transcode && m.Video == "hevc":
-			args = append(args, "-c:v", "copy", "-tag:v", "hvc1")
+			out = append(out, "-c:v", "copy", "-tag:v", "hvc1")
+		case s.vaapi != "" && gpuDecodes(m):
+			// Decode and encode on the GPU at the original size. Scaling on
+			// the GPU (scale_vaapi) is broken with ffmpeg 4.4 and current
+			// Intel drivers, and H.264 handles 4K fine.
+			in = append(in, "-vaapi_device", s.vaapi, "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi")
+			out = append(out, "-c:v", "h264_vaapi", "-qp", "24", "-g", "48")
+		case s.vaapi != "":
+			// Decode in software (old codecs, 10-bit), encode on the GPU.
+			in = append(in, "-vaapi_device", s.vaapi)
+			out = append(out, "-vf", "scale=-2:'min(1080,ih)',format=nv12,hwupload", "-c:v", "h264_vaapi", "-qp", "24", "-g", "48")
 		default:
-			args = append(args, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+			out = append(out, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
 				"-g", "48", "-vf", "scale=-2:'min(1080,ih)'")
 		}
 	}
 	if !transcode && (m.Audio == "aac" || m.Audio == "mp3" || m.Audio == "opus") {
-		args = append(args, "-c:a", "copy")
+		out = append(out, "-c:a", "copy")
 	} else {
-		args = append(args, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
+		out = append(out, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
 	}
+	args := append([]string{"-v", "error", "-nostdin"}, in...)
+	if start > 0 {
+		args = append(args, "-ss", strconv.FormatFloat(start, 'f', 3, 64))
+	}
+	args = append(append(args, "-i", src), out...)
 	args = append(args, "-strict", "-2", "-f", "mp4", "-movflags", "frag_keyframe+empty_moov+default_base_moof", "pipe:1")
 
 	cmd := exec.CommandContext(r.Context(), s.cfg.FFmpeg, args...)
@@ -99,4 +113,37 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	if err := cmd.Wait(); err != nil && r.Context().Err() == nil {
 		log.Printf("stream %s/%s: %v: %s (copy: %v)", f.Root, f.Path, err, strings.TrimSpace(stderr.String()), copyErr)
 	}
+}
+
+// gpuDecodes reports codecs Intel Quick Sync decodes into surfaces the
+// H.264 encoder accepts: 8-bit and at most 4096 pixels wide.
+func gpuDecodes(m media.Meta) bool {
+	switch m.Video {
+	case "h264", "hevc", "vp9", "vp8", "mpeg2video", "vc1":
+		return m.Depth <= 8 && m.Width <= 4096 && m.Height <= 4096
+	}
+	return false
+}
+
+// detectVAAPI returns the render device when ffmpeg can encode H.264 on it.
+func detectVAAPI(ffmpeg, mode, device string) string {
+	if mode == "none" {
+		return ""
+	}
+	if _, err := os.Stat(device); err != nil {
+		if mode == "vaapi" {
+			log.Printf("hardware transcoding unavailable: %v", err)
+		}
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, ffmpeg, "-v", "error", "-nostdin", "-vaapi_device", device,
+		"-f", "lavfi", "-i", "color=black:s=320x240:d=0.2", "-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi", "-f", "null", "-").CombinedOutput()
+	if err != nil {
+		log.Printf("hardware transcoding unavailable: %v: %s", err, strings.TrimSpace(string(out)))
+		return ""
+	}
+	log.Printf("hardware transcoding: VAAPI on %s", device)
+	return device
 }
