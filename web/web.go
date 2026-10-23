@@ -1,3 +1,4 @@
+// Package web embeds the browser UI.
 package web
 
 import (
@@ -5,8 +6,6 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
-	"io/fs"
-	"mime"
 	"net/http"
 	"path"
 	"time"
@@ -15,50 +14,35 @@ import (
 //go:embed index.html app.js styles.css
 var files embed.FS
 
-var builtAt = time.Now().UTC()
-var assetVersion = func() string {
-	app, _ := files.ReadFile("app.js")
-	styles, _ := files.ReadFile("styles.css")
-	hash := sha256.New()
-	_, _ = hash.Write(app)
-	_, _ = hash.Write(styles)
-	return hex.EncodeToString(hash.Sum(nil)[:8])
+var started = time.Now()
+
+// version busts browser caches when the embedded assets change.
+var version = func() string {
+	h := sha256.New()
+	for _, name := range []string{"app.js", "styles.css"} {
+		data, _ := files.ReadFile(name)
+		h.Write(data)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
 }()
 
+const csp = "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org; media-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'"
+
+// Handler serves static assets and falls back to index.html for app routes.
 func Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		name := path.Clean(r.URL.Path)
-		if name == "." || name == "/" {
+		name := path.Clean(r.URL.Path)[1:]
+		data, err := files.ReadFile(name)
+		if err != nil || name == "" {
 			name = "index.html"
+			data, _ = files.ReadFile(name)
+			data = bytes.ReplaceAll(data, []byte("{{VERSION}}"), []byte(version))
+			w.Header().Set("Cache-Control", "no-cache")
 		} else {
-			name = name[1:]
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
-		data, err := fs.ReadFile(files, name)
-		if err != nil {
-			name = "index.html"
-			data, err = fs.ReadFile(files, name)
-		}
-		if name == "index.html" {
-			data = bytes.ReplaceAll(data, []byte("{{ASSET_VERSION}}"), []byte(assetVersion))
-		}
-		if err != nil {
-			http.Error(w, "web interface unavailable", http.StatusInternalServerError)
-			return
-		}
-		contentType := mime.TypeByExtension(path.Ext(name))
-		if contentType != "" {
-			w.Header().Set("Content-Type", contentType)
-		}
-		if name == "index.html" {
-			// The UI is a long-lived SPA. Never let a browser keep an old HTML
-			// shell across server upgrades, otherwise it can continue running a
-			// stale app.js while API responses already use the new version.
-			w.Header().Set("Cache-Control", "no-store")
-		} else {
-			w.Header().Set("Cache-Control", "no-cache, must-revalidate")
-		}
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://unpkg.com; connect-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", csp)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		http.ServeContent(w, r, name, builtAt, bytes.NewReader(data))
+		http.ServeContent(w, r, name, started, bytes.NewReader(data))
 	})
 }

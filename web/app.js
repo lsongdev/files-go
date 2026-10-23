@@ -1,1020 +1,365 @@
-import { html, render, useCallback, useEffect, useMemo, useRef, useState } from 'https://unpkg.com/htm@3.1.1/preact/standalone.module.js';
-import Hls from 'https://unpkg.com/hls.js@1.6.13/dist/hls.mjs';
+import { html, render, useCallback, useEffect, useRef, useState } from 'https://unpkg.com/htm@3.1.1/preact/standalone.module.js';
 
-const API = '/api/v1';
-
-async function request(url, options) {
-  const response = await fetch(url, options);
+// Absolute URLs keep fetch working when the page was opened as http://user:pass@host/.
+const request = (url, options) => fetch(new URL(url, location.origin), options);
+const api = async (url, options) => {
+  const response = await request(url, options);
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(body.error?.message || `请求失败 (${response.status})`);
-  }
+  if (!response.ok) throw new Error(body.error || `请求失败 (${response.status})`);
   return body;
-}
+};
 
-function Icon({ name, size = 20 }) {
-  const paths = {
-    brand: html`<path d="M4 6.5 12 2l8 4.5v11L12 22l-8-4.5z"/><path d="m4 6.5 8 4.5 8-4.5M12 11v11"/>`,
-    movies: html`<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m7 5 2-3m4 3 2-3m2 7h.01M7 9h6"/>`,
-    tv: html`<rect x="3" y="6" width="18" height="13" rx="2"/><path d="m8 2 4 4 4-4M7 15h6"/>`,
-    music: html`<path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/>`,
-    photos: html`<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>`,
-    files: html`<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/>`,
-    folder: html`<path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z"/>`,
-    file: html`<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>`,
-    grid: html`<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>`,
-    list: html`<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>`,
-    refresh: html`<path d="M20 6v5h-5M4 18v-5h5"/><path d="M18.5 9A7 7 0 0 0 6 5.5L4 8m2 7a7 7 0 0 0 12 3l2-2"/>`,
-    chevron: html`<path d="m9 18 6-6-6-6"/>`,
-    menu: html`<path d="M4 6h16M4 12h16M4 18h16"/>`,
-    close: html`<path d="m6 6 12 12M18 6 6 18"/>`,
-    drive: html`<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 15h.01M11 15h6M7 9h10"/>`,
-    more: html`<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>`,
-    sun: html`<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"/>`,
-    moon: html`<path d="M21 12.8A8.5 8.5 0 1 1 11.2 3 6.5 6.5 0 0 0 21 12.8z"/>`,
-    search: html`<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>`,
-    x: html`<path d="m6 6 12 12M18 6 6 18"/>`,
-    download: html`<path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/>`,
-    plus: html`<path d="M12 5v14M5 12h14"/>`,
-    trash: html`<path d="M4 7h16M9 7V4h6v3m3 0-1 14H7L6 7m4 4v6m4-6v6"/>`,
-    upload: html`<path d="M12 16V4m0 0L8 8m4-4 4 4M5 20h14"/>`,
-    move: html`<path d="M5 9V5h4m10 10v4h-4M5 5l6 6m8 8-6-6M15 5h4v4m0-4-6 6M9 19H5v-4m0 4 6-6"/>`,
-    copy: html`<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>`,
-  };
-  return html`<svg class="icon" width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.file}</svg>`;
-}
+const ICONS = {
+  movies: 'M3 5h18v14H3zM7 5l2-3m4 3 2-3M7 9h6', tv: 'M3 6h18v13H3zM8 2l4 4 4-4M7 15h6', music: 'M9 18V5l10-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm10-2a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
+  photos: 'M3 3h18v18H3zM21 15l-5-5L5 21M9 9h.01', books: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5zM20 17v4H6.5A2.5 2.5 0 0 1 4 18.5',
+  folder: 'M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z', file: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6',
+  grid: 'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z', list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4',
+  refresh: 'M20 6v5h-5M4 18v-5h5M18.5 9A7 7 0 0 0 6 5.5L4 8m2 7a7 7 0 0 0 12 3l2-2', download: 'M12 3v12m0 0 4-4m-4 4-4-4M5 21h14', play: 'M6 4l14 8-14 8z',
+  close: 'M6 6l12 12M18 6 6 18', menu: 'M4 6h16M4 12h16M4 18h16', sun: 'M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
+  moon: 'M21 12.8A8.5 8.5 0 1 1 11.2 3 6.5 6.5 0 0 0 21 12.8z', link: 'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7',
+  app: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z', archive: 'M3 3h18v5H3zM5 8v13h14V8M10 12h4', video: 'M3 5h13v14H3zM16 10l5-3v10l-5-3',
+};
+const Icon = ({ name, size = 18 }) => html`<svg class="icon" width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d=${ICONS[name] || ICONS.file}/></svg>`;
+const kindIcon = (item) => item.dir ? 'folder' : ({ video: 'video', audio: 'music', image: 'photos', book: 'books', app: 'app', archive: 'archive' }[item.kind] || 'file');
+const rootIcon = (type) => ({ movies: 'movies', tv: 'tv', music: 'music', photos: 'photos', books: 'books' }[type] || 'folder');
 
-const iconForLibrary = (type) => ({ movies: 'movies', tv: 'tv', music: 'music', photos: 'photos', books: 'files', files: 'files' }[type] || 'files');
+const KIND_LABEL = { movie: '电影', show: '剧集', season: '季', episode: '单集', video: '视频', audio: '音频', photo: '照片', image: '图片', book: '图书', document: '文档', app: '应用', archive: '压缩包', text: '文本', code: '代码', font: '字体', torrent: '种子', folder: '文件夹' };
+const INFO_LABEL = { Release: '版本', Bitrate: '码率', Channels: '声道', 'Sample rate': '采样率', Subtitles: '字幕', Track: '音轨', Disc: '碟', Composer: '作曲', Format: '格式', Taken: '拍摄时间', Camera: '相机', Lens: '镜头', Exposure: '快门', Aperture: '光圈', ISO: 'ISO', 'Focal length': '焦距', Location: '位置', Publisher: '出版社', Language: '语言', Pages: '页数', Slides: '幻灯片', Application: '应用程序', Subject: '主题', Creator: '创建工具', Producer: '生成工具', Package: '包名', Version: '版本', 'Version code': '版本号', 'Min SDK': '最低 SDK', 'Target SDK': '目标 SDK', Architecture: '架构', Type: '类型', Description: '描述', 'File version': '文件版本', Copyright: '版权', Files: '文件数', Uncompressed: '解压后', Runtime: '片长', 'Embedded title': '内嵌标题' };
 
-function formatSize(bytes) {
+const formatSize = (bytes) => {
   if (!bytes) return '—';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return `${(bytes / (1024 ** index)).toFixed(index ? 1 : 0)} ${units[index]}`;
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`;
+};
+const formatDate = (ms) => ms ? new Date(ms).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+const formatDuration = (s) => {
+  if (!s) return '';
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, sec = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+};
+const resolution = (m) => !m.height ? '' : Math.min(m.width, m.height) >= 2000 ? '4K' : Math.min(m.width, m.height) >= 1000 ? '1080p' : Math.min(m.width, m.height) >= 700 ? '720p' : `${m.width}×${m.height}`;
+const episodeCode = (m) => `S${String(m.season || 0).padStart(2, '0')}E${String(m.episode || 0).padStart(2, '0')}`;
+const join = (...parts) => parts.filter(Boolean).join(' · ');
+
+function title(item) {
+  const m = item.meta || {};
+  if (m.kind === 'episode') return m.title ? m.title : join(m.show, episodeCode(m));
+  if (m.kind === 'season') return `第 ${m.season} 季`;
+  return m.title || item.name;
 }
 
-function formatDate(value) {
-  if (!value) return '—';
-  return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
+function subtitle(item) {
+  const m = item.meta || {};
+  const info = m.info || {};
+  if (item.dir && !m.kind) return `${item.size} 项`;
+  switch (m.kind) {
+    case 'movie': return join(m.year, (m.genres || []).slice(0, 2).join(' / '), m.rating && `★ ${m.rating.toFixed(1)}`, formatDuration(m.duration));
+    case 'show': return join(m.year, (m.genres || []).slice(0, 2).join(' / '), m.rating && `★ ${m.rating.toFixed(1)}`);
+    case 'season': return `${item.size} 项`;
+    case 'episode': return join(m.title && m.show, episodeCode(m), formatDuration(m.duration));
+    case 'video': return join(formatDuration(m.duration), resolution(m), m.video?.toUpperCase());
+    case 'audio': return join(m.artist, m.album, formatDuration(m.duration));
+    case 'photo': return join(m.width && `${m.width}×${m.height}`, info.Taken?.slice(0, 10), info.Camera);
+    case 'book': case 'document': return join(m.author, info.Pages && `${info.Pages} 页`, formatSize(item.size));
+    case 'app': return join(info.Version, info.Package || info.Architecture, formatSize(item.size));
+    case 'archive': return join(info.Files && `${info.Files} 个文件`, formatSize(item.size));
+  }
+  return formatSize(item.size);
 }
 
-function formatCount(value) {
-  return new Intl.NumberFormat('zh-CN').format(value || 0);
+const posterKind = (item) => ['movie', 'show', 'season', 'book'].includes(item.meta?.kind);
+const route = (id, q) => q ? `/search?q=${encodeURIComponent(q)}` : id ? `/f/${id}` : '/';
+
+function Thumb({ item, size = 18 }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [item.id, item.mtime, item.thumb]);
+  if (item.thumb && !failed) return html`<img src=${`/api/files/${item.id}/thumb?v=${item.mtime}-${item.meta?.poster || ''}`} loading="lazy" alt="" onError=${() => setFailed(true)}/>`;
+  return html`<span class="glyph"><${Icon} name=${kindIcon(item)} size=${size}/></span>`;
 }
 
-function ActivityPanel({ storages, processing, onFailures }) {
-  const scanning = storages.find((item) => item.state === 'scanning');
-  const interrupted = storages.find((item) => item.state === 'interrupted');
-  const activeJobs = (processing.pending || 0) + (processing.running || 0);
-  const exactScanPercent = scanning?.scanEstimate ? (scanning.scanEntries || 0) * 100 / scanning.scanEstimate : null;
-  const scanPercent = exactScanPercent == null ? null : Math.min(99, Math.floor(exactScanPercent));
-  const scanPercentLabel = scanPercent === 0 && scanning.scanEntries > 0 ? '<1%' : `${scanPercent}%`;
-  const scanProgressWidth = scanPercent === 0 && scanning?.scanEntries > 0 ? 0.5 : scanPercent;
-  if (!scanning && !interrupted && !activeJobs && !(processing.failed || 0)) return null;
-  return html`<section class="activity-panel" aria-live="polite">
-    <strong>后台活动</strong>
-    ${scanning && html`<div class="activity-row"><span class="activity-pulse"></span><p><b>正在扫描文件${scanPercent == null ? '' : ` · ${scanPercentLabel}`}</b><small>${formatCount(scanning.scanEntries)} 个条目 · ${formatCount(scanning.scanDirectories)} 个文件夹 · ${formatCount(scanning.scanFiles)} 个文件</small><span class=${`activity-progress ${scanPercent == null ? 'indeterminate' : ''}`} role="progressbar" aria-label="整体扫描进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow=${scanPercent == null ? undefined : scanPercent}><i style=${scanPercent == null ? undefined : { width: `${scanProgressWidth}%` }}></i></span></p></div>`}
-    ${!scanning && interrupted && html`<div class="activity-row interrupted"><span>!</span><p><b>上次扫描已中断</b><small>已保留 ${formatCount(interrupted.scanEntries)} 个条目，服务恢复后会从检查点继续</small></p></div>`}
-    ${(activeJobs > 0 || processing.failed > 0) && html`<div class="activity-row"><span class=${processing.running ? 'activity-pulse' : ''}></span><p><b>媒体增强</b><small>${formatCount(processing.running)} 个处理中 · ${formatCount(processing.pending)} 个等待${processing.failed ? html` · <button class="failure-link" onClick=${onFailures}>${formatCount(processing.failed)} 个失败</button>` : ''}</small></p></div>`}
-  </section>`;
+function Listing({ items, view, onOpen }) {
+  if (view === 'grid') {
+    return html`<div class="grid">${items.map((item) => html`
+      <button class=${`card ${posterKind(item) ? 'poster' : ''} ${item.kind || ''}`} key=${item.id} onClick=${() => onOpen(item.id)} title=${item.name}>
+        <span class="art"><${Thumb} item=${item} size=${36}/>${item.play && html`<i class="badge"><${Icon} name="play" size=${12}/></i>`}</span>
+        <strong>${title(item)}</strong><small>${subtitle(item)}</small>
+      </button>`)}</div>`;
+  }
+  return html`<div class="rows">${items.map((item) => html`
+    <button class="row" key=${item.id} onClick=${() => onOpen(item.id)} title=${item.name}>
+      <span class="art"><${Thumb} item=${item}/></span>
+      <span class="name"><strong>${title(item)}</strong><small>${title(item) !== item.name ? item.name : subtitle(item)}</small></span>
+      <span class="meta">${title(item) !== item.name ? subtitle(item) : ''}</span>
+      <span class="size">${item.dir ? `${item.size} 项` : formatSize(item.size)}</span>
+      <span class="date">${formatDate(item.mtime)}</span>
+    </button>`)}</div>`;
 }
 
-function storageSummaryText(storages) {
-  const scanning = storages.filter((item) => item.state === 'scanning').length;
-  if (scanning) return `${scanning} 个正在扫描 · 可浏览`;
-  const available = storages.filter((item) => item.state === 'online').length;
-  const issues = storages.filter((item) => ['offline', 'error', 'interrupted'].includes(item.state)).length;
-  return issues ? `${available} 个可用 · ${issues} 个异常` : `${available} 个在线`;
+// Playback falls back step by step when the browser cannot decode a mode:
+// the original file, then a remux to MP4, then a full transcode.
+const PLAY_MODES = ['direct', 'stream', 'transcode'];
+function Player({ item }) {
+  const m = item.meta || {};
+  const [mode, setMode] = useState(item.play);
+  const [offset, setOffset] = useState(0);
+  const [time, setTime] = useState(0);
+  const src = mode === 'direct' ? `/api/files/${item.id}/raw` : `/api/files/${item.id}/stream?t=${offset}${mode === 'transcode' ? '&transcode=1' : ''}`;
+  const fallback = (e) => {
+    const next = PLAY_MODES[PLAY_MODES.indexOf(mode) + 1];
+    if (next && e.target.error?.code !== 1) { setTime(0); setOffset(Math.floor(e.target.currentTime || 0) + offset); setMode(next); }
+  };
+  const Tag = item.kind === 'audio' ? 'audio' : 'video';
+  return html`<div class=${`player ${Tag}`}>
+    <${Tag} key=${src} src=${src} controls autoplay playsinline preload="metadata" onError=${fallback} onTimeUpdate=${(e) => setTime(e.target.currentTime)}/>
+    ${mode !== 'direct' && m.duration > 0 && html`<label class="seek"><span>${formatDuration(offset + time)}</span>
+      <input type="range" min="0" max=${Math.floor(m.duration)} value=${Math.floor(offset + time)} onChange=${(e) => { setTime(0); setOffset(Number(e.target.value)); }}/>
+      <span>${formatDuration(m.duration)}</span></label>`}
+    ${mode !== 'direct' && html`<small class="hint">${mode === 'transcode' ? '正在实时转码' : '正在实时转封装'}，拖动下方进度条跳转</small>`}
+  </div>`;
 }
 
-const textExtensions = new Set(['txt', 'md', 'nfo', 'srt', 'vtt', 'json', 'yaml', 'yml', 'toml', 'ini', 'conf', 'log', 'csv', 'xml', 'html', 'css', 'js', 'ts', 'jsx', 'tsx', 'go', 'py', 'sh']);
-
-function previewKind(item) {
-  const mime = item.mime || '';
-  const extension = (item.extension || '').toLowerCase();
-  if (extension === 'ts' && (item.name.toLowerCase().endsWith('.d.ts') || item.size < 1024 * 1024)) return 'text';
-  if (['mp4', 'm4v', 'mkv', 'webm', 'mov', 'avi', 'mpeg', 'mpg', 'ts', 'm2ts', 'flv', 'wmv', 'rmvb'].includes(extension)) return 'video';
-  if (mime.startsWith('image/')) return 'image';
-  if (mime.startsWith('audio/')) return 'audio';
-  if (mime.startsWith('video/')) return 'video';
-  if (mime === 'application/pdf' || extension === 'pdf') return 'pdf';
-  if (mime.startsWith('text/') || ['application/json', 'application/xml', 'application/x-subrip'].includes(mime) || textExtensions.has(extension)) return 'text';
-  return 'unknown';
-}
-
-function copyNameFor(item) {
-  if (item.type === 'directory') return `${item.name} copy`;
-  const dot = item.name.lastIndexOf('.');
-  return dot > 0 ? `${item.name.slice(0, dot)} copy${item.name.slice(dot)}` : `${item.name} copy`;
-}
-
-function VideoPlayer({ url }) {
-  const videoRef = useRef(null);
-  const [playerStatus, setPlayerStatus] = useState('正在缓冲视频…');
+function TextPreview({ item }) {
+  const [text, setText] = useState('加载中…');
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !url) return undefined;
-    let hls;
-    if (url.includes('.m3u8') && Hls.isSupported()) {
-      hls = new Hls({ enableWorker: false, manifestLoadingMaxRetry: 12, manifestLoadingRetryDelay: 750, manifestLoadingMaxRetryTimeout: 3000 });
-      hls.loadSource(url);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => { setPlayerStatus(''); video.play().catch(() => {}); });
-      hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal) setPlayerStatus(`暂时无法播放：${data.details}`); });
-    } else {
-      video.src = url;
-      setPlayerStatus('');
-    }
-    return () => { hls?.destroy(); video.removeAttribute('src'); video.load(); };
-  }, [url]);
-  return html`<div class="video-player"><video ref=${videoRef} controls autoplay preload="metadata"></video>${playerStatus && html`<span class="video-status">${playerStatus}</span>`}</div>`;
+    let live = true;
+    request(`/api/files/${item.id}/raw`, { headers: { Range: 'bytes=0-262143' } })
+      .then((r) => r.arrayBuffer())
+      .then((buffer) => {
+        let value;
+        try { value = new TextDecoder('utf-8', { fatal: true }).decode(buffer); } catch { value = new TextDecoder('gbk').decode(buffer); }
+        if (live) setText(value + (item.size > 262144 ? '\n…' : ''));
+      })
+      .catch((e) => live && setText(e.message));
+    return () => { live = false; };
+  }, [item.id]);
+  return html`<pre class="text">${text}</pre>`;
 }
 
-function mediaMetadata(media) {
-	const data = media?.data || {};
-	const embedded = data.embedded || {};
-	return { ...embedded, music: embedded.probe?.music, ...data.tmdb, ...data.local_nfo, ...data.manual };
+const TEXT = new Set(['text', 'code']);
+function Preview({ item }) {
+  const raw = `/api/files/${item.id}/raw`;
+  if (item.play) return html`<${Player} key=${item.id} item=${item}/>`;
+  if (item.kind === 'image' && !['heic', 'heif', 'psd', 'cr2', 'nef', 'arw', 'dng'].includes(item.name.split('.').pop().toLowerCase())) return html`<img class="full" src=${raw} alt=${item.name}/>`;
+  if (item.name.toLowerCase().endsWith('.pdf')) return html`<iframe class="pdf" src=${raw} title=${item.name}></iframe>`;
+  if (TEXT.has(item.kind) && item.size < 50 << 20) return html`<${TextPreview} item=${item}/>`;
+  return null;
 }
 
-function mediaTypeLabel(type) {
-  return ({ movie: '电影', tv: '电视剧', episode: '剧集', video: '视频', audio: '音乐', photo: '照片', book: '图书', folder: '文件夹' }[type] || '媒体');
-}
-
-function entryDisplayTitle(item) {
-  const enhanced = typeof item?.media?.title === 'string' ? item.media.title.trim() : '';
-  return enhanced || item?.name || '';
-}
-
-function entryDisplayLines(item) {
-  if (!item?.media) return [item?.type === 'directory' ? '文件夹' : (item?.extension?.toUpperCase() || '文件')];
-  const lines = [item.media.line1 || mediaTypeLabel(item.media.kind), item.media.line2, item.media.line3]
-    .map((line) => typeof line === 'string' ? line.trim() : '')
-    .filter(Boolean);
-  return lines.length ? lines : [mediaTypeLabel(item.media.kind)];
-}
-
-function durationLabel(durationMS) {
-  if (!durationMS) return '';
-  const minutes = Math.round(durationMS / 60000);
-  return minutes >= 60 ? `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟` : `${minutes} 分钟`;
-}
-
-function MediaPoster({ media, thumbnailURL, preferThumbnail }) {
-  const posterURL = media?.icon || thumbnailURL;
-  const hasPoster = Boolean(posterURL);
-  const [attempt, setAttempt] = useState(0);
-  const [ready, setReady] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const retryTimer = useRef(null);
-  useEffect(() => () => window.clearTimeout(retryTimer.current), []);
-  const retry = () => {
-    if (attempt >= 4) {
-      setFailed(true);
-      return;
-    }
-    window.clearTimeout(retryTimer.current);
-    retryTimer.current = window.setTimeout(() => setAttempt((value) => value + 1), 2000);
-  };
-  const missing = !hasPoster || failed;
-  return html`<div class=${`media-poster ${missing ? 'missing' : ''} ${hasPoster && !ready && !failed ? 'pending' : ''}`}>
-    ${hasPoster && !failed && html`<img src=${`${posterURL}${posterURL.includes('?') ? '&' : '?'}v=${attempt}`} alt="" onLoad=${() => setReady(true)} onError=${retry}/>`}
-    <span><${Icon} name=${media.kind === 'audio' ? 'music' : media.kind === 'photo' ? 'photos' : media.kind === 'book' ? 'files' : media.kind === 'tv' || media.kind === 'episode' ? 'tv' : 'movies'} size=${32}/></span>
-  </div>`;
-}
-
-function thumbnailShape(item) {
-  const type = item.media?.kind || '';
-  if (type === 'movie' || type === 'tv') return 'poster';
-  if (type === 'audio') return 'square';
-  return 'landscape';
-}
-
-function ThumbnailImage({ item, compact = false }) {
-  const [attempt, setAttempt] = useState(0);
-  const [ready, setReady] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const retryTimer = useRef(null);
-  useEffect(() => () => window.clearTimeout(retryTimer.current), []);
-  const retry = () => {
-    if (attempt >= 8) {
-      setFailed(true);
-      return;
-    }
-    window.clearTimeout(retryTimer.current);
-    retryTimer.current = window.setTimeout(() => setAttempt((value) => value + 1), 2000);
-  };
-  const separator = item.links.thumbnail.includes('?') ? '&' : '?';
-  const shape = thumbnailShape(item);
-  return html`<span class=${`${compact ? 'list-thumbnail' : 'card-thumbnail'} ${shape} ${!ready && !failed ? 'pending' : ''} ${failed ? 'failed' : ''}`}>
-    ${!failed && html`<img src=${`${item.links.thumbnail}${separator}v=${attempt}`} alt="" loading="lazy" onLoad=${() => setReady(true)} onError=${retry}/>`}
-    <i><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${compact ? 20 : 30}/></i>
-  </span>`;
-}
-
-function MediaHeader({ item, media, technical, actions }) {
-  if (!media) return null;
-  const metadata = mediaMetadata(media);
-  const lines = [media.line1 || mediaTypeLabel(media.kind), media.line2, media.line3].filter(Boolean);
-  const summary = media.summary || metadata.overview || metadata.description;
-  const backdropURL = media.backdrop;
-  const thumbnailURL = media.icon || item?.links?.thumbnail || '';
-  return html`<section class="media-header">
-    ${backdropURL && html`<div class="media-backdrop" style=${{ backgroundImage: `url(${backdropURL})` }}></div>`}
-    <${MediaPoster} key=${`${item.id}:${thumbnailURL}`} media=${media} thumbnailURL=${thumbnailURL}/>
-    <div class="media-copy">
-      <h1>${media.title || item.name}</h1>
-      ${metadata.originalTitle && metadata.originalTitle !== media.title && html`<small>${metadata.originalTitle}</small>`}
-      ${lines.length > 0 && html`<div class="media-lines">${lines.map((line, index) => html`<p key=${index}>${line}</p>`)}</div>`}
-      <div class="media-match">${media.matchLocked ? '手工锁定' : media.data?.local_nfo ? '来自本地 NFO' : media.data?.tmdb ? 'TMDB 已匹配' : media.data?.embedded ? '来自文件信息' : '根据文件名识别'}</div>
+function Details({ item, onMatch, onRefresh }) {
+  const m = item.meta || {};
+  const rows = [
+    ['类型', KIND_LABEL[m.kind] || KIND_LABEL[item.kind] || item.kind || '文件'],
+    !item.dir && ['大小', formatSize(item.size)], ['修改时间', formatDate(item.mtime)],
+    m.original && ['原名', m.original], m.author && ['作者', m.author], m.artist && ['艺术家', m.artist], m.album && ['专辑', m.album],
+    m.duration && ['时长', formatDuration(m.duration)], m.width && ['分辨率', `${m.width}×${m.height}`],
+    m.video && ['编码', join(m.video, m.audio, m.container)], !m.video && m.audio && ['编码', join(m.audio, m.container)],
+    m.genres?.length && ['类型标签', m.genres.join(' / ')], m.tmdb && ['TMDB', html`<a href=${`https://www.themoviedb.org/${m.tmdb}`} target="_blank" rel="noreferrer">${m.tmdb}${m.locked ? '（已锁定）' : ''}</a>`],
+    ...Object.entries(m.info || {}).map(([k, v]) => [INFO_LABEL[k] || k, v]),
+    item.error && ['增强错误', item.error],
+  ].filter(Boolean);
+  const canMatch = ['video', 'movie', 'episode', 'show'].includes(m.kind) || item.kind === 'video' || item.dir;
+  return html`<section class="details">
+    ${m.backdrop && html`<div class="backdrop" style=${{ backgroundImage: `url(/api/files/${item.id}/backdrop)` }}></div>`}
+    <div class="hero">
+      ${(item.thumb || !item.dir) && html`<div class=${`cover ${posterKind(item) ? 'poster' : ''}`}><${Thumb} item=${item} size=${48}/></div>`}
+      <div class="heading">
+        <small>${KIND_LABEL[m.kind] || ''}</small>
+        <h1>${title(item)}</h1>
+        <p class="sub">${subtitle(item)}</p>
+        ${m.summary && html`<p class="summary">${m.summary}</p>`}
+        <div class="actions">
+          ${!item.dir && html`<a class="button" href=${`/api/files/${item.id}/raw?download`}><${Icon} name="download"/>下载</a>`}
+          ${!item.dir && html`<a class="button ghost" href=${`/api/files/${item.id}/raw`} target="_blank"><${Icon} name="link"/>打开原文件</a>`}
+          ${canMatch && html`<button class="ghost" onClick=${onMatch}>匹配 TMDB</button>`}
+          <button class="ghost" onClick=${onRefresh}><${Icon} name="refresh"/>${item.dir ? '重新扫描' : '重新识别'}</button>
+        </div>
+      </div>
     </div>
-    ${actions && html`<div class="media-actions">${actions}</div>`}
-    ${summary && html`<div class="media-summary">${summary}</div>`}
+    ${!item.dir && html`<${Preview} item=${item}/>`}
+    <dl class="info">${rows.map(([k, v]) => html`<div><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>
   </section>`;
 }
 
-function FileDetail({ item, media, technical, text, loading, error, playbackURL, onPlay, onManage, onMatch }) {
-  if (!item) return null;
-  const kind = previewKind(item);
-  const contentURL = item.links.content;
-  const metadata = mediaMetadata(media);
-  const facts = [
-    ['类型', item.extension?.toUpperCase() || item.mime || '文件'], ['大小', formatSize(item.size)], ['修改时间', formatDate(item.modifiedAt)],
-    technical?.container && ['封装', technical.container], technical?.width && technical?.height && ['画面', `${technical.width} × ${technical.height}`],
-    technical?.videoCodec && ['视频编码', technical.videoCodec.toUpperCase()], technical?.audioCodec && ['音频编码', technical.audioCodec.toUpperCase()],
-    durationLabel(technical?.durationMs) && ['时长', durationLabel(technical.durationMs)], metadata.music?.artist && ['艺人', metadata.music.artist], metadata.music?.album && ['专辑', metadata.music.album],
-    metadata.authors?.length && ['作者', metadata.authors.join('、')], metadata.author && ['作者', metadata.author], metadata.language && ['语言', metadata.language],
-    metadata.publisher && ['出版社', metadata.publisher], Number.isFinite(metadata.pageCount) && ['页数', `${metadata.pageCount} 页`],
-    technical?.takenAt && ['拍摄时间', formatDate(technical.takenAt)], technical?.camera && ['相机', technical.camera],
-    Number.isFinite(technical?.latitude) && Number.isFinite(technical?.longitude) && ['位置', `${technical.latitude.toFixed(5)}, ${technical.longitude.toFixed(5)}`],
-  ].filter(Boolean);
-  const actions = html`${kind === 'video' && html`<button class="detail-button" onClick=${onMatch}><${Icon} name="refresh" size=${17}/>${media ? '纠正匹配' : '识别媒体'}</button>`}<a class="detail-button primary" href=${contentURL} download=${item.name}><${Icon} name="download" size=${17}/>下载</a><button class="detail-button" onClick=${onManage}><${Icon} name="more" size=${17}/>管理</button>`;
-  return html`<article class="file-detail">
-    ${media ? html`<${MediaHeader} item=${item} media=${media} technical=${technical} actions=${actions}/>` : html`<header class="plain-detail-head"><div><p>${item.extension?.toUpperCase() || 'FILE'}</p><h1>${item.name}</h1><span>${item.mime || '未知文件类型'}</span></div><div class="media-actions">${actions}</div></header>`}
-    <div class="detail-layout">
-      <section class=${`detail-preview ${kind}`} aria-label="文件内容">
-        ${!item.available ? html`<div class="preview-message"><h2>文件当前不可用</h2><p>重新连接存储并扫描后即可查看。</p></div>` : kind === 'image' ? html`<img src=${contentURL} alt=${item.name}/>` : kind === 'audio' ? html`<audio src=${contentURL} controls preload="metadata"></audio>` : kind === 'video' ? (playbackURL ? html`<${VideoPlayer} url=${playbackURL}/>` : html`<button class="play-button" onClick=${onPlay}><span>▶</span>${error || '播放视频'}</button>`) : kind === 'pdf' ? html`<iframe src=${contentURL} title=${item.name}></iframe>` : kind === 'text' ? (loading ? html`<div class="preview-message">正在读取文本…</div>` : error ? html`<div class="preview-message"><h2>无法预览文本</h2><p>${error}</p></div>` : html`<pre>${text}</pre>`) : html`<div class="preview-message"><div class="empty-icon"><${Icon} name="file" size=${30}/></div><h2>此格式没有内置预览</h2><p>仍可下载或管理这个文件。</p></div>`}
-      </section>
-      <aside class="detail-facts"><h2>文件信息</h2>${facts.map(([label, value]) => html`<div key=${label}><span>${label}</span><strong>${value}</strong></div>`)}</aside>
+function MatchDialog({ item, onClose, onDone }) {
+  const m = item.meta || {};
+  const [query, setQuery] = useState(m.show || m.title || item.name.replace(/\.[^.]+$/, ''));
+  const [type, setType] = useState(['episode', 'show', 'season'].includes(m.kind) || m.tmdb?.startsWith('tv/') ? 'tv' : 'movie');
+  const [results, setResults] = useState([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const search = useCallback(async (event) => {
+    event?.preventDefault();
+    setBusy(true); setError('');
+    try { setResults((await api(`/api/files/${item.id}/match?type=${type}&q=${encodeURIComponent(query)}`)).items); } catch (e) { setError(e.message); }
+    setBusy(false);
+  }, [item.id, query, type]);
+  useEffect(() => { search(); }, [type]);
+  const choose = async (id) => {
+    setBusy(true);
+    try { onDone(await api(`/api/files/${item.id}/match`, { method: id ? 'PUT' : 'DELETE', headers: { 'Content-Type': 'application/json' }, body: id ? JSON.stringify({ tmdb: id }) : undefined })); } catch (e) { setError(e.message); setBusy(false); }
+  };
+  return html`<div class="overlay" onClick=${(e) => e.target === e.currentTarget && onClose()}>
+    <div class="dialog">
+      <header><h2>匹配 TMDB</h2><button class="icon-button" onClick=${onClose}><${Icon} name="close"/></button></header>
+      <form onSubmit=${search}>
+        <select value=${type} onChange=${(e) => setType(e.target.value)}><option value="movie">电影</option><option value="tv">剧集</option></select>
+        <input value=${query} onInput=${(e) => setQuery(e.target.value)} placeholder="名称"/>
+        <button disabled=${busy}>搜索</button>
+      </form>
+      ${error && html`<p class="error">${error}</p>`}
+      <div class="candidates">${results.map((r) => html`<button key=${r.id} disabled=${busy} onClick=${() => choose(`${r.type}/${r.id}`)}>
+        ${r.poster ? html`<img src=${`https://image.tmdb.org/t/p/w92${r.poster}`} alt=""/>` : html`<span class="glyph"><${Icon} name="movies"/></span>`}
+        <span><strong>${r.title} ${r.year ? `(${r.year})` : ''}</strong><small>${r.original !== r.title ? r.original : ''}</small><small class="clamp">${r.overview}</small></span>
+      </button>`)}</div>
+      ${m.locked && html`<footer><button class="ghost" disabled=${busy} onClick=${() => choose('')}>解除锁定并自动识别</button></footer>`}
     </div>
-  </article>`;
-}
-
-function MatchDialog({ item, media, query, setQuery, candidates, loading, saving, error, onSearch, onSelect, onUnmatch, onClose }) {
-  return html`<div class="preview-scrim" onClick=${() => !saving && onClose()}><section class="action-dialog match-dialog" role="dialog" aria-modal="true" aria-labelledby="match-title" onClick=${(event) => event.stopPropagation()}>
-    <header><div><strong id="match-title">识别媒体</strong><span>${item?.name}</span></div><button type="button" class="icon-button" onClick=${onClose} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header>
-    <form class="match-search" onSubmit=${onSearch}><label>电影或电视剧名称<input value=${query} onInput=${(event) => setQuery(event.currentTarget.value)} maxlength="200" required/></label><button class="primary" disabled=${loading || saving}>${loading ? '正在搜索…' : '搜索'}</button></form>
-    ${error && html`<p class="action-error" role="alert">${error}</p>`}
-    <div class="candidate-list" aria-live="polite">${!loading && candidates.length === 0 ? html`<p>输入名称搜索 TMDB；选择结果后会锁定该匹配。</p>` : candidates.map((candidate) => html`<button key=${`${candidate.type}:${candidate.id}`} disabled=${saving} onClick=${() => onSelect(candidate)}><span><strong>${candidate.title}</strong><small>${[candidate.originalTitle && candidate.originalTitle !== candidate.title ? candidate.originalTitle : '', candidate.year, candidate.type === 'tv' ? '电视剧' : '电影'].filter(Boolean).join(' · ')}</small>${candidate.overview && html`<em>${candidate.overview}</em>`}</span><b>${saving ? '保存中…' : '选择'}</b></button>`)}</div>
-    ${media && html`<footer class="match-footer"><button class="danger" disabled=${saving} onClick=${onUnmatch}>移除当前匹配</button><span>之后不会自动重新识别，仍可随时在这里恢复。</span></footer>`}
-  </section></div>`;
-}
-
-function failureProcessorLabel(value) {
-  return ({ epub_metadata: 'EPUB 元数据', image_metadata: '图片元数据', pdf_metadata: 'PDF 元数据', thumbnail: '图片/书籍缩略图', video_thumbnail: '视频缩略图', pdf_thumbnail: 'PDF 首页缩略图', audio_artwork: '音乐封面', ffprobe: '音视频分析', media_match: 'TMDB 匹配', poster: '海报下载', media_catalog: '媒体整理', other: '其他处理' }[value] || value);
-}
-
-function FailureDialog({ groups, loading, error, onClose }) {
-  return html`<div class="preview-scrim" onClick=${onClose}><section class="action-dialog failure-dialog" role="dialog" aria-modal="true" aria-labelledby="failure-title" onClick=${(event) => event.stopPropagation()}>
-    <header><div><strong id="failure-title">媒体增强失败</strong><span>仅影响派生信息，文件浏览、下载和管理不受影响</span></div><button type="button" class="icon-button" onClick=${onClose} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header>
-    ${loading ? html`<p class="failure-empty">正在读取失败分类…</p>` : error ? html`<p class="action-error" role="alert">${error}</p>` : groups.length ? html`<div class="failure-groups">${groups.map((group) => html`<div key=${`${group.processor}:${group.extension}`}><span><strong>${failureProcessorLabel(group.processor)}</strong><small>${group.extension ? `${group.extension.toUpperCase()} 文件` : '未识别格式'}</small></span><b>${formatCount(group.count)}</b></div>`)}</div>` : html`<p class="failure-empty">当前没有失败任务。</p>`}
-    <footer><span>通常表示文件损坏、格式伪装或外部工具无法解析；原文件不会被修改。</span><button onClick=${onClose}>知道了</button></footer>
-  </section></div>`;
-}
-
-function routeEntryID() {
-  const match = window.location.pathname.match(/^\/files\/([^/]+)(?:\/|$)/);
-  return match ? decodeURIComponent(match[1]) : null;
-}
-
-function entryRoute(id, trail = []) {
-  const readable = trail
-    .map((item) => item.name)
-    .filter(Boolean)
-    .map((name) => encodeURIComponent(name))
-    .join('/');
-  return `/files/${encodeURIComponent(id)}${readable ? `/${readable}` : ''}`;
-}
-
-function Skeleton() {
-  return html`<div class="skeleton-list" aria-label="正在加载">
-    ${Array.from({ length: 8 }, (_, index) => html`<div class="skeleton-row" key=${index}><span></span><i></i><b></b></div>`)}
   </div>`;
 }
 
-function EmptyState({ searchTerm }) {
-  return html`<div class="empty-state"><div class="empty-icon"><${Icon} name=${searchTerm ? 'search' : 'folder'} size=${30}/></div><h2>${searchTerm ? '没有找到匹配文件' : '这个目录是空的'}</h2><p>${searchTerm ? `尝试更换关键词，或在其他资料库中搜索。` : '扫描到的文件会显示在这里。'}</p></div>`;
+function Status({ status }) {
+  if (!status) return null;
+  const scanning = status.roots.filter((r) => r.state === 'scanning');
+  const offline = status.roots.filter((r) => r.state === 'offline' || r.state === 'error');
+  const { files, dirs, pending, failed } = status.stats;
+  return html`<div class="status">
+    <div>${files.toLocaleString()} 个文件 · ${dirs.toLocaleString()} 个文件夹</div>
+    ${scanning.map((r) => html`<div class="busy">正在扫描 ${r.name} · ${r.scanned.toLocaleString()}</div>`)}
+    ${pending > 0 && html`<div class="busy">正在识别 · 剩余 ${pending.toLocaleString()}</div>`}
+    ${failed > 0 && html`<div class="muted">${failed.toLocaleString()} 个文件识别失败</div>`}
+    ${offline.map((r) => html`<div class="warn">${r.name}：${r.state === 'offline' ? '离线' : r.error}</div>`)}
+  </div>`;
 }
 
 function App() {
-  const [libraries, setLibraries] = useState([]);
-  const [storages, setStorages] = useState([]);
-  const [processingStatus, setProcessingStatus] = useState({ pending: 0, running: 0, done: 0, failed: 0 });
-  const [activeLibraryID, setActiveLibraryID] = useState(null);
-  const [entry, setEntry] = useState(null);
-  const [trail, setTrail] = useState([]);
+  const [roots, setRoots] = useState([]);
+  const [status, setStatus] = useState(null);
+  const [current, setCurrent] = useState(null);
+  const [ancestors, setAncestors] = useState([]);
   const [items, setItems] = useState([]);
-  const [cursor, setCursor] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [moreLoading, setMoreLoading] = useState(false);
+  const [more, setMore] = useState(false);
+  const [query, setQuery] = useState('');
+  const [searching, setSearching] = useState('');
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [navOpen, setNavOpen] = useState(false);
-  const [view, setView] = useState(() => localStorage.getItem('files-go-view') || 'list');
-  const [theme, setTheme] = useState(() => localStorage.getItem('files-go-theme') || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [entryMedia, setEntryMedia] = useState(null);
-  const [technicalMedia, setTechnicalMedia] = useState(null);
-  const [detailText, setDetailText] = useState('');
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState('');
-  const [playbackURL, setPlaybackURL] = useState('');
-  const [createFolderOpen, setCreateFolderOpen] = useState(false);
-  const [folderName, setFolderName] = useState('');
-  const [manageItem, setManageItem] = useState(null);
-  const [renameValue, setRenameValue] = useState('');
-  const [actionError, setActionError] = useState('');
-  const [actionSaving, setActionSaving] = useState(false);
-  const [deleteArmed, setDeleteArmed] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [movingItem, setMovingItem] = useState(null);
-  const [transferMode, setTransferMode] = useState('move');
-  const [copyName, setCopyName] = useState('');
-  const [destination, setDestination] = useState(null);
-  const [destinationTrail, setDestinationTrail] = useState([]);
-  const [destinationFolders, setDestinationFolders] = useState([]);
-  const [destinationLoading, setDestinationLoading] = useState(false);
-  const [matchOpen, setMatchOpen] = useState(false);
-  const [matchQuery, setMatchQuery] = useState('');
-  const [matchCandidates, setMatchCandidates] = useState([]);
-  const [matchLoading, setMatchLoading] = useState(false);
-  const [matchSaving, setMatchSaving] = useState(false);
-  const [matchError, setMatchError] = useState('');
-  const [failureOpen, setFailureOpen] = useState(false);
-  const [failureGroups, setFailureGroups] = useState([]);
-  const [failureLoading, setFailureLoading] = useState(false);
-  const [failureError, setFailureError] = useState('');
-  const loadMoreSentinelRef = useRef(null);
-  const loadingMoreRef = useRef(false);
-  const playbackSessionRef = useRef(null);
-  const entryRequestRef = useRef(0);
+  const [matching, setMatching] = useState(false);
+  const [nav, setNav] = useState(false);
+  const [view, setView] = useState(() => localStorage.getItem('view') || 'grid');
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
+  const sentinel = useRef(null);
+  const seq = useRef(0);
 
-  const activeLibrary = useMemo(() => libraries.find((item) => item.id === activeLibraryID), [libraries, activeLibraryID]);
+  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem('theme', theme); }, [theme]);
+  useEffect(() => { localStorage.setItem('view', view); }, [view]);
 
+  const loadStatus = useCallback(() => api('/api/status').then(setStatus).catch(() => {}), []);
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.style.colorScheme = theme;
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'light' ? '#f5f7fb' : '#0b0d12');
-  }, [theme]);
-
-  useEffect(() => {
-    if (!createFolderOpen && !manageItem && !movingItem && !matchOpen && !failureOpen) return undefined;
-    const frame = window.requestAnimationFrame(() => document.querySelector('.action-dialog input, .action-dialog button')?.focus());
-    const close = (event) => {
-      if (event.key !== 'Escape' || actionSaving || matchSaving) return;
-      setCreateFolderOpen(false);
-      setManageItem(null);
-      setMovingItem(null);
-      setMatchOpen(false);
-      setFailureOpen(false);
-    };
-    document.body.classList.add('preview-open');
-    window.addEventListener('keydown', close);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      document.body.classList.remove('preview-open');
-      window.removeEventListener('keydown', close);
-    };
-  }, [createFolderOpen, manageItem, movingItem, matchOpen, failureOpen, actionSaving, matchSaving]);
-
-  const loadNavigation = useCallback(async () => {
-    const [libraryData, storageData] = await Promise.all([request(`${API}/libraries`), request(`${API}/storages`)]);
-    setLibraries(libraryData.items || []);
-    setStorages(storageData.items || []);
-    request(`${API}/system/status`).then((statusData) => setProcessingStatus(statusData.processing || {})).catch(() => {});
-    return libraryData.items || [];
+    api('/api/roots').then(setRoots).catch((e) => setError(e.message));
+    loadStatus();
+    const timer = setInterval(loadStatus, 5000);
+    return () => clearInterval(timer);
   }, []);
 
-  const loadOperationalStatus = useCallback(async () => {
-    const [storageData, statusData] = await Promise.all([request(`${API}/storages`), request(`${API}/system/status`).catch(() => ({ processing: {} }))]);
-    setStorages(storageData.items || []);
-    setProcessingStatus(statusData.processing || {});
-  }, []);
-
-  const buildTrail = useCallback(async (current, libraryList, preferredLibraryID) => {
-    const ancestors = [current];
-    let node = current;
-    for (let depth = 0; node.parentId && depth < 64; depth += 1) {
-      node = await request(`${API}/entries/${encodeURIComponent(node.parentId)}`);
-      ancestors.unshift(node);
-    }
-    const sourceMap = new Map();
-    libraryList.forEach((library) => library.sources?.forEach((source) => source.entryId && sourceMap.set(source.entryId, library)));
-    let library = libraryList.find((item) => item.id === preferredLibraryID);
-    let sourceIndex = library ? ancestors.findIndex((item) => library.sources?.some((source) => source.entryId === item.id)) : -1;
-    if (sourceIndex < 0) {
-      sourceIndex = ancestors.findIndex((item) => sourceMap.has(item.id));
-      if (sourceIndex >= 0) library = sourceMap.get(ancestors[sourceIndex].id);
-    }
-    if (sourceIndex < 0) sourceIndex = 0;
-    return {
-      libraryID: library?.id,
-      items: ancestors.slice(sourceIndex).map((item, index) => ({ ...item, label: index === 0 && library ? library.name : (item.name || '存储根目录') })),
-    };
-  }, []);
-
-  const stopPlayback = useCallback(() => {
-    const session = playbackSessionRef.current;
-    playbackSessionRef.current = null;
-    setPlaybackURL('');
-    if (session) fetch(`${API}/playback/sessions/${encodeURIComponent(session)}`, { method: 'DELETE', keepalive: true }).catch(() => {});
-  }, []);
-
-  useEffect(() => () => {
-    const session = playbackSessionRef.current;
-    if (session) fetch(`${API}/playback/sessions/${encodeURIComponent(session)}`, { method: 'DELETE', keepalive: true }).catch(() => {});
-  }, []);
-
-  const openEntry = useCallback(async (id, { history = true, libraryID = activeLibraryID, libraryList = libraries } = {}) => {
-    if (!id) return false;
-    const requestID = ++entryRequestRef.current;
-    loadingMoreRef.current = false;
-    setLoading(true);
-    setMoreLoading(false);
-    setError('');
-    setSearchQuery('');
-    setSearchTerm('');
-    setItems([]);
-    setCursor(null);
-    setNavOpen(false);
-    setEntryMedia(null);
-    setTechnicalMedia(null);
-    setDetailText('');
-    setDetailError('');
-    setDetailLoading(false);
-    stopPlayback();
+  const load = useCallback(async (id, push = true) => {
+    const n = ++seq.current;
+    setLoading(true); setError(''); setSearching(''); setNav(false);
     try {
-      const current = await request(`${API}/entries/${encodeURIComponent(id)}`);
-      if (requestID !== entryRequestRef.current) return false;
-      setEntry(current);
-      setEntryMedia(current.media || null);
-      setTechnicalMedia(current.media?.data?.embedded || null);
-      if (current.type === 'directory') {
-        const children = await request(`${API}/entries/${encodeURIComponent(id)}/children?limit=100`);
-        if (requestID !== entryRequestRef.current) return false;
-        setItems(children.items || []);
-        setCursor(children.cursor || null);
-      } else {
-        setItems([]);
-        setCursor(null);
-        const kind = previewKind(current);
-        if (current.available && kind === 'text') {
-          setDetailLoading(true);
-          try {
-            const response = await fetch(`${API}/entries/${encodeURIComponent(id)}/text`);
-            if (requestID !== entryRequestRef.current) return false;
-            if (!response.ok) {
-              const body = await response.json().catch(() => ({}));
-              throw new Error(body.error?.message || `请求失败 (${response.status})`);
-            }
-            const contents = await response.text();
-            if (requestID !== entryRequestRef.current) return false;
-            setDetailText(contents);
-          } catch (reason) {
-            if (requestID === entryRequestRef.current) setDetailError(reason.message || '无法读取文本');
-          } finally {
-            if (requestID === entryRequestRef.current) setDetailLoading(false);
-          }
-        }
-      }
-      const nextTrail = await buildTrail(current, libraryList, libraryID);
-      if (requestID !== entryRequestRef.current) return false;
-      if (nextTrail.libraryID) setActiveLibraryID(nextTrail.libraryID);
-      setTrail(nextTrail.items);
-      const route = entryRoute(id, nextTrail.items);
-      const state = { entryID: id, libraryID: nextTrail.libraryID || libraryID };
-      if (history) window.history.pushState(state, '', route);
-      else if (window.location.pathname !== route) window.history.replaceState({ ...window.history.state, ...state }, '', route);
-      return true;
-    } catch (reason) {
-      if (requestID === entryRequestRef.current) setError(reason.message || '无法打开条目');
-      return false;
-    } finally {
-      if (requestID === entryRequestRef.current) setLoading(false);
-    }
-  }, [activeLibraryID, buildTrail, libraries, stopPlayback]);
-
-  const openLibrary = useCallback(async (library) => {
-    setActiveLibraryID(library.id);
-    const source = library.sources?.find((item) => item.entryId);
-    if (source) {
-      await openEntry(source.entryId, { libraryID: library.id });
-    } else {
-      ++entryRequestRef.current;
-      loadingMoreRef.current = false;
-      setEntry(null);
-      setItems([]);
-      setCursor(null);
-      setMoreLoading(false);
-      setTrail([{ label: library.name }]);
-      setError('资料库尚未完成首次扫描，请稍后刷新。');
-      setNavOpen(false);
-    }
-  }, [openEntry]);
-
-  useEffect(() => {
-    let cancelled = false;
-    loadNavigation().then(async (libraryList) => {
-      if (cancelled) return;
-      const routeID = routeEntryID();
-      if (routeID) {
-        const opened = await openEntry(routeID, { history: false, libraryList });
-        if (!opened) {
-          const first = libraryList.find((library) => library.sources?.some((source) => source.entryId));
-          if (first) {
-            setActiveLibraryID(first.id);
-            await openEntry(first.sources.find((source) => source.entryId).entryId, { history: true, libraryID: first.id, libraryList });
-          }
-        }
-      } else {
-        const first = libraryList.find((library) => library.sources?.some((source) => source.entryId));
-        if (first) {
-          setActiveLibraryID(first.id);
-          await openEntry(first.sources.find((source) => source.entryId).entryId, { history: false, libraryID: first.id, libraryList });
-        } else {
-          setLoading(false);
-          setError('正在建立文件索引，请稍后刷新。');
-        }
-      }
-    }).catch((reason) => {
-      setError(reason.message || '无法连接服务');
-      setLoading(false);
-    });
-    return () => { cancelled = true; };
+      const data = await api(`/api/files/${id}`);
+      const children = data.file.dir ? await api(`/api/files/${id}/children?limit=200`) : { items: [], more: false };
+      if (n !== seq.current) return;
+      setCurrent(data.file); setAncestors(data.ancestors); setItems(children.items); setMore(children.more);
+      if (push) history.pushState({ id }, '', route(id));
+      scrollTo(0, 0);
+    } catch (e) { if (n === seq.current) setError(e.message); }
+    if (n === seq.current) setLoading(false);
   }, []);
 
-  useEffect(() => {
-    const onPopState = () => {
-      const id = routeEntryID();
-      if (id) openEntry(id, { history: false, libraryID: window.history.state?.libraryID });
-    };
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
-  }, [openEntry]);
-
-  useEffect(() => {
-    const scanActive = storages.some((storage) => storage.state === 'scanning');
-    const processingActive = (processingStatus.pending || 0) + (processingStatus.running || 0) > 0;
-    if (!scanActive && !processingActive) return undefined;
-    const timer = window.setInterval(async () => {
-      try {
-        if (scanActive) {
-          const libraryList = await loadNavigation();
-          const first = libraryList.find((library) => library.sources?.some((source) => source.entryId));
-          if (first && !entry) {
-            setActiveLibraryID(first.id);
-            await openEntry(first.sources.find((source) => source.entryId).entryId, { history: false, libraryID: first.id, libraryList });
-          }
-        } else {
-          await loadOperationalStatus();
-        }
-      } catch (_) {
-        // The visible connection error and manual retry remain available.
-      }
-    }, 2500);
-    return () => window.clearInterval(timer);
-  }, [entry, loadNavigation, loadOperationalStatus, openEntry, processingStatus.pending, processingStatus.running, storages]);
+  const search = useCallback(async (q, push = true) => {
+    if (!q.trim()) return;
+    const n = ++seq.current;
+    setLoading(true); setError(''); setSearching(q); setNav(false);
+    try {
+      const data = await api(`/api/search?q=${encodeURIComponent(q)}`);
+      if (n !== seq.current) return;
+      setCurrent(null); setAncestors([]); setItems(data.items); setMore(false);
+      if (push) history.pushState({ q }, '', route(null, q));
+    } catch (e) { if (n === seq.current) setError(e.message); }
+    if (n === seq.current) setLoading(false);
+  }, []);
 
   const loadMore = useCallback(async () => {
-    if (!cursor || !entry || loadingMoreRef.current) return;
-    const requestID = entryRequestRef.current;
-    const entryID = entry.id;
-    const after = cursor;
-    loadingMoreRef.current = true;
-    setMoreLoading(true);
+    if (!current || !more || loading) return;
+    setLoading(true);
     try {
-      const data = await request(`${API}/entries/${encodeURIComponent(entryID)}/children?limit=100&after=${encodeURIComponent(after)}`);
-      if (requestID !== entryRequestRef.current) return;
-      setItems((current) => {
-        const seen = new Set(current.map((item) => item.id));
-        return [...current, ...(data.items || []).filter((item) => !seen.has(item.id))];
-      });
-      setCursor(data.cursor || null);
-    } catch (reason) {
-      if (requestID === entryRequestRef.current) setError(reason.message || '无法加载更多文件');
-    } finally {
-      if (requestID === entryRequestRef.current) {
-        loadingMoreRef.current = false;
-        setMoreLoading(false);
-      }
-    }
-  }, [cursor, entry]);
+      const data = await api(`/api/files/${current.id}/children?limit=200&offset=${items.length}`);
+      setItems((list) => [...list, ...data.items]); setMore(data.more);
+    } catch (e) { setError(e.message); }
+    setLoading(false);
+  }, [current, more, loading, items.length]);
 
   useEffect(() => {
-    const target = loadMoreSentinelRef.current;
-    if (!target || !cursor || !entry || typeof IntersectionObserver === 'undefined') return undefined;
-    const observer = new IntersectionObserver((records) => {
-      if (records.some((record) => record.isIntersecting)) loadMore();
-    }, { rootMargin: '320px 0px' });
-    observer.observe(target);
+    const el = sentinel.current;
+    if (!el) return undefined;
+    const observer = new IntersectionObserver((entries) => entries[0].isIntersecting && loadMore(), { rootMargin: '600px' });
+    observer.observe(el);
     return () => observer.disconnect();
-  }, [cursor, entry, loadMore]);
+  }, [loadMore]);
 
-  const performSearch = async (value = searchQuery) => {
-    const query = value.trim();
-    if (!query) {
-      if (entry) await openEntry(entry.id, { history: false, libraryID: activeLibraryID });
-      return;
-    }
-    const requestID = ++entryRequestRef.current;
-    loadingMoreRef.current = false;
-    setLoading(true);
-    setMoreLoading(false);
-    setError('');
-    setItems([]);
-    setCursor(null);
-    try {
-      const parameters = new URLSearchParams({ q: query, limit: '100' });
-      if (activeLibraryID) parameters.set('library', activeLibraryID);
-      const data = await request(`${API}/search?${parameters}`);
-      if (requestID !== entryRequestRef.current) return;
-      setItems(data.items || []);
-      setSearchQuery(query);
-      setSearchTerm(query);
-    } catch (reason) {
-      if (requestID === entryRequestRef.current) setError(reason.message || '搜索失败');
-    } finally {
-      if (requestID === entryRequestRef.current) setLoading(false);
-    }
-  };
+  const navigate = useCallback((push) => {
+    const params = new URLSearchParams(location.search);
+    const match = location.pathname.match(/^\/f\/(\d+)/);
+    if (location.pathname === '/search' && params.get('q')) { setQuery(params.get('q')); search(params.get('q'), push); }
+    else if (match) load(match[1], push);
+    else if (roots[0]) load(roots[0].fileId, false);
+  }, [roots, load, search]);
+  useEffect(() => { if (roots.length) navigate(false); }, [roots]);
+  useEffect(() => {
+    const onPop = () => navigate(false);
+    addEventListener('popstate', onPop);
+    return () => removeEventListener('popstate', onPop);
+  }, [navigate]);
 
-  const submitSearch = (event) => {
-    event.preventDefault();
-    performSearch();
-  };
-
-  const clearSearch = () => {
-    setSearchQuery('');
-    setSearchTerm('');
-    if (entry) openEntry(entry.id, { history: false, libraryID: activeLibraryID });
-  };
-
-  const startDetailPlayback = async () => {
-    if (!entry || entry.type !== 'file' || !entry.available) return;
-    setDetailError('');
-    try {
-      const playbackResult = await request(`${API}/playback/${encodeURIComponent(entry.id)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ containers: ['mp4', 'webm', 'ogg'], videoCodecs: ['h264', 'vp8', 'vp9', 'av1'], audioCodecs: ['aac', 'mp3', 'opus', 'vorbis'], hls: true }) });
-      const match = playbackResult.url?.match(/\/playback\/sessions\/([^/]+)\//);
-      if (match) playbackSessionRef.current = match[1];
-      setPlaybackURL(playbackResult.url);
-    } catch (reason) {
-      setDetailError(reason.message || '无法开始播放');
-    }
-  };
-
-
-  const loadMediaCandidates = async (value = matchQuery) => {
-    if (!entry) return;
-    setMatchLoading(true);
-    setMatchError('');
-    try {
-      const parameters = new URLSearchParams();
-      if (value.trim()) parameters.set('q', value.trim());
-      const data = await request(`${API}/entries/${encodeURIComponent(entry.id)}/media-candidates?${parameters}`);
-      setMatchCandidates(data.items || []);
-      if (!(data.items || []).length) setMatchError('没有找到候选结果，请尝试更简短或更准确的名称。');
-    } catch (reason) {
-      setMatchCandidates([]);
-      setMatchError(reason.message || '无法搜索媒体信息');
-    } finally {
-      setMatchLoading(false);
-    }
-  };
-
-  const openMatchDialog = () => {
-    let query = entryMedia?.title || '';
-    if (entryMedia?.kind === 'episode') {
-      const parents = trail.slice(0, -1).map((item) => item.label).reverse();
-      const series = parents.find((label) => !/^(?:s(?:eason)?[ ._-]*\d{1,2}|第[一二三四五六七八九十百0-9]+季)$/i.test(label));
-      if (series && series !== activeLibrary?.name) query = series.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim();
-    }
-    setMatchOpen(true);
-    setMatchQuery(query);
-    setMatchCandidates([]);
-    setMatchError('');
-    loadMediaCandidates('');
-  };
-
-  const searchMediaCandidates = (event) => {
-    event.preventDefault();
-    loadMediaCandidates(matchQuery);
-  };
-
-  const selectMediaCandidate = async (candidate) => {
-    if (!entry) return;
-    setMatchSaving(true);
-    setMatchError('');
-    try {
-      const media = await request(`${API}/entries/${encodeURIComponent(entry.id)}/media`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ candidateId: candidate.id, candidateType: candidate.type }),
-      });
-      setEntryMedia(media);
-      setEntry((current) => current?.id === entry.id ? { ...current, media } : current);
-      setMatchOpen(false);
-    } catch (reason) {
-      setMatchError(reason.message || '无法保存媒体匹配');
-    } finally {
-      setMatchSaving(false);
-    }
-  };
-
-  const unmatchMedia = async () => {
-    if (!entry || !window.confirm('移除这个文件的媒体匹配？之后不会自动重新识别。')) return;
-    setMatchSaving(true);
-    setMatchError('');
-    try {
-      await request(`${API}/entries/${encodeURIComponent(entry.id)}/media`, { method: 'DELETE' });
-      const refreshed = await request(`${API}/entries/${encodeURIComponent(entry.id)}`);
-      setEntry(refreshed);
-      setEntryMedia(refreshed.media || null);
-      setMatchOpen(false);
-    } catch (reason) {
-      setMatchError(reason.message || '无法移除媒体匹配');
-    } finally {
-      setMatchSaving(false);
-    }
-  };
-
-  const openFailureDetails = async () => {
-    setFailureOpen(true);
-    setFailureLoading(true);
-    setFailureError('');
-    try {
-      const data = await request(`${API}/system/failures`);
-      setFailureGroups(data.items || []);
-    } catch (reason) {
-      setFailureGroups([]);
-      setFailureError(reason.message || '无法读取失败详情');
-    } finally {
-      setFailureLoading(false);
-    }
-  };
-
-  const createFolder = async (event) => {
-    event.preventDefault();
-    if (!entry || !folderName.trim()) return;
-    setActionSaving(true);
-    setActionError('');
-    try {
-      await request(`${API}/entries/${encodeURIComponent(entry.id)}/directories`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: folderName.trim() }),
-      });
-      setCreateFolderOpen(false);
-      setFolderName('');
-      await openEntry(entry.id, { history: false, libraryID: activeLibraryID });
-    } catch (reason) {
-      setActionError(reason.message || '无法创建文件夹');
-    } finally {
-      setActionSaving(false);
-    }
-  };
-
-  const openManage = (item) => {
-    setManageItem(item);
-    setRenameValue(item.name);
-    setActionError('');
-    setDeleteArmed(false);
-  };
-
-  const renameEntry = async (event) => {
-    event.preventDefault();
-    if (!manageItem || !renameValue.trim()) return;
-    setActionSaving(true);
-    setActionError('');
-    try {
-      const updated = await request(`${API}/entries/${encodeURIComponent(manageItem.id)}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: renameValue.trim() }),
-      });
-      setItems((current) => current.map((item) => item.id === updated.id ? updated : item));
-      setEntry((current) => current?.id === updated.id ? updated : current);
-      setManageItem(null);
-    } catch (reason) {
-      setActionError(reason.message || '无法重命名');
-    } finally {
-      setActionSaving(false);
-    }
-  };
-
-  const deleteManagedEntry = async () => {
-    if (!manageItem) return;
-    setActionSaving(true);
-    setActionError('');
-    try {
-      await request(`${API}/entries/${encodeURIComponent(manageItem.id)}`, { method: 'DELETE' });
-      setItems((current) => current.filter((item) => item.id !== manageItem.id));
-      if (entry?.id === manageItem.id) {
-        const parentID = entry.parentId;
-        setManageItem(null);
-        stopPlayback();
-        if (parentID) await openEntry(parentID, { history: true, libraryID: activeLibraryID });
-        return;
-      }
-      setManageItem(null);
-    } catch (reason) {
-      setActionError(reason.message || '无法删除');
-    } finally {
-      setActionSaving(false);
-    }
-  };
-
-  const uploadFiles = async (event) => {
-    const files = Array.from(event.currentTarget.files || []);
-    event.currentTarget.value = '';
-    if (!entry || files.length === 0) return;
-    setUploading(true);
-    setError('');
-    try {
-      for (const file of files) {
-        const form = new FormData();
-        form.append('file', file, file.name);
-        const created = await request(`${API}/entries/${encodeURIComponent(entry.id)}/files`, { method: 'POST', body: form });
-        setItems((current) => [created, ...current]);
-      }
-    } catch (reason) {
-      setError(reason.message || '上传失败');
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const loadDestination = async (id, excludedID = movingItem?.id) => {
-    setDestinationLoading(true);
-    setActionError('');
-    try {
-      const [folder, children] = await Promise.all([
-        request(`${API}/entries/${encodeURIComponent(id)}`),
-        request(`${API}/entries/${encodeURIComponent(id)}/children?limit=500`),
-      ]);
-      setDestination(folder);
-      setDestinationFolders((children.items || []).filter((item) => item.type === 'directory' && item.id !== excludedID));
-      setDestinationTrail((await buildTrail(folder, libraries, activeLibraryID)).items);
-    } catch (reason) {
-      setActionError(reason.message || '无法读取目标目录');
-    } finally {
-      setDestinationLoading(false);
-    }
-  };
-
-  const openTransfer = (mode) => {
-    if (!manageItem) return;
-    const item = manageItem;
-    const rootID = activeLibrary?.sources?.find((source) => source.entryId)?.entryId || entry?.id;
-    setMovingItem(item);
-    setTransferMode(mode);
-    setCopyName(mode === 'copy' ? copyNameFor(item) : item.name);
-    setManageItem(null);
-    setDestination(null);
-    setDestinationFolders([]);
-    setDestinationTrail([]);
-    if (rootID) loadDestination(rootID, item.id);
-  };
-
-  const confirmTransfer = async () => {
-    if (!movingItem || !destination) return;
-    setActionSaving(true);
-    setActionError('');
-    try {
-      const updated = transferMode === 'copy'
-        ? await request(`${API}/entries/${encodeURIComponent(movingItem.id)}/copies`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parentId: destination.id, name: copyName.trim() }),
-        })
-        : await request(`${API}/entries/${encodeURIComponent(movingItem.id)}`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parentId: destination.id }),
-        });
-      setItems((current) => transferMode === 'copy'
-        ? (!searchTerm && entry?.id === updated.parentId ? [updated, ...current] : current)
-        : (!searchTerm && entry?.id !== updated.parentId ? current.filter((item) => item.id !== updated.id) : current.map((item) => item.id === updated.id ? updated : item)));
-      setMovingItem(null);
-    } catch (reason) {
-      setActionError(reason.message || (transferMode === 'copy' ? '无法复制条目' : '无法移动条目'));
-    } finally {
-      setActionSaving(false);
-    }
-  };
+  // Refresh the open folder while enrichment is still filling it in.
+  const pending = status?.stats.pending || 0;
+  useEffect(() => {
+    if (!current?.dir || !pending || searching) return;
+    api(`/api/files/${current.id}/children?limit=${Math.max(items.length, 200)}`).then((data) => setItems(data.items)).catch(() => {});
+  }, [pending, status]);
 
   const refresh = async () => {
-    setError('');
     try {
-      const libraryList = await loadNavigation();
-      if (searchTerm) await performSearch(searchTerm);
-      else if (entry) {
-        await openEntry(entry.id, { history: false, libraryID: activeLibraryID });
-      }
-      else {
-        const library = libraryList.find((item) => item.id === activeLibraryID) || libraryList[0];
-        if (library) openLibrary(library);
-      }
-    } catch (reason) {
-      setError(reason.message || '刷新失败');
-    }
+      const updated = await api(`/api/files/${current.id}/refresh`, { method: 'POST' });
+      if (current.dir) load(current.id, false); else setCurrent(updated);
+    } catch (e) { setError(e.message); }
   };
 
-  const setViewMode = (mode) => {
-    setView(mode);
-    localStorage.setItem('files-go-view', mode);
-  };
-
-  const toggleTheme = () => {
-    const next = theme === 'dark' ? 'light' : 'dark';
-    setTheme(next);
-    localStorage.setItem('files-go-theme', next);
-  };
-
-  const directoryActions = entry?.type === 'directory' && !searchTerm && html`<div class="head-meta"><span>${`${items.length}${cursor ? '+' : ''}`} 个项目</span><label class=${`scan-button upload-button ${uploading ? 'disabled' : ''}`}><${Icon} name="upload" size=${16}/>${uploading ? '正在上传…' : '上传'}<input type="file" multiple disabled=${uploading} onChange=${uploadFiles}/></label><button class="scan-button" onClick=${() => { setFolderName(''); setActionError(''); setCreateFolderOpen(true); }}><${Icon} name="plus" size=${16}/>新建文件夹</button></div>`;
-
-  return html`<div class="app-shell">
-    <div class=${`nav-scrim ${navOpen ? 'visible' : ''}`} onClick=${() => setNavOpen(false)}></div>
-    <aside class=${`sidebar ${navOpen ? 'open' : ''}`}>
-      <div class="brand"><span class="brand-mark"><${Icon} name="brand" size=${22}/></span><strong>files<span>·go</span></strong><button class="icon-button close-nav" onClick=${() => setNavOpen(false)} aria-label="关闭导航"><${Icon} name="close"/></button></div>
-      <div class="side-label">资料库</div>
-      <nav class="library-nav" aria-label="资料库">
-        ${libraries.map((library) => {
-          return html`<div key=${library.id} class="library-item"><button class=${`library-link ${library.id === activeLibraryID ? 'active' : ''}`} onClick=${() => openLibrary(library)}>
-            <span class="library-icon"><${Icon} name=${iconForLibrary(library.type)}/></span>
-            <span class="library-copy"><strong>${library.name}</strong></span>
-          </button></div>`;
-        })}
-      </nav>
-      <${ActivityPanel} storages=${storages} processing=${processingStatus} onFailures=${openFailureDetails}/>
-      <div class="storage-summary">
-        <span class="summary-icon"><${Icon} name="drive"/></span>
-        <div><strong>${storages.length || '—'} 个存储</strong><span>${storageSummaryText(storages)}</span></div>
-      </div>
-      <button class="sidebar-theme-toggle" onClick=${toggleTheme} aria-label=${theme === 'dark' ? '切换到亮色模式' : '切换到暗色模式'}>
-        <span class="summary-icon"><${Icon} name=${theme === 'dark' ? 'sun' : 'moon'}/></span>
-        <span><strong>外观</strong><small>${theme === 'dark' ? '暗色模式' : '亮色模式'}</small></span>
-      </button>
+  const activeRoot = ancestors[0]?.root || current?.root;
+  return html`<div class=${`app ${nav ? 'nav-open' : ''}`}>
+    <aside>
+      <div class="brand">files</div>
+      <nav>${roots.map((r) => html`<button class=${r.id === activeRoot ? 'active' : ''} onClick=${() => load(r.fileId)}><${Icon} name=${rootIcon(r.type)}/>${r.name}${r.state === 'scanning' && html`<i class="dot"></i>`}</button>`)}</nav>
+      <${Status} status=${status}/>
     </aside>
-
-    <main class="main-panel">
-      <header class="topbar">
-        <button class="icon-button menu-button" onClick=${() => setNavOpen(true)} aria-label="打开导航"><${Icon} name="menu"/></button>
-        <div class="breadcrumb" aria-label="当前位置">
-          ${trail.map((item, index) => html`<span key=${item.id || index}>
-            ${index > 0 && html`<${Icon} name="chevron" size=${15}/>`}
-            <button onClick=${() => item.id && openEntry(item.id)} aria-current=${index === trail.length - 1 ? 'page' : undefined}>${item.label}</button>
-          </span>`)}
-        </div>
-        <form class="search-form" role="search" onSubmit=${submitSearch}>
-          <${Icon} name="search" size=${17}/>
-          <input value=${searchQuery} onInput=${(event) => setSearchQuery(event.currentTarget.value)} placeholder="搜索文件" aria-label="搜索当前资料库" maxlength="200"/>
-          ${searchTerm && html`<button type="button" onClick=${clearSearch} aria-label="清除搜索"><${Icon} name="x" size=${15}/></button>`}
+    <main>
+      <header class="top">
+        <button class="icon-button menu" onClick=${() => setNav(!nav)}><${Icon} name="menu"/></button>
+        <form class="search" onSubmit=${(e) => { e.preventDefault(); search(query); }}>
+          <${Icon} name="search"/><input type="search" placeholder="搜索文件名、片名、书名…" value=${query} onInput=${(e) => setQuery(e.target.value)}/>
         </form>
-        <div class="top-actions">
-          <div class="view-switch" role="group" aria-label="显示方式">
-            <button class=${view === 'list' ? 'active' : ''} onClick=${() => setViewMode('list')} aria-label="列表" title="列表"><${Icon} name="list" size=${18}/></button>
-            <button class=${view === 'grid' ? 'active' : ''} onClick=${() => setViewMode('grid')} aria-label="缩略图" title="缩略图"><${Icon} name="grid" size=${18}/></button>
-          </div>
-        </div>
+        <button class="icon-button" title="切换视图" onClick=${() => setView(view === 'grid' ? 'list' : 'grid')}><${Icon} name=${view === 'grid' ? 'list' : 'grid'}/></button>
+        <button class="icon-button" title="切换主题" onClick=${() => setTheme(theme === 'dark' ? 'light' : 'dark')}><${Icon} name=${theme === 'dark' ? 'sun' : 'moon'}/></button>
       </header>
-
-      ${entry?.type === 'directory' && entryMedia && !searchTerm ? html`<${MediaHeader} item=${entry} media=${entryMedia} actions=${directoryActions}/>` : entry?.type !== 'file' || searchTerm ? html`<section class="content-head">
-        <div><p>${searchTerm ? `在 ${activeLibrary?.name || '所有文件'} 中搜索` : (activeLibrary?.type || 'files')}</p><h1>${searchTerm ? `“${searchTerm}”` : (entry?.name || activeLibrary?.name || '文件')}</h1></div>
-        ${searchTerm ? html`<div class="head-meta"><span>${items.length} 个结果</span></div>` : directoryActions}
-      </section>` : null}
-
-      ${error && html`<div class="error-banner" role="alert"><span>${error}</span><button onClick=${refresh}>重试</button></div>`}
-
-      <section class="browser" aria-live="polite">
-        ${loading ? html`<${Skeleton}/>` : entry?.type === 'file' && !searchTerm ? html`<${FileDetail} item=${entry} media=${entryMedia} technical=${technicalMedia} text=${detailText} loading=${detailLoading} error=${detailError} playbackURL=${playbackURL} onPlay=${startDetailPlayback} onManage=${() => openManage(entry)} onMatch=${openMatchDialog}/>` : items.length === 0 ? html`<${EmptyState} searchTerm=${searchTerm}/>` : view === 'list' ? html`
-          <div class="file-table" role="table" aria-label="文件">
-            <div class="table-head" role="row"><span>名称</span><span>大小</span><span>修改时间</span><span></span></div>
-            ${items.map((item) => html`<div key=${item.id} class="file-row" role="row">
-              <button class="file-main" onClick=${() => openEntry(item.id)}>
-                <span class="name-cell" role="cell">${item.links.thumbnail ? html`<${ThumbnailImage} key=${item.id} item=${item} compact=${true}/>` : html`<i class=${item.type === 'directory' ? 'folder' : 'document'}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${20}/></i>`}<span><strong title=${entryDisplayTitle(item)}>${entryDisplayTitle(item)}</strong>${entryDisplayLines(item).map((line, index) => html`<small key=${index}>${line}</small>`)}</span>${!item.available && html`<em>不可用</em>`}</span>
-                <span class="size-cell" role="cell">${item.type === 'directory' ? '—' : formatSize(item.size)}</span>
-                <span class="date-cell" role="cell">${formatDate(item.modifiedAt)}</span>
-              </button>
-              <button class="row-action" onClick=${() => openManage(item)} aria-label=${`管理 ${item.name}`}><${Icon} name="more" size=${18}/></button>
-            </div>`)}
-          </div>` : html`
-          <div class="file-grid">
-            ${items.map((item) => html`<article key=${item.id} class="file-card">
-              <button class="card-main" onClick=${() => openEntry(item.id)}>
-                ${item.links.thumbnail ? html`<${ThumbnailImage} key=${item.id} item=${item}/>` : html`<span class=${`card-icon ${item.type}`}><${Icon} name=${item.type === 'directory' ? 'folder' : 'file'} size=${30}/></span>`}
-                <strong title=${entryDisplayTitle(item)}>${entryDisplayTitle(item)}</strong><span class="card-lines">${item.media ? entryDisplayLines(item).map((line, index) => html`<small key=${index}>${line}</small>`) : html`<small>${item.type === 'directory' ? '文件夹' : formatSize(item.size)}</small>`}</span>${!item.available && html`<em>不可用</em>`}
-              </button>
-              <button class="card-action" onClick=${() => openManage(item)} aria-label=${`管理 ${item.name}`}><${Icon} name="more" size=${18}/></button>
-            </article>`)}
-          </div>`}
-        ${cursor && html`<div class="load-more" ref=${loadMoreSentinelRef}><button onClick=${loadMore} disabled=${moreLoading}><${Icon} name="more"/>${moreLoading ? '正在加载…' : '加载更多'}</button></div>`}
-      </section>
+      <div class="crumbs">${searching ? html`<span>搜索 “${searching}” · ${items.length} 个结果</span>` : [...ancestors, current].filter(Boolean).map((f, i, all) => html`
+        ${i > 0 && html`<span class="sep">/</span>`}<button disabled=${i === all.length - 1} onClick=${() => load(f.id)}>${f.parent ? f.name : (roots.find((r) => r.id === f.root)?.name || f.name)}</button>`)}</div>
+      ${error && html`<p class="error">${error}</p>`}
+      ${current && !searching && (!current.dir || current.meta?.kind) && html`<${Details} item=${current} onMatch=${() => setMatching(true)} onRefresh=${refresh}/>`}
+      ${current?.dir && !searching && !current.meta?.kind && html`<div class="toolbar"><span>${current.size} 项</span><button class="ghost small" onClick=${refresh}><${Icon} name="refresh" size=${14}/>重新扫描</button></div>`}
+      ${(current?.dir || searching) && html`<${Listing} items=${items} view=${view} onOpen=${load}/>`}
+      ${(current?.dir || searching) && !loading && !items.length && html`<p class="empty">${searching ? '没有找到匹配的文件' : '这个文件夹是空的'}</p>`}
+      <div ref=${sentinel} class="sentinel">${loading && '加载中…'}</div>
     </main>
-    ${matchOpen && html`<${MatchDialog} item=${entry} media=${entryMedia} query=${matchQuery} setQuery=${setMatchQuery} candidates=${matchCandidates} loading=${matchLoading} saving=${matchSaving} error=${matchError} onSearch=${searchMediaCandidates} onSelect=${selectMediaCandidate} onUnmatch=${unmatchMedia} onClose=${() => setMatchOpen(false)}/>`}
-    ${failureOpen && html`<${FailureDialog} groups=${failureGroups} loading=${failureLoading} error=${failureError} onClose=${() => setFailureOpen(false)}/>`}
-    ${createFolderOpen && html`<div class="preview-scrim" onClick=${() => !actionSaving && setCreateFolderOpen(false)}><form class="action-dialog" role="dialog" aria-modal="true" aria-labelledby="create-folder-title" onSubmit=${createFolder} onClick=${(event) => event.stopPropagation()}><header><div><strong id="create-folder-title">新建文件夹</strong><span>在 ${entry?.name || activeLibrary?.name || '当前目录'} 中创建</span></div><button type="button" class="icon-button" onClick=${() => setCreateFolderOpen(false)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header><label>名称<input value=${folderName} onInput=${(event) => setFolderName(event.currentTarget.value)} maxlength="255" required/></label>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}<footer><button type="button" onClick=${() => setCreateFolderOpen(false)}>取消</button><button class="primary" disabled=${actionSaving}>${actionSaving ? '正在创建…' : '创建'}</button></footer></form></div>`}
-    ${manageItem && html`<div class="preview-scrim" onClick=${() => !actionSaving && setManageItem(null)}><form class="action-dialog" role="dialog" aria-modal="true" aria-labelledby="manage-entry-title" onSubmit=${renameEntry} onClick=${(event) => event.stopPropagation()}><header><div><strong id="manage-entry-title">管理条目</strong><span>${manageItem.type === 'directory' ? '文件夹' : formatSize(manageItem.size)}</span></div><button type="button" class="icon-button" onClick=${() => setManageItem(null)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header><label>名称<input value=${renameValue} onInput=${(event) => { setRenameValue(event.currentTarget.value); setDeleteArmed(false); }} maxlength="255" required/></label>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}${deleteArmed && html`<p class="delete-warning" role="alert">此操作无法撤销。再次点击删除以确认。</p>`}<footer class="manage-footer"><button type="button" class="danger" onClick=${() => deleteArmed ? deleteManagedEntry() : setDeleteArmed(true)} disabled=${actionSaving}><${Icon} name="trash" size=${16}/>${deleteArmed ? '确认删除' : '删除'}</button><button type="button" onClick=${() => openTransfer('copy')}><${Icon} name="copy" size=${16}/>复制</button><button type="button" onClick=${() => openTransfer('move')}><${Icon} name="move" size=${16}/>移动</button><span></span><button type="button" onClick=${() => setManageItem(null)}>取消</button><button class="primary" disabled=${actionSaving || renameValue.trim() === manageItem.name}>${actionSaving ? '正在保存…' : '重命名'}</button></footer></form></div>`}
-    ${movingItem && html`<div class="preview-scrim" onClick=${() => !actionSaving && setMovingItem(null)}><section class=${`action-dialog destination-dialog ${transferMode}`} role="dialog" aria-modal="true" aria-labelledby="transfer-entry-title" onClick=${(event) => event.stopPropagation()}><header><div><strong id="transfer-entry-title">${transferMode === 'copy' ? '复制' : '移动'}“${movingItem.name}”</strong><span>选择${transferMode === 'copy' ? '目标名称和' : ''}目标文件夹</span></div><button type="button" class="icon-button" onClick=${() => setMovingItem(null)} aria-label="关闭"><${Icon} name="x" size=${18}/></button></header>${transferMode === 'copy' && html`<label class="copy-name">副本名称<input value=${copyName} onInput=${(event) => setCopyName(event.currentTarget.value)} maxlength="255" required/></label>`}<nav class="destination-trail" aria-label="目标位置">${destinationTrail.map((item, index) => html`<span key=${item.id || index}>${index > 0 && html`<${Icon} name="chevron" size=${14}/>`}<button onClick=${() => item.id && loadDestination(item.id)}>${item.label}</button></span>`)}</nav><div class="destination-list">${destinationLoading ? html`<p>正在读取文件夹…</p>` : destinationFolders.length ? destinationFolders.map((folder) => html`<button key=${folder.id} onClick=${() => loadDestination(folder.id)}><span class="folder"><${Icon} name="folder" size=${18}/></span>${folder.name}<${Icon} name="chevron" size=${15}/></button>`) : html`<p>这里没有子文件夹</p>`}</div>${actionError && html`<p class="action-error" role="alert">${actionError}</p>`}<footer><button type="button" onClick=${() => setMovingItem(null)}>取消</button><button class="primary" onClick=${confirmTransfer} disabled=${actionSaving || destinationLoading || !destination || !copyName.trim() || (transferMode === 'move' && destination.id === movingItem.parentId) || (transferMode === 'copy' && destination.id === movingItem.parentId && copyName.trim() === movingItem.name)}>${actionSaving ? (transferMode === 'copy' ? '正在复制…' : '正在移动…') : transferMode === 'move' && destination?.id === movingItem.parentId ? '已在此位置' : transferMode === 'copy' ? '复制到这里' : '移动到这里'}</button></footer></section></div>`}
+    ${matching && current && html`<${MatchDialog} item=${current} onClose=${() => setMatching(false)} onDone=${(f) => { setMatching(false); setCurrent(f); }}/>`}
   </div>`;
 }
 
