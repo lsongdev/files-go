@@ -169,7 +169,7 @@ function Player({ item }) {
         } else {
           const { default: Hls } = await import(HLS_JS);
           if (!live) return;
-          hls = new Hls({ enableWorker: false });
+          hls = new Hls({ enableWorker: false, startPosition: 0 });
           usingHlsJS.current = true;
           hls.on(Hls.Events.ERROR, (_, data) => { if (data.fatal && live) fallback(); });
           hls.loadSource(url);

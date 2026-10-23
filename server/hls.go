@@ -201,14 +201,21 @@ func (s *Server) segment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "playback session ended")
 		return
 	}
-	switch {
-	case name == "index.m3u8":
+	file := filepath.Join(sess.dir, name)
+	if name == "index.m3u8" {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "playlist not ready")
+			return
+		}
+		// A growing playlist looks live, and players would join at its end;
+		// EXT-X-START makes them begin at the start like a video should.
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		w.Header().Set("Cache-Control", "no-cache")
-	default:
-		w.Header().Set("Content-Type", "video/mp4")
+		_, _ = w.Write([]byte(strings.Replace(string(data), "#EXTM3U\n", "#EXTM3U\n#EXT-X-START:TIME-OFFSET=0,PRECISE=YES\n", 1)))
+		return
 	}
-	file := filepath.Join(sess.dir, name)
+	w.Header().Set("Content-Type", "video/mp4")
 	if _, err := os.Stat(file); errors.Is(err, os.ErrNotExist) {
 		writeError(w, http.StatusNotFound, "segment not ready")
 		return
