@@ -99,16 +99,13 @@ main { min-width: 0; padding: 0 1.5rem 3rem; overflow-x: clip; } /* the backdrop
 .info dd { margin: 0; overflow-wrap: anywhere; }
 
 .player { display: flex; flex-direction: column; gap: .5rem; }
-.player media-controller { display: block; width: 100%; border-radius: 12px; overflow: hidden; background: #000;
-  --media-accent-color: var(--accent); --media-range-track-height: 4px; --media-control-background: transparent;
-  --media-control-hover-background: rgba(255,255,255,.12); --media-font-family: inherit; }
-.player.video media-controller { aspect-ratio: 16 / 9; max-height: 75vh; }
-.player.video media-control-bar { background: linear-gradient(transparent, rgba(0,0,0,.7)); }
-.player.audio media-controller { background: var(--panel); border: 1px solid var(--line); --media-primary-color: var(--text); --media-icon-color: var(--text); }
-.player files-video { width: 100%; height: 100%; --media-webkit-text-track-transition: transform .2s; }
-/* Lift subtitles above the control bar while it is showing. */
-.player media-controller:not([userinactive]) files-video, .player media-controller[mediapaused] files-video { --media-webkit-text-track-transform: translateY(-3.2em); }
-.player media-time-range { flex: 1; }
+.player media-theme-notflix { display: block; width: 100%; aspect-ratio: 16 / 9; max-height: 75vh; border-radius: 12px; overflow: hidden; background: #000; }
+.player media-theme-sutro-audio { display: block; width: 100%; }
+.player files-video { width: 100%; height: 100%; --media-webkit-text-track-transform: translateY(-100px); } /* clear the two control rows */
+.player-placeholder { display: grid; place-items: center; aspect-ratio: 16 / 9; max-height: 75vh; border-radius: 12px; background: #000; }
+.player.audio .player-placeholder { aspect-ratio: auto; height: 4rem; background: var(--panel); border: 1px solid var(--line); }
+.spinner { width: 2.4rem; height: 2.4rem; border-radius: 50%; border: 3px solid rgba(255,255,255,.25); border-top-color: #fff; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .hint { color: var(--muted); }
 img.full { display: block; max-width: 100%; max-height: 80vh; margin: 0 auto; border-radius: 12px; }
 iframe.pdf { width: 100%; height: 80vh; border: 1px solid var(--line); border-radius: 12px; background: #fff; }

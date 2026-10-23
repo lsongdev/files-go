@@ -1,9 +1,10 @@
-// Video and audio player: Media Chrome controls around <files-video>, a
-// media element that presents a file's full timeline even when it streams
-// from an ffmpeg session that started somewhere in the middle.
-// Bundled builds: two requests instead of seventy module files.
-import 'https://cdn.jsdelivr.net/npm/media-chrome@4.19.4/+esm';
-import 'https://cdn.jsdelivr.net/npm/media-chrome@4.19.4/dist/menu/index.js/+esm';
+// Video and audio player: ready-made Media Chrome themes from player.style
+// (Notflix for video, Sutro for audio) around <files-video>, a media element
+// that presents a file's full timeline even when it streams from an ffmpeg
+// session that started somewhere in the middle. The themes bring their own
+// Media Chrome build.
+import 'https://cdn.jsdelivr.net/npm/player.style@0.3.5/notflix/+esm';
+import 'https://cdn.jsdelivr.net/npm/player.style@0.3.5/sutro-audio/+esm';
 import { CustomVideoElement } from 'https://cdn.jsdelivr.net/npm/custom-media-element@1.4.7/+esm';
 
 const HLS_JS = 'https://unpkg.com/hls.js@1.6.13/dist/hls.mjs';
@@ -57,6 +58,7 @@ class FilesVideo extends CustomVideoElement {
   #hls;
   #tracks = [];
   #vtt = new Map();
+  #starting = false; // a session is being prepared: playing, but loading
 
   // load starts playing a file; tracks are its subtitles.
   load(item, tracks = []) {
@@ -67,6 +69,10 @@ class FilesVideo extends CustomVideoElement {
   }
 
   get mode() { return this.#mode; }
+
+  // Reporting "not paused" while the server prepares a stream makes the
+  // theme show its loading indicator instead of a play button.
+  get paused() { return this.#starting ? false : this.nativeEl.paused; }
 
   get currentTime() { return this.#offset + (this.nativeEl?.currentTime || 0); }
 
@@ -137,6 +143,9 @@ class FilesVideo extends CustomVideoElement {
     const video = this.nativeEl;
     const showing = [...video.textTracks].find((t) => t.mode === 'showing')?.label;
     this.#teardown();
+    this.#starting = true;
+    this.dispatchEvent(new Event('play'));
+    this.dispatchEvent(new Event('waiting'));
     try {
       if (this.#mode === 'direct') {
         this.#offset = 0;
@@ -162,10 +171,15 @@ class FilesVideo extends CustomVideoElement {
       this.#status('');
       this.dispatchEvent(new Event('durationchange'));
       await this.#subtitles(session, showing);
-      video.play().catch(() => {});
+      await video.play().catch(() => {});
     } catch (e) {
       if (session !== this.#session) return;
       if (!this.#fallback()) this.#status(`无法播放：${e.message}`);
+    } finally {
+      if (session === this.#session) {
+        this.#starting = false;
+        this.dispatchEvent(new Event(video.paused ? 'pause' : 'playing'));
+      }
     }
   }
 
@@ -189,46 +203,16 @@ class FilesVideo extends CustomVideoElement {
 
 if (!customElements.get('files-video')) customElements.define('files-video', FilesVideo);
 
-const CONTROLS = `
-  <media-loading-indicator slot="centered-chrome"></media-loading-indicator>
-  <media-settings-menu hidden anchor="auto">
-    <media-settings-menu-item>速度<media-playback-rate-menu slot="submenu" hidden><div slot="title">速度</div></media-playback-rate-menu></media-settings-menu-item>
-    <media-settings-menu-item>字幕<media-captions-menu slot="submenu" hidden><div slot="title">字幕</div></media-captions-menu></media-settings-menu-item>
-  </media-settings-menu>
-  <media-control-bar>
-    <media-play-button></media-play-button>
-    <media-seek-backward-button seekoffset="10"></media-seek-backward-button>
-    <media-seek-forward-button seekoffset="10"></media-seek-forward-button>
-    <media-time-range></media-time-range>
-    <media-time-display showduration></media-time-display>
-    <media-mute-button></media-mute-button>
-    <media-volume-range></media-volume-range>
-    <media-settings-menu-button></media-settings-menu-button>
-    <media-pip-button></media-pip-button>
-    <media-fullscreen-button></media-fullscreen-button>
-  </media-control-bar>`;
-
-const AUDIO_CONTROLS = `
-  <media-control-bar>
-    <media-play-button></media-play-button>
-    <media-time-range></media-time-range>
-    <media-time-display showduration></media-time-display>
-    <media-mute-button></media-mute-button>
-    <media-volume-range></media-volume-range>
-    <media-playback-rate-button></media-playback-rate-button>
-  </media-control-bar>`;
-
 // createPlayer builds a player for item inside container; call destroy()
 // to stop it and end its server session.
 export function createPlayer(container, item, onStatus) {
   const audio = item.kind === 'audio';
-  const controller = document.createElement('media-controller');
-  if (audio) controller.setAttribute('audio', '');
-  controller.innerHTML = `<files-video slot="media" playsinline autoplay></files-video>${audio ? AUDIO_CONTROLS : CONTROLS}`;
-  container.append(controller);
-  const media = controller.querySelector('files-video');
+  const theme = document.createElement(audio ? 'media-theme-sutro-audio' : 'media-theme-notflix');
+  theme.innerHTML = '<files-video slot="media" playsinline autoplay></files-video>';
+  container.append(theme);
+  const media = theme.querySelector('files-video');
   media.addEventListener('status', (e) => onStatus?.(e.detail));
   const tracks = audio ? Promise.resolve([]) : getJSON(`/api/files/${item.id}/subtitles`).then((d) => d.items || []).catch(() => []);
   tracks.then((list) => media.load(item, list));
-  return { destroy: () => { media.destroy(); controller.remove(); } };
+  return { destroy: () => { media.destroy(); theme.remove(); } };
 }
