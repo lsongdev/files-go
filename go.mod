@@ -4,6 +4,7 @@ go 1.22.4
 
 require (
 	github.com/glebarez/go-sqlite v1.22.0
+	github.com/lsongdev/tmdb-go v0.1.0
 	github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd
 	golang.org/x/image v0.20.0
 	gopkg.in/yaml.v3 v3.0.1

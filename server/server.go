@@ -19,7 +19,6 @@ import (
 	"github.com/lsongdev/files-go/config"
 	"github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/store"
-	"github.com/lsongdev/files-go/tmdb"
 )
 
 type Server struct {
@@ -28,7 +27,7 @@ type Server struct {
 	store    *store.Store
 	scanner  *store.Scanner
 	pipeline *media.Pipeline
-	tmdb     *tmdb.Client
+	tmdb     *media.TMDB
 	thumbs   *Thumbs
 	streams  chan struct{}
 
@@ -37,7 +36,7 @@ type Server struct {
 	statsAt time.Time
 }
 
-func New(ctx context.Context, cfg *config.Config, st *store.Store, scanner *store.Scanner, pipeline *media.Pipeline, client *tmdb.Client) *Server {
+func New(ctx context.Context, cfg *config.Config, st *store.Store, scanner *store.Scanner, pipeline *media.Pipeline, client *media.TMDB) *Server {
 	return &Server{ctx: ctx, cfg: cfg, store: st, scanner: scanner, pipeline: pipeline, tmdb: client,
 		thumbs:  NewThumbs(cfg, st, scanner, client),
 		streams: make(chan struct{}, 2)}
