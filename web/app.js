@@ -161,8 +161,9 @@ function Player({ item }) {
       video.src = `/api/files/${item.id}/raw`;
     } else {
       setStatus(mode === 'transcode' ? '正在准备转码…' : '正在准备…');
-      api(`/api/files/${item.id}/play?t=${offset}${mode === 'transcode' ? '&transcode=1' : ''}`).then(async ({ url }) => {
+      api(`/api/files/${item.id}/play?t=${offset}${mode === 'transcode' ? '&transcode=1' : ''}`).then(async (started) => {
         if (!live) return;
+        const url = new URL(started.url, location.origin).href;
         if (nativeHLS) {
           video.src = url;
         } else {
