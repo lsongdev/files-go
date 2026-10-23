@@ -14,8 +14,8 @@ then enriches files in the background by type, name and embedded metadata:
 | Archives | ZIP entry count and size |
 
 Videos and music play in the browser: directly when the browser supports the
-file, otherwise remuxed (or, as a last resort, transcoded) by ffmpeg into a
-fragmented MP4 stream. Transcoding uses Intel/AMD GPUs through VAAPI when
+file, otherwise remuxed (or, as a last resort, transcoded) by ffmpeg into
+HLS, which Safari and iOS play natively and other browsers through hls.js. Transcoding uses Intel/AMD GPUs through VAAPI when
 available. Embedded text subtitles and external `.srt` / `.ass` files next to
 a video are offered as WebVTT tracks. Thumbnails are generated on first view
 and cached.
@@ -113,7 +113,8 @@ POST   /api/files/{id}/refresh       resync a folder / re-enrich a file
 GET    /api/files/{id}/raw           content, supports Range; ?download
 GET    /api/files/{id}/thumb         thumbnail or poster
 GET    /api/files/{id}/backdrop
-GET    /api/files/{id}/stream?t=     ffmpeg fMP4 stream from t seconds; &transcode=1
+GET    /api/files/{id}/play?t=       start an HLS session from t seconds; &transcode=1
+GET    /api/hls/{session}/{file}     playlist and segments (the session key is the credential)
 GET    /api/files/{id}/subtitles     subtitle tracks (embedded and external)
 GET    /api/files/{id}/subtitles/{track}.vtt
 GET    /api/files/{id}/match?q=&type=movie|tv     TMDB candidates
