@@ -29,6 +29,9 @@ nav button:hover { background: var(--hover); color: var(--text); }
 nav button.active { background: var(--hover); color: var(--text); font-weight: 600; }
 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: auto; animation: pulse 1.2s infinite; }
 @keyframes pulse { 50% { opacity: .3; } }
+nav.issues { padding-top: .6rem; border-top: 1px solid var(--line); }
+nav .count { margin-left: auto; font-size: .78rem; color: var(--muted); }
+.review { margin: 0 0 1rem; padding: .55rem .8rem; border-radius: 9px; background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--text); max-width: 60rem; }
 .status { margin-top: auto; font-size: .82rem; color: var(--muted); display: flex; flex-direction: column; gap: .3rem; padding: 0 .6rem; }
 .status .busy { color: var(--accent); }
 .status .warn { color: var(--warn); }

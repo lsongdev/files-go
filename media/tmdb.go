@@ -36,7 +36,9 @@ type Item struct {
 	Rating     float64  `json:"rating,omitempty"`
 	Popularity float64  `json:"popularity,omitempty"`
 	Genres     []string `json:"genres,omitempty"`
-	Runtime    int      `json:"runtime,omitempty"`
+	Runtime    int      `json:"runtime,omitempty"`  // minutes, movies
+	Seasons    int      `json:"seasons,omitempty"`  // shows
+	Episodes   int      `json:"episodes,omitempty"` // shows
 }
 
 const tmdbCacheAge = 30 * 24 * time.Hour
@@ -170,7 +172,8 @@ func movieItem(m tmdb.Movie) Item {
 
 func showItem(s tmdb.TV) Item {
 	return Item{ID: s.ID, Type: "tv", Title: s.Name, Original: s.OriginalName, Year: s.Year(), Overview: s.Overview,
-		Poster: s.PosterPath, Backdrop: s.BackdropPath, Rating: s.VoteAverage, Popularity: s.Popularity, Genres: genres(s.Genres)}
+		Poster: s.PosterPath, Backdrop: s.BackdropPath, Rating: s.VoteAverage, Popularity: s.Popularity, Genres: genres(s.Genres),
+		Seasons: s.NumberOfSeasons, Episodes: s.NumberOfEpisodes}
 }
 
 func genres(list []tmdb.Genre) []string {

@@ -52,8 +52,11 @@ END;
 CREATE TABLE cache (key TEXT PRIMARY KEY, value BLOB NOT NULL, at INTEGER NOT NULL);
 `
 
-// triggers are (re)created on every open so fixes apply without a rebuild.
+// triggers and indexes are (re)created on every open so fixes apply
+// without a rebuild.
 const triggers = `
+CREATE INDEX IF NOT EXISTS files_review ON files(json_extract(meta, '$.review')) WHERE json_extract(meta, '$.review') IS NOT NULL;
+CREATE INDEX IF NOT EXISTS files_error ON files(meta_err) WHERE meta_err IS NOT NULL;
 DROP TRIGGER IF EXISTS files_au;
 CREATE TRIGGER files_au AFTER UPDATE OF name, title ON files
 WHEN old.name IS NOT new.name OR old.title IS NOT new.title BEGIN
@@ -215,6 +218,22 @@ type SearchOptions struct {
 
 // Search matches names and titles. The trigram index needs three characters;
 // shorter queries (common for CJK) fall back to a LIKE scan.
+// Issues lists files whose identification needs a look ("review") or
+// whose enrichment failed ("error").
+func (s *Store) Issues(ctx context.Context, kind string, offset, limit int) ([]File, error) {
+	where := `meta_err IS NOT NULL`
+	if kind == "review" {
+		where = `json_extract(meta, '$.review') IS NOT NULL`
+	}
+	return s.query(ctx, `SELECT `+columns+` FROM files WHERE `+where+` ORDER BY root, path LIMIT ? OFFSET ?`, limit, offset)
+}
+
+// VideosUnder returns the video files below a directory.
+func (s *Store) VideosUnder(ctx context.Context, dir File) ([]File, error) {
+	return s.query(ctx, `SELECT `+columns+` FROM files WHERE root=? AND path>? AND path<? AND kind='video'`,
+		dir.Root, dir.Path+"/", dir.Path+"0")
+}
+
 func (s *Store) Search(ctx context.Context, opts SearchOptions) ([]File, error) {
 	query := strings.TrimSpace(opts.Query)
 	if query == "" {
@@ -306,6 +325,7 @@ type Stats struct {
 	Dirs    int64 `json:"dirs"`
 	Pending int64 `json:"pending"`
 	Failed  int64 `json:"failed"`
+	Review  int64 `json:"review"`
 }
 
 func (s *Store) Stats(ctx context.Context, version int) (Stats, error) {
@@ -314,7 +334,8 @@ func (s *Store) Stats(ctx context.Context, version int) (Stats, error) {
 		(SELECT COUNT(*) FROM files WHERE dir=0),
 		(SELECT COUNT(*) FROM files WHERE dir=1),
 		(SELECT COUNT(*) FROM files WHERE meta_ver<?),
-		(SELECT COUNT(*) FROM files WHERE meta_err IS NOT NULL)`, version).Scan(&st.Files, &st.Dirs, &st.Pending, &st.Failed)
+		(SELECT COUNT(*) FROM files WHERE meta_err IS NOT NULL),
+		(SELECT COUNT(*) FROM files WHERE json_extract(meta, '$.review') IS NOT NULL)`, version).Scan(&st.Files, &st.Dirs, &st.Pending, &st.Failed, &st.Review)
 	return st, err
 }
 

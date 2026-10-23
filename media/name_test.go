@@ -35,7 +35,8 @@ func TestSeasonAndEpisodeNumbers(t *testing.T) {
 	if _, ok := SeasonNumber("Specials and Extras"); ok {
 		t.Error("non-season folder parsed as season")
 	}
-	for name, want := range map[string]int{"E05.mkv": 5, "05.mp4": 5, "第12集.mp4": 12, "EP 3 Pilot.mkv": 3} {
+	for name, want := range map[string]int{"E05.mkv": 5, "05.mp4": 5, "第12集.mp4": 12, "EP 3 Pilot.mkv": 3,
+		"OnePiece.ep840.mp4": 840, "[www.domp4.cc]人民的名义.DVD版.01.HD1080p.mp4": 1, "Show 2019 07.mkv": 7} {
 		if got, ok := EpisodeNumber(name); !ok || got != want {
 			t.Errorf("EpisodeNumber(%q) = %d, %v", name, got, ok)
 		}
@@ -63,6 +64,12 @@ func TestMatchScore(t *testing.T) {
 	}
 	if s := matchScore("Amelie", 0, []string{"Amélie"}, 2001); s < .8 {
 		t.Errorf("accented title = %v", s)
+	}
+	if s := matchScore("In the Name of the People", 0, []string{"In the Name of People"}, 0); s != .6 {
+		t.Errorf("near title = %v", s)
+	}
+	if s := matchScore("Alien", 0, []string{"Aliens"}, 0); s != .6 {
+		t.Errorf("contained title = %v", s)
 	}
 	if s := matchScore("Dune", 2021, []string{"Dune"}, 1984); s >= .8 {
 		t.Errorf("wrong year accepted: %v", s)

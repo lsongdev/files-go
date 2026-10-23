@@ -71,6 +71,12 @@ function subtitle(item) {
 
 const posterKind = (item) => ['movie', 'show', 'season', 'book'].includes(item.meta?.kind);
 const route = (id, q) => q ? `/search?q=${encodeURIComponent(q)}` : id ? `/f/${id}` : '/';
+const ISSUES = { review: '待确认', error: '识别失败' };
+const REVIEW_REASON = {
+  ambiguous: '有同名作品，自动匹配不一定正确，请确认。',
+  conflict: 'NFO 里的 TMDB 编号与本地文件不符（例如集数对不上），已重新匹配，请确认。',
+  unmatched: '没有找到可信的匹配，可以手动匹配 TMDB。',
+};
 
 function Thumb({ item, size = 18 }) {
   const [failed, setFailed] = useState(false);
@@ -169,7 +175,7 @@ function Preview({ item }) {
   return null;
 }
 
-function Details({ item, onMatch, onRefresh }) {
+function Details({ item, onMatch, onRefresh, onConfirm }) {
   const m = item.meta || {};
   const rows = [
     ['类型', KIND_LABEL[m.kind] || KIND_LABEL[item.kind] || item.kind || '文件'],
@@ -192,7 +198,9 @@ function Details({ item, onMatch, onRefresh }) {
         <h1>${title(item)}</h1>
         <p class="sub">${subtitle(item)}</p>
         ${m.summary && html`<p class="summary">${m.summary}</p>`}
+        ${m.review && html`<p class="review">${REVIEW_REASON[m.review] || '请确认识别结果。'}</p>`}
         <div class="actions">
+          ${m.review && m.tmdb && html`<button onClick=${onConfirm}>确认无误</button>`}
           ${!item.dir && html`<a class="button" href=${`/api/files/${item.id}/raw?download`}><${Icon} name="download"/>下载</a>`}
           ${!item.dir && html`<a class="button ghost" href=${`/api/files/${item.id}/raw`} target="_blank"><${Icon} name="link"/>打开原文件</a>`}
           ${canMatch && html`<button class="ghost" onClick=${onMatch}>匹配 TMDB</button>`}
@@ -311,6 +319,18 @@ function App() {
     if (n === seq.current) setLoading(false);
   }, []);
 
+  const issues = useCallback(async (type, push = true) => {
+    const n = ++seq.current;
+    setLoading(true); setError(''); setSearching(ISSUES[type]); setNav(false);
+    try {
+      const data = await api(`/api/issues?type=${type}&limit=1000`);
+      if (n !== seq.current) return;
+      setCurrent(null); setAncestors([]); setItems(data.items); setMore(false);
+      if (push) history.pushState({ type }, '', `/issues/${type}`);
+    } catch (e) { if (n === seq.current) setError(e.message); }
+    if (n === seq.current) setLoading(false);
+  }, []);
+
   const loadMore = useCallback(async () => {
     if (!current || !more || loading) return;
     setLoading(true);
@@ -332,10 +352,12 @@ function App() {
   const navigate = useCallback((push) => {
     const params = new URLSearchParams(location.search);
     const match = location.pathname.match(/^\/f\/(\d+)/);
+    const issue = location.pathname.match(/^\/issues\/(review|error)/);
     if (location.pathname === '/search' && params.get('q')) { setQuery(params.get('q')); search(params.get('q'), push); }
+    else if (issue) issues(issue[1], push);
     else if (match) load(match[1], push);
     else if (roots[0]) load(roots[0].fileId, false);
-  }, [roots, load, search]);
+  }, [roots, load, search, issues]);
   useEffect(() => { if (roots.length) navigate(false); }, [roots]);
   useEffect(() => {
     const onPop = () => navigate(false);
@@ -362,6 +384,12 @@ function App() {
     <aside>
       <div class="brand">files</div>
       <nav>${roots.map((r) => html`<button class=${r.id === activeRoot ? 'active' : ''} onClick=${() => load(r.fileId)}><${Icon} name=${rootIcon(r.type)}/>${r.name}${r.state === 'scanning' && html`<i class="dot"></i>`}</button>`)}</nav>
+      ${(status?.stats.review > 0 || status?.stats.failed > 0) && html`<nav class="issues">
+        ${Object.entries(ISSUES).map(([type, label]) => {
+          const count = type === 'review' ? status.stats.review : status.stats.failed;
+          return count > 0 && html`<button class=${searching === label ? 'active' : ''} onClick=${() => issues(type)}><${Icon} name=${type === 'review' ? 'search' : 'close'}/>${label}<span class="count">${count.toLocaleString()}</span></button>`;
+        })}
+      </nav>`}
       <${Status} status=${status}/>
     </aside>
     <main>
@@ -373,10 +401,11 @@ function App() {
         <button class="icon-button" title="切换视图" onClick=${() => setView(view === 'grid' ? 'list' : 'grid')}><${Icon} name=${view === 'grid' ? 'list' : 'grid'}/></button>
         <button class="icon-button" title="切换主题" onClick=${() => setTheme(theme === 'dark' ? 'light' : 'dark')}><${Icon} name=${theme === 'dark' ? 'sun' : 'moon'}/></button>
       </header>
-      <div class="crumbs">${searching ? html`<span>搜索 “${searching}” · ${items.length} 个结果</span>` : [...ancestors, current].filter(Boolean).map((f, i, all) => html`
+      <div class="crumbs">${searching ? html`<span>${Object.values(ISSUES).includes(searching) ? searching : `搜索 “${searching}”`} · ${items.length} 个结果</span>` : [...ancestors, current].filter(Boolean).map((f, i, all) => html`
         ${i > 0 && html`<span class="sep">/</span>`}<button disabled=${i === all.length - 1} onClick=${() => load(f.id)}>${f.parent ? f.name : (roots.find((r) => r.id === f.root)?.name || f.name)}</button>`)}</div>
       ${error && html`<p class="error">${error}</p>`}
-      ${current && !searching && (!current.dir || current.meta?.kind) && html`<${Details} item=${current} onMatch=${() => setMatching(true)} onRefresh=${refresh}/>`}
+      ${current && !searching && (!current.dir || current.meta?.kind) && html`<${Details} item=${current} onMatch=${() => setMatching(true)} onRefresh=${refresh}
+        onConfirm=${() => api(`/api/files/${current.id}/match`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tmdb: current.meta.tmdb }) }).then(setCurrent).catch((e) => setError(e.message))}/>`}
       ${current?.dir && !searching && !current.meta?.kind && html`<div class="toolbar"><span>${current.size} 项</span><button class="ghost small" onClick=${refresh}><${Icon} name="refresh" size=${14}/>重新扫描</button></div>`}
       ${(current?.dir || searching) && html`<${Listing} items=${items} view=${view} onOpen=${load}/>`}
       ${(current?.dir || searching) && !loading && !items.length && html`<p class="empty">${searching ? '没有找到匹配的文件' : '这个文件夹是空的'}</p>`}
