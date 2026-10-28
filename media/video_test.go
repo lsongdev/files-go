@@ -242,3 +242,81 @@ func TestDisambiguation(t *testing.T) {
 		t.Errorf("two equally named movies without evidence: %+v", m)
 	}
 }
+
+func TestMovieSidecarAndNonMovieFolders(t *testing.T) {
+	ctx := context.Background()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/movie/26598" {
+			w.Write([]byte(`{"id":26598,"title":"Cats","original_title":"Cats","release_date":"1998-10-05","runtime":120}`))
+			return
+		}
+		t.Errorf("unexpected lookup %s", r.URL)
+		http.NotFound(w, r)
+	}))
+	defer api.Close()
+	root := t.TempDir()
+	for n, b := range map[string]string{"Cats/Cats.1998.mkv": "x", "Cats/Cats.1998.nfo": "\ufeff" + `<movie><title>Cats</title><year>1998</year><tmdbid>26598</tmdbid></movie>`, "Cats/Cats.Anniversary.1998.mkv": "x", "Cats/Cats.Anniversary.1998.nfo": `<movie><title>Cats</title><year>1998</year><tmdbid>26598</tmdbid></movie>`, "subs/a.srt": "subtitle", "posters/a.jpg": "image"} {
+		p := filepath.Join(root, n)
+		os.MkdirAll(filepath.Dir(p), 0755)
+		os.WriteFile(p, []byte(b), 0600)
+	}
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	scanner := store.NewScanner(st, []config.Root{{ID: "movies", Path: root}}, nil, Classify)
+	if err = scanner.Scan(ctx, "movies", false); err != nil {
+		t.Fatal(err)
+	}
+	library := &Library{Store: st, Path: scanner.Abs, Hint: func(store.File) (string, string) { return "movies", "" }, TMDB: newTMDB(tmdb.Options{Key: "k", BaseURL: api.URL})}
+	pipeline, err := NewPipeline(ctx, st, "sidecars", fakeVideo{}, library.Videos(), library.Folders())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"Cats/Cats.1998.mkv", "Cats/Cats.Anniversary.1998.mkv", "Cats", "subs", "posters"} {
+		f, err := st.ByPath(ctx, "movies", p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = pipeline.Rematch(ctx, f); err != nil {
+			t.Fatal(err)
+		}
+		f, _ = st.ByPath(ctx, "movies", p)
+		var m Meta
+		json.Unmarshal(f.Meta, &m)
+		if strings.HasPrefix(p, "Cats") {
+			if m.TMDB != "movie/26598" || m.Year != 1998 || m.Review != "" {
+				t.Fatalf("%s: %#v", p, m)
+			}
+		} else if m.Kind == "movie" || m.Review != "" {
+			t.Fatalf("not a movie: %s %#v", p, m)
+		}
+	}
+}
+
+func TestSplitClipEvidence(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	for _, name := range []string{"003-棒棒糖 1-A Sucker For Love - Part 1.flv", "004-棒棒糖 2-A Sucker For Love - Part 2.flv", "201-Cubtron Z.flv"} {
+		os.MkdirAll(filepath.Join(root, "Show"), 0755)
+		os.WriteFile(filepath.Join(root, "Show", name), []byte("x"), 0600)
+	}
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	scanner := store.NewScanner(st, []config.Root{{ID: "tv", Path: root}}, nil, Classify)
+	if err := scanner.Scan(ctx, "tv", false); err != nil {
+		t.Fatal(err)
+	}
+	show, _ := st.ByPath(ctx, "tv", "Show")
+	ev, err := (&Library{Store: st}).showEvidence(ctx, show)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Episodes != 2 || ev.MaxEpisode != 0 {
+		t.Fatalf("split clip evidence = %+v", ev)
+	}
+}

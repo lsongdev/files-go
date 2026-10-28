@@ -65,7 +65,7 @@ main { min-width: 0; padding: 0 1.5rem 3rem; overflow-x: clip; } /* the backdrop
 .card { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
 .card .art { aspect-ratio: 1; border-radius: 10px; border: 1px solid var(--line); }
 .card.poster .art { aspect-ratio: 2 / 3; }
-.card.video .art { aspect-ratio: 16 / 10; }
+.card.kind-video .art { aspect-ratio: 16 / 10; }
 .card:hover .art { border-color: var(--accent); }
 .card strong, .card small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card strong { font-weight: 500; }

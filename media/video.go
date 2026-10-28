@@ -45,6 +45,15 @@ func (v videos) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	hint, base := v.Hint(*f)
 	n := ParseName(f.Name)
 	m.Set("Release", strings.Join(nonEmpty(n.Resolution, n.Source, n.Codec), " · "))
+	if !m.Locked {
+		if sidecar, err := v.Store.ChildByName(ctx, f.Parent, strings.TrimSuffix(f.Name, path.Ext(f.Name))+".nfo"); err == nil {
+			if err := (folders{v.Library}).readNFO(sidecar, m); err != nil {
+				return err
+			}
+			// Keep the filename as the independent search fallback if the
+			// sidecar's identifier contradicts the local runtime.
+		}
+	}
 	lockedMovie, lockedShow := strings.HasPrefix(m.TMDB, "movie/"), strings.HasPrefix(m.TMDB, "tv/")
 	switch {
 	case !lockedMovie && (lockedShow || hint == "tv" || n.Season > 0 && n.Episode > 0):
@@ -203,8 +212,27 @@ func (d folders) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 		ev, err = d.showEvidence(ctx, *f)
 	} else if !m.Locked {
 		var collection bool
-		if ev, collection, err = d.movieEvidence(ctx, *f); collection {
+		var main store.File
+		if ev, main, collection, err = d.movieEvidence(ctx, *f); collection {
 			return err // a folder of several films, e.g. a trilogy
+		}
+		if err == nil && main.ID == 0 {
+			return nil
+		} // artwork/subtitle-only folder
+		if err == nil && m.TMDB == "" {
+			parsed := ParseName(main.Name)
+			if parsed.Year > 0 {
+				n.Year = parsed.Year
+				n.Title = parsed.Title
+			}
+			if normalize(f.Name) == normalize(parsed.Title) {
+				n.Title = parsed.Title
+			}
+			if sidecar, sideErr := d.Store.ChildByName(ctx, f.ID, strings.TrimSuffix(main.Name, path.Ext(main.Name))+".nfo"); sideErr == nil {
+				if err := d.readNFO(sidecar, m); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	if err != nil {
@@ -251,6 +279,7 @@ func (d folders) readNFO(nfo store.File, m *Meta) error {
 	}
 	defer file.Close()
 	var doc struct {
+		XMLName  xml.Name
 		Title    string `xml:"title"`
 		Original string `xml:"originaltitle"`
 		Year     string `xml:"year"`
@@ -261,8 +290,15 @@ func (d folders) readNFO(nfo store.File, m *Meta) error {
 			Value string `xml:",chardata"`
 		} `xml:"uniqueid"`
 	}
-	if err := xml.NewDecoder(io.LimitReader(file, 1<<20)).Decode(&doc); err != nil {
+	data, err := io.ReadAll(io.LimitReader(file, 1<<20))
+	if err != nil {
+		return err
+	}
+	if err := xml.Unmarshal([]byte(strings.TrimPrefix(string(data), "\ufeff")), &doc); err != nil {
 		return nil // NFO files are often plain text links; ignore them
+	}
+	if doc.XMLName.Local != "movie" && doc.XMLName.Local != "tvshow" {
+		return nil
 	}
 	m.Title, m.Original, m.Summary = strings.TrimSpace(doc.Title), strings.TrimSpace(doc.Original), strings.TrimSpace(doc.Plot)
 	m.Year = leadingYear(doc.Year)
@@ -402,6 +438,7 @@ func (l *Library) showEvidence(ctx context.Context, show store.File) (evidence, 
 		return evidence{}, err
 	}
 	var ev evidence
+	parts := map[string]bool{}
 	for _, f := range files {
 		n := ParseName(f.Name)
 		if n.Episode == 0 {
@@ -411,8 +448,21 @@ func (l *Library) showEvidence(ctx context.Context, show store.File) (evidence, 
 			n.Season, _ = SeasonNumber(path.Base(parentPath(f.Path)))
 		}
 		if n.Episode > 0 && !isExtra(f.Name) {
-			ev.Episodes++
-			ev.MaxEpisode, ev.Seasons = max(ev.MaxEpisode, n.Episode), max(ev.Seasons, n.Season)
+			// Split clips share one episode; their leading numbers are a
+			// playlist order, not the show's episode numbering.
+			if part := splitEpisode.FindStringSubmatch(strings.TrimSuffix(f.Name, path.Ext(f.Name))); part != nil {
+				key := normalize(part[1])
+				if !parts[key] {
+					parts[key] = true
+					ev.Episodes++
+				}
+			} else {
+				ev.Episodes++
+			}
+			if explicit := ParseName(f.Name); explicit.Episode > 0 || episodeOnly.MatchString(strings.TrimSuffix(f.Name, path.Ext(f.Name))) {
+				ev.MaxEpisode = max(ev.MaxEpisode, n.Episode)
+			}
+			ev.Seasons = max(ev.Seasons, n.Season)
 		}
 	}
 	return ev, nil
@@ -420,38 +470,51 @@ func (l *Library) showEvidence(ctx context.Context, show store.File) (evidence, 
 
 // movieEvidence uses the main video of a movie folder. A folder of several
 // different films is a collection, not a movie.
-func (l *Library) movieEvidence(ctx context.Context, dir store.File) (ev evidence, collection bool, err error) {
+func (l *Library) movieEvidence(ctx context.Context, dir store.File) (ev evidence, main store.File, collection bool, err error) {
 	files, err := l.Store.Children(ctx, dir.ID, 0, 500)
 	if err != nil {
-		return ev, false, err
+		return ev, main, false, err
 	}
 	titles := map[string]bool{}
-	var main store.File
+	identities := map[string]bool{}
+	allIdentified := true
 	for _, f := range files {
 		if f.Kind != "video" || isExtra(f.Name) {
 			continue
 		}
-		titles[normalize(moviePart.ReplaceAllString(ParseName(f.Name).Title, ""))] = true
+		parsed := ParseName(f.Name)
+		titles[normalize(moviePart.ReplaceAllString(parsed.Title, ""))] = true
+		var identified Meta
+		if json.Unmarshal(f.Meta, &identified) != nil || !strings.HasPrefix(identified.TMDB, "movie/") || identified.Review != "" || parsed.Year > 0 && identified.Year > 0 && abs(parsed.Year-identified.Year) > 1 {
+			allIdentified = false
+		} else {
+			identities[identified.TMDB] = true
+		}
 		if f.Size > main.Size {
 			main = f
 		}
 	}
-	if len(titles) > 1 {
-		return ev, true, nil
+	if len(titles) > 1 && !(allIdentified && len(identities) == 1) {
+		return ev, main, true, nil
 	}
 	var mm Meta
 	if json.Unmarshal(main.Meta, &mm) == nil {
 		ev.Duration = mm.Duration
 	}
-	return ev, false, nil
+	return ev, main, false, nil
 }
 
 var (
-	moviePart = regexp.MustCompile(`(?i)[ ._-]*(?:cd|disc|disk|part|pt)[ ._-]*\d+$`)
-	extra     = regexp.MustCompile(`(?i)(?:^|[ ._-])(?:sample|trailer|featurette|preview|花絮|预告)(?:$|[ ._-])`)
+	splitEpisode    = regexp.MustCompile(`(?i)(?:^|-)\s*([^-]+?)\s*-\s*Part\s+\d+$`)
+	moviePart       = regexp.MustCompile(`(?i)[ ._-]*(?:cd|disc|disk|part|pt)[ ._-]*\d+$`)
+	extra           = regexp.MustCompile(`(?i)(?:^|[ ._()\[\]-])(?:sample|trailer|featurette|preview|花絮|预告)(?:$|[ ._()\[\]-])`)
+	musicVideoLabel = regexp.MustCompile(`(?i)\[mv\]|\(mv\)`)
 )
 
-func isExtra(name string) bool { return extra.MatchString(strings.TrimSuffix(name, path.Ext(name))) }
+func isExtra(name string) bool {
+	stem := strings.TrimSuffix(name, path.Ext(name))
+	return extra.MatchString(stem) || musicVideoLabel.MatchString(stem)
+}
 
 func apply(m *Meta, it *Item) {
 	m.Title, m.Year, m.Summary, m.Rating, m.Genres = it.Title, it.Year, it.Overview, it.Rating, it.Genres

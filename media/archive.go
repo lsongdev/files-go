@@ -1,9 +1,12 @@
 package media
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"strconv"
 
 	"github.com/lsongdev/files-go/store"
@@ -23,7 +26,7 @@ func (a Archive) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 		return err
 	}
 	m.Kind = "archive"
-	return withZip(name, func(z *zip.Reader) error {
+	err = withZip(name, func(z *zip.Reader) error {
 		var files int
 		var size uint64
 		for _, entry := range z.File {
@@ -36,4 +39,40 @@ func (a Archive) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 		m.Set("Uncompressed", fmt.Sprintf("%.1f MB", float64(size)/(1<<20)))
 		return nil
 	})
+	if err == nil {
+		return nil
+	}
+	source, openErr := os.Open(name)
+	if openErr != nil {
+		return openErr
+	}
+	defer source.Close()
+	r := tar.NewReader(source)
+	files := 0
+	var size int64
+	headers := 0
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		h, readErr := r.Next()
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return err
+		}
+		headers++
+		if h.Typeflag == tar.TypeReg || h.Typeflag == tar.TypeRegA {
+			files++
+			size += h.Size
+		}
+	}
+	if headers == 0 {
+		return err
+	}
+	m.Set("Format", "TAR")
+	m.Set("Files", strconv.Itoa(files))
+	m.Set("Uncompressed", fmt.Sprintf("%.1f MB", float64(size)/(1<<20)))
+	return nil
 }

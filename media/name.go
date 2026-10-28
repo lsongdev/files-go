@@ -20,7 +20,7 @@ type Name struct {
 
 var (
 	episodePattern = regexp.MustCompile(`(?i)(?:\bS(\d{1,2})[ ._-]*E(\d{1,3})\b|\b(\d{1,2})x(\d{1,3})\b)`)
-	yearPattern    = regexp.MustCompile(`(?:^|[\s(\[])((?:19|20)\d{2})(?:$|[\s)\]])`)
+	yearPattern    = regexp.MustCompile(`(?:^|[\s(\[\-])((?:19|20)\d{2})`)
 	bracketPattern = regexp.MustCompile(`\[[^\]]*\]|【[^】]*】`)
 	spacePattern   = regexp.MustCompile(`\s+`)
 	junkPattern    = regexp.MustCompile(`(?i)\b(?:2160p|1080p|1080i|720p|576p|480p|4k|uhd|hdr10?|dv|blu-?ray|bdrip|brrip|web-?dl|webrip|hdtv|dvdrip|remux|x26[45]|h ?26[45]|hevc|avc|av1|dts(?:-?hd)?|truehd|atmos|ddp?5 ?1|aac|ac3|flac|10bit|proper|repack|extended|remastered|unrated)\b`)
@@ -29,6 +29,8 @@ var (
 	codecTag       = regexp.MustCompile(`(?i)\b(x26[45]|h\.?26[45]|hevc|av1)\b`)
 	seasonDir      = regexp.MustCompile(`(?i)^(?:s|season)[ ._-]*(\d{1,2})$|^第\s*(\d{1,2})\s*季$`)
 	episodeOnly    = regexp.MustCompile(`(?i)(?:^|[ ._-])(?:E|EP)[ ._-]?(\d{1,4})(?:$|[ ._-])|^0*(\d{1,4})$|第\s*(\d{1,4})\s*集`)
+	ordinalPrefix  = regexp.MustCompile(`^\d{1,3}\s+([\p{Han}])`)
+	versionSuffix  = regexp.MustCompile(`(?i)\s+(?:(?:U\s+)?DC|HR|HD|(?:\d+(?:st|nd|rd|th)\s+)?Anniversary(?:\s+Special\s+Edition)?|Ultimate\s+Edition|Special\s+Edition)$`)
 )
 
 // ParseName extracts title, year, season/episode and release tags from a
@@ -57,8 +59,14 @@ func ParseName(filename string) Name {
 		s = s[:m[0]]
 	}
 	// The last year wins: "Blade Runner 2049 (2017)".
-	if all := yearPattern.FindAllStringSubmatchIndex(s, -1); len(all) > 0 && all[len(all)-1][2] > 0 {
-		m := all[len(all)-1]
+	var years [][]int
+	for _, m := range yearPattern.FindAllStringSubmatchIndex(s, -1) {
+		if m[3] == len(s) || strings.ContainsRune(" )]-", rune(s[m[3]])) {
+			years = append(years, m)
+		}
+	}
+	if len(years) > 0 && years[len(years)-1][2] > 0 {
+		m := years[len(years)-1]
 		n.Year, _ = strconv.Atoi(s[m[2]:m[3]])
 		s = s[:m[2]]
 	}
@@ -66,6 +74,8 @@ func ParseName(filename string) Name {
 		s = s[:m[0]]
 	}
 	n.Title = spacePattern.ReplaceAllString(strings.Trim(s, " -._()[]"), " ")
+	n.Title = ordinalPrefix.ReplaceAllString(n.Title, "$1")
+	n.Title = strings.TrimSpace(versionSuffix.ReplaceAllString(n.Title, ""))
 	return n
 }
 
