@@ -16,6 +16,14 @@ func TestParseName(t *testing.T) {
 		{"Blade Runner 2049 (2017).mkv", "Blade Runner 2049", 2017, 0, 0, "", ""},
 		{"[Group] 流浪地球 The Wandering Earth 2019 1080p.mp4", "流浪地球 The Wandering Earth", 2019, 0, 0, "1080p", ""},
 		{"Mr. Robot", "Mr Robot", 0, 0, 0, "", ""},
+		{"071.低俗小说.1994.1080p.mkv", "低俗小说", 1994, 0, 0, "1080p", ""},
+		{"001.肖申克的救赎.1080p.mkv", "肖申克的救赎", 0, 0, 0, "1080p", ""},
+		{"Blade.Runner.DC.2011.HR-HDTV.mkv", "Blade Runner", 2011, 0, 0, "", "HDTV"},
+		{"Mission.Impossible.Rogue.Nation.HD.720p.rmvb", "Mission Impossible Rogue Nation", 0, 0, 0, "720p", ""},
+		{"DC.League.of.Super-Pets.2022.mkv", "DC League of Super-Pets", 2022, 0, 0, "", ""},
+		{"The.Legend.of.1900.1998.1080p.mkv", "The Legend of 1900", 1998, 0, 0, "1080p", ""},
+		{"Rage.2016-720p.mp4", "Rage", 2016, 0, 0, "720p", ""},
+		{"One.Flew.Over.the.Cuckoo's.Nest-1975-1976.mkv", "One Flew Over the Cuckoo's Nest-1975", 1976, 0, 0, "", ""},
 		{"Miss.Hong.Kong.Pageant.2015.HD720P.X264.AAC.Cantonese.mp4", "Miss Hong Kong Pageant", 2015, 0, 0, "", ""},
 	}
 	for _, tt := range tests {
@@ -82,5 +90,11 @@ func TestIsExtra(t *testing.T) {
 		if isExtra(name) != want {
 			t.Errorf("isExtra(%q) = %v", name, !want)
 		}
+	}
+	if !isExtra("Saw II Unrated (Sample).mkv") {
+		t.Error("parenthesized sample not excluded")
+	}
+	if !isExtra("One More Time (2007) [MV].mkv") || isExtra("MV.2020.mkv") {
+		t.Error("only an explicit MV label should skip movie matching")
 	}
 }

@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -9,7 +10,9 @@ import (
 	_ "image/png"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/rwcarlsen/goexif/exif"
 	_ "golang.org/x/image/bmp"
@@ -20,11 +23,14 @@ import (
 )
 
 // Photo reads dimensions and EXIF (capture time, camera, lens, GPS).
-type Photo struct{ Path Resolver }
+type Photo struct {
+	Path    Resolver
+	FFprobe string
+}
 
 func (Photo) Match(f *store.File) bool {
 	switch Ext(f.Name) {
-	case "jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff":
+	case "jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif", "avif":
 		return f.Kind == "image"
 	}
 	return false
@@ -43,7 +49,7 @@ func (p Photo) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	m.Kind = "photo"
 	cfg, format, err := image.DecodeConfig(file)
 	if err != nil {
-		return fmt.Errorf("decode image: %w", err)
+		return p.probeImage(ctx, name, m, err)
 	}
 	m.Width, m.Height = cfg.Width, cfg.Height
 	m.Set("Format", strings.ToUpper(format))
@@ -74,6 +80,34 @@ func (p Photo) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	if o := exifValue(x, exif.Orientation); o == "5" || o == "6" || o == "7" || o == "8" {
 		m.Width, m.Height = m.Height, m.Width // rotated by 90°
 	}
+	return nil
+}
+
+func (p Photo) probeImage(ctx context.Context, name string, m *Meta, original error) error {
+	bin := p.FFprobe
+	if bin == "" {
+		bin = "ffprobe"
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,codec_name", "-of", "json", name).Output()
+	if err != nil {
+		return fmt.Errorf("decode image: %w; ffprobe: %v", original, err)
+	}
+	var result struct {
+		Streams []struct {
+			Width, Height int
+			Codec         string `json:"codec_name"`
+		}
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return err
+	}
+	if len(result.Streams) == 0 || result.Streams[0].Width <= 0 || result.Streams[0].Height <= 0 {
+		return fmt.Errorf("decode image: %w; no image dimensions", original)
+	}
+	m.Width, m.Height = result.Streams[0].Width, result.Streams[0].Height
+	m.Set("Format", strings.ToUpper(result.Streams[0].Codec))
 	return nil
 }
 

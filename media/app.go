@@ -10,6 +10,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -73,6 +75,9 @@ var peVersionKeys = []string{"ProductName", "FileDescription", "CompanyName", "P
 func portable(name string, m *Meta) error {
 	file, err := pe.Open(name)
 	if err != nil {
+		if legacyErr := legacyWindows(name, m); legacyErr == nil {
+			return nil
+		}
 		return fmt.Errorf("not a PE file: %w", err)
 	}
 	defer file.Close()
@@ -130,6 +135,57 @@ func portable(name string, m *Meta) error {
 			m.Set(strings.NewReplacer("FileDescription", "Description", "ProductVersion", "Version", "FileVersion", "File version", "LegalCopyright", "Copyright").Replace(key), value)
 		}
 	}
+	return nil
+}
+
+func legacyWindows(name string, m *Meta) error {
+	f, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var h [64]byte
+	if _, err := io.ReadFull(f, h[:]); err != nil {
+		return err
+	}
+	s, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if string(h[:2]) != "MZ" {
+		return errors.New("not DOS")
+	}
+	off := int64(binary.LittleEndian.Uint32(h[60:]))
+	var peHeader [26]byte
+	if off >= 64 && off+26 <= s.Size() {
+		if _, err := f.ReadAt(peHeader[:], off); err == nil && string(peHeader[:4]) == "PE\x00\x00" {
+			sections := int64(binary.LittleEndian.Uint16(peHeader[6:]))
+			optional := int64(binary.LittleEndian.Uint16(peHeader[20:]))
+			if binary.LittleEndian.Uint16(peHeader[4:]) != 0x200 || binary.LittleEndian.Uint16(peHeader[24:]) != 0x20b || optional < 112 || sections < 1 || off+24+optional+40*sections > s.Size() {
+				return errors.New("unsupported or truncated PE")
+			}
+			m.Set("Architecture", "IA64")
+			m.Set("Format", "PE32+")
+			m.Set("Type", "Windows executable")
+			if binary.LittleEndian.Uint16(peHeader[22:])&pe.IMAGE_FILE_DLL != 0 {
+				m.Set("Type", "Windows library")
+			}
+			return nil
+		}
+	}
+	pages := int64(binary.LittleEndian.Uint16(h[4:]))
+	last := int64(binary.LittleEndian.Uint16(h[2:]))
+	headerSize := int64(binary.LittleEndian.Uint16(h[8:])) * 16
+	length := pages * 512
+	if last > 0 {
+		length = (pages-1)*512 + last
+	}
+	if pages == 0 || last > 511 || headerSize < 28 || headerSize > length || length > s.Size() {
+		return errors.New("invalid DOS size")
+	}
+	m.Set("Format", "DOS MZ")
+	m.Set("Architecture", "x86 16-bit")
+	m.Set("Type", "DOS executable")
 	return nil
 }
 

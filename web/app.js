@@ -88,7 +88,7 @@ function Thumb({ item, size = 18 }) {
 function Listing({ items, view, onOpen }) {
   if (view === 'grid') {
     return html`<div class="grid">${items.map((item) => html`
-      <button class=${`card ${posterKind(item) ? 'poster' : ''} ${item.kind || ''}`} key=${item.id} onClick=${() => onOpen(item.id)} title=${item.name}>
+      <button class=${`card ${posterKind(item) ? 'poster' : ''} ${item.kind ? `kind-${item.kind}` : ''}`} key=${item.id} onClick=${() => onOpen(item.id)} title=${item.name}>
         <span class="art"><${Thumb} item=${item} size=${36}/>${item.play && html`<i class="badge"><${Icon} name="play" size=${12}/></i>`}</span>
         <strong>${title(item)}</strong><small>${subtitle(item)}</small>
       </button>`)}</div>`;

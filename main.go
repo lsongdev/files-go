@@ -68,7 +68,7 @@ func main() {
 		&media.Probe{Bin: cfg.FFprobe, Path: resolve},
 		library.Videos(),
 		library.Folders(),
-		media.Photo{Path: resolve},
+		media.Photo{Path: resolve, FFprobe: cfg.FFprobe},
 		media.Document{Path: resolve, PDFInfo: pdfinfo},
 		media.App{Path: resolve},
 		media.Archive{Path: resolve},

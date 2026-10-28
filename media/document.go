@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/lsongdev/files-go/store"
+	"github.com/richardlehane/mscfb"
+	"golang.org/x/net/html/charset"
 )
 
 // Document reads titles, authors and covers from e-books and office files.
@@ -50,8 +52,59 @@ func (d Document) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 		return d.pdf(ctx, name, m)
 	default:
 		m.Kind = "document"
+		return officeFile(name, m)
+	}
+}
+
+// Some libraries contain legacy DOC/XLS data with DOCX/XLSX suffixes.
+// Detect the actual container before selecting a metadata reader.
+func officeFile(name string, m *Meta) error {
+	f, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var header [8]byte
+	if _, err := io.ReadFull(f, header[:]); err != nil {
+		return err
+	}
+	if !bytes.Equal(header[:], []byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1}) {
 		return withZip(name, func(z *zip.Reader) error { return office(z, m) })
 	}
+	doc, err := mscfb.New(f)
+	if err != nil {
+		return fmt.Errorf("office compound container: %w", err)
+	}
+	format := ""
+	protected := false
+	for {
+		entry, err := doc.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("office compound directory: %w", err)
+		}
+		switch entry.Name {
+		case "WordDocument":
+			format = "Legacy Word (DOC)"
+		case "Workbook", "Book":
+			format = "Legacy Excel (XLS)"
+		case "PowerPoint Document":
+			format = "Legacy PowerPoint (PPT)"
+		case "EncryptedPackage":
+			protected = true
+		}
+	}
+	if protected {
+		m.Set("Protection", "Office document is encrypted")
+		return nil
+	}
+	if format == "" {
+		return errors.New("office compound container: no recognized document stream")
+	}
+	m.Set("Format", format)
+	return nil
 }
 
 func withZip(name string, fn func(*zip.Reader) error) error {
@@ -78,6 +131,11 @@ func readZip(z *zip.Reader, name string, limit int64) ([]byte, error) {
 }
 
 func epub(z *zip.Reader, m *Meta) error {
+	encrypted := epubEncryptedEntries(z)
+	if encrypted["META-INF/container.xml"] {
+		m.Set("Protection", "EPUB metadata is encrypted")
+		return nil
+	}
 	data, err := readZip(z, "META-INF/container.xml", 1<<20)
 	if err != nil {
 		return err
@@ -87,8 +145,15 @@ func epub(z *zip.Reader, m *Meta) error {
 			Path string `xml:"full-path,attr"`
 		} `xml:"rootfiles>rootfile"`
 	}
-	if err := xml.Unmarshal(data, &container); err != nil {
+	if err := decodeEPUBXML(data, &container); err != nil {
 		return fmt.Errorf("epub container: %w", err)
+	}
+	if container.Rootfile.Path == "" {
+		return errors.New("epub container: missing rootfile path")
+	}
+	if encrypted[container.Rootfile.Path] {
+		m.Set("Protection", "EPUB metadata is encrypted")
+		return nil
 	}
 	if data, err = readZip(z, container.Rootfile.Path, 4<<20); err != nil {
 		return err
@@ -111,7 +176,7 @@ func epub(z *zip.Reader, m *Meta) error {
 			Properties string `xml:"properties,attr"`
 		} `xml:"manifest>item"`
 	}
-	if err := xml.Unmarshal(data, &opf); err != nil {
+	if err := decodeEPUBXML(data, &opf); err != nil {
 		return fmt.Errorf("epub package: %w", err)
 	}
 	if len(opf.Title) > 0 {
@@ -136,6 +201,97 @@ func epub(z *zip.Reader, m *Meta) error {
 		}
 	}
 	return nil
+}
+
+// Only EPUB metadata uses this tolerance. Binary ciphertext and invalid
+// encodings remain errors; external entities are never fetched by encoding/xml.
+func decodeEPUBXML(data []byte, target any) error {
+	clean, err := epubWithoutComments(data)
+	if err != nil {
+		return err
+	}
+	decoder := xml.NewDecoder(bytes.NewReader(clean))
+	decoder.CharsetReader = charset.NewReaderLabel
+	decoder.Strict = false
+	decoder.Entity = xml.HTMLEntity
+	return decoder.Decode(target)
+}
+
+// Skip comments without touching comment-looking text in CDATA or attributes.
+func epubWithoutComments(data []byte) ([]byte, error) {
+	var out bytes.Buffer
+	for len(data) > 0 {
+		i := bytes.IndexByte(data, '<')
+		if i < 0 {
+			out.Write(data)
+			break
+		}
+		out.Write(data[:i])
+		data = data[i:]
+		if bytes.HasPrefix(data, []byte("<!--")) {
+			end := bytes.Index(data[4:], []byte("-->"))
+			if end < 0 {
+				return nil, errors.New("epub XML: unterminated comment")
+			}
+			data = data[4+end+3:]
+			continue
+		}
+		if bytes.HasPrefix(data, []byte("<![CDATA[")) {
+			end := bytes.Index(data[9:], []byte("]]>"))
+			if end < 0 {
+				return nil, errors.New("epub XML: unterminated CDATA")
+			}
+			out.Write(data[:9+end+3])
+			data = data[9+end+3:]
+			continue
+		}
+		quote := byte(0)
+		end := 1
+		for ; end < len(data); end++ {
+			c := data[end]
+			if quote != 0 {
+				if c == quote {
+					quote = 0
+				}
+				continue
+			}
+			if c == '\'' || c == '"' {
+				quote = c
+				continue
+			}
+			if c == '>' {
+				end++
+				break
+			}
+		}
+		out.Write(data[:end])
+		data = data[end:]
+	}
+	return out.Bytes(), nil
+}
+
+func epubEncryptedEntries(z *zip.Reader) map[string]bool {
+	result := map[string]bool{}
+	data, err := readZip(z, "META-INF/encryption.xml", 1<<20)
+	if err != nil {
+		return result
+	}
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	decoder.Strict = false
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		if tag, ok := token.(xml.StartElement); ok && tag.Name.Local == "CipherReference" {
+			for _, attr := range tag.Attr {
+				if attr.Name.Local == "URI" {
+					result[strings.TrimPrefix(path.Clean(attr.Value), "/")] = true
+				}
+			}
+		}
+	}
+	return result
 }
 
 func office(z *zip.Reader, m *Meta) error {

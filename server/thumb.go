@@ -215,7 +215,10 @@ func (t *Thumbs) render(ctx context.Context, f store.File, m media.Meta, ref, si
 			return nil, err
 		}
 		defer file.Close()
-		return scale(file, media.Ext(f.Name))
+		if data, err := scale(file, media.Ext(f.Name)); err == nil {
+			return data, nil
+		}
+		return t.frame(ctx, src, -1)
 	case f.Kind == "document":
 		return t.pdf(ctx, src)
 	case f.Kind == "video":

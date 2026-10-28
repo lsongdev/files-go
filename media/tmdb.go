@@ -91,7 +91,7 @@ func (t *TMDB) Search(ctx context.Context, kind, title string, year int) ([]Item
 }
 
 func (t *TMDB) search(ctx context.Context, c *tmdb.Client, kind, title string, year int) ([]Item, error) {
-	opts := &tmdb.SearchOptions{Year: year}
+	opts := &tmdb.SearchOptions{Year: year, IncludeAdult: kind == "movie"}
 	var items []Item
 	switch kind {
 	case "movie":
