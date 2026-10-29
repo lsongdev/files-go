@@ -22,7 +22,8 @@ func TestSubtitles(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not installed")
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	dir := t.TempDir()
 	root := filepath.Join(dir, "root")
 	os.MkdirAll(filepath.Join(root, "Movies"), 0o755)
@@ -43,7 +44,12 @@ func TestSubtitles(t *testing.T) {
 	scanner.Init(ctx)
 	scanner.Scan(ctx, "r", false)
 	pipeline, _ := media.NewPipeline(ctx, st, "test")
-	srv := httptest.NewServer(New(ctx, cfg, st, scanner, pipeline, nil).Handler(http.NotFoundHandler()))
+	api, apiErr := New(ctx, cfg, st, scanner, pipeline, nil)
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	defer api.hls.Close()
+	srv := httptest.NewServer(api.Handler(http.NotFoundHandler()))
 	defer srv.Close()
 
 	movie, _ := st.ByPath(ctx, "r", "Movies/Dune.2021.mkv")

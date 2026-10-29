@@ -13,15 +13,24 @@ then enriches files in the background by type, name and embedded metadata:
 | Apps | APK (package, version, SDK, icon), Windows PE version info, ELF, Mach-O |
 | Archives | ZIP entry count and size |
 
-Videos and music play in the browser: directly when the browser supports the
-file, otherwise remuxed (or, as a last resort, transcoded) by ffmpeg into
-HLS, which Safari and iOS play natively and other browsers through hls.js.
-The player is a ready-made [player.style](https://player.style) theme (Media
-Chrome) around a small media element that shows a file's whole timeline and
-restarts the stream when seeking past what has been produced. Transcoding uses Intel/AMD GPUs through VAAPI when
-available. Embedded text subtitles and external `.srt` / `.ass` files next to
-a video are offered as WebVTT tracks. Thumbnails are generated on first view
-and cached.
+Videos and music use the browser's native controls. Opening a detail page
+shows a play button; media, subtitles and streaming are requested only after
+clicking it. Supported files play directly. Other files use ffmpeg to remux
+(or, as a last resort, transcode) into HLS, played natively on Safari/iOS and
+through hls.js elsewhere.
+
+The reusable [`pkg/hls`](pkg/hls) backend publishes a complete VOD playlist
+without generating media. Requested fragments are generated on demand and
+cached, so the native progress bar knows the full duration and can seek to an
+uncached position without encoding everything before it. Concurrent requests
+share work; the backend does not encode ahead. The default completed-fragment
+cache is 512 MiB, with LRU eviction and 30-minute idle expiry, and at most two
+probe/encoding jobs run concurrently. Copying video follows source keyframes;
+each independently generated fMP4 fragment has its own initialization section
+and discontinuity. Transcoding uses Intel/AMD GPUs through VAAPI when available.
+Embedded text subtitles and external `.srt` / `.ass` files next to a video are
+offered as WebVTT tracks on the full timeline. Thumbnails are generated on first
+view and cached.
 
 The service is read-only: it opens indexed files read-only and has no
 upload, rename or delete operations.
@@ -57,7 +66,8 @@ config/   configuration
 store/    SQLite index and scanner
 media/    enrichers, the background pipeline and the TMDB adapter
            (github.com/lsongdev/tmdb-go)
-server/   HTTP API, thumbnails, streaming
+pkg/hls/  independent on-demand HLS VOD timelines, generation and cache
+server/   HTTP API, thumbnails, codec/hardware policy and HLS adapter
 web/      Preact UI (embedded)
 ```
 
@@ -116,8 +126,9 @@ POST   /api/files/{id}/refresh       resync a folder / re-enrich a file
 GET    /api/files/{id}/raw           content, supports Range; ?download
 GET    /api/files/{id}/thumb         thumbnail or poster
 GET    /api/files/{id}/backdrop
-GET    /api/files/{id}/play?t=       start an HLS session from t seconds; &transcode=1
-GET    /api/hls/{session}/{file}     playlist and segments (the session key is the credential)
+GET    /api/files/{id}/play          create complete HLS VOD timeline; ?transcode=1
+GET    /api/hls/{session}/{file}     playlist and on-demand fragments (session key is the credential)
+DELETE /api/hls/{session}            release playback token; retain cached fragments
 GET    /api/files/{id}/subtitles     subtitle tracks (embedded and external)
 GET    /api/files/{id}/subtitles/{track}.vtt
 GET    /api/files/{id}/match?q=&type=movie|tv     TMDB candidates

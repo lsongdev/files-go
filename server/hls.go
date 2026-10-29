@@ -2,99 +2,17 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
-	"fmt"
-	"log"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
-	"strings"
-	"sync"
-	"time"
+
+	"github.com/lsongdev/files-go/media"
+	"github.com/lsongdev/files-go/pkg/hls"
 )
 
-const (
-	segmentSeconds = 4
-	maxSessions    = 3
-	sessionIdle    = 90 * time.Second
-)
-
-// HLS is what every browser can stream: Safari plays it natively (iOS has
-// no other way to play a live remux or transcode, since progressive MP4
-// there requires byte ranges), others through hls.js. Each playback is an
-// ffmpeg process writing fMP4 segments and a growing playlist.
-type hls struct {
-	dir string
-	mu  sync.Mutex
-	all map[string]*session
-}
-
-type session struct {
-	key    string // random; the segment URLs are capability URLs
-	file   int64
-	dir    string
-	cancel context.CancelFunc
-	done   chan struct{}
-	err    error
-	last   time.Time
-}
-
-func newHLS(ctx context.Context, dir string) *hls {
-	_ = os.RemoveAll(dir) // leftovers of a previous run
-	h := &hls{dir: dir, all: map[string]*session{}}
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				h.stopAll(func(*session) bool { return true })
-				return
-			case <-ticker.C:
-				h.stopAll(func(s *session) bool { return time.Since(s.last) > sessionIdle })
-			}
-		}
-	}()
-	return h
-}
-
-func (h *hls) stopAll(match func(*session) bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for key, s := range h.all {
-		if match(s) {
-			h.stop(key)
-		}
-	}
-}
-
-// stop must be called with h.mu held.
-func (h *hls) stop(key string) {
-	if s, ok := h.all[key]; ok {
-		s.cancel()
-		delete(h.all, key)
-		go func() { <-s.done; _ = os.RemoveAll(s.dir) }()
-	}
-}
-
-func (h *hls) get(key string) (*session, bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	s, ok := h.all[key]
-	if ok {
-		s.last = time.Now()
-	}
-	return s, ok
-}
-
-// play starts an HLS session for a media file from ?t= seconds and answers
-// with its playlist URL once the first segment exists. ?transcode=1 forces
-// re-encoding, the player's fallback when copied codecs do not play.
+// play publishes a complete timeline without producing any media fragments.
+// Codec/hardware policy stays here; the reusable HLS package handles delivery.
 func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 	f, ok := s.lookup(w, r)
 	if !ok {
@@ -104,143 +22,91 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "not a media file")
 		return
 	}
-	src, err := s.scanner.Abs(f)
+	path, err := s.scanner.Abs(f)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	start, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
-	in, out := s.ffmpegArgs(f, meta(f), r.URL.Query().Get("transcode") == "1")
-	args := append([]string{"-v", "error", "-nostdin"}, in...)
-	if start > 0 {
-		args = append(args, "-ss", strconv.FormatFloat(start, 'f', 3, 64))
+	m := meta(f)
+	if f.Kind == "video" && m.Video == "" || f.Kind == "audio" && m.Audio == "" {
+		bin := s.cfg.FFprobe
+		if bin == "" {
+			bin = "ffprobe"
+		}
+		probe := media.Probe{Bin: bin, Path: s.scanner.Abs}
+		if err := probe.Enrich(r.Context(), &f, &m); err != nil {
+			s.fail(w, err)
+			return
+		}
 	}
+	force := r.URL.Query().Get("transcode") == "1"
+	in, out := s.ffmpegArgs(f, m, force)
+	copyVideo := f.Kind == "video" && !force && (m.Video == "h264" || m.Video == "hevc" || m.Video == "vp9" || m.Video == "av1")
+	play, err := s.hls.Open(r.Context(), hls.Source{Path: path, CopyVideo: copyVideo, InputArgs: in, OutputArgs: out})
+	if err != nil {
+		s.hlsError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"url": "/api/hls/" + play.Key + "/index.m3u8", "duration": play.Duration})
+}
 
-	key := make([]byte, 16)
-	_, _ = rand.Read(key)
-	sess := &session{key: hex.EncodeToString(key), file: f.ID, done: make(chan struct{}), last: time.Now()}
-	sess.dir = filepath.Join(s.hls.dir, sess.key)
-	if err := os.MkdirAll(sess.dir, 0o755); err != nil {
+var segmentName = regexp.MustCompile(`^(init|seg)-(\d{5,})\.(mp4|m4s)$`)
+
+func (s *Server) segment(w http.ResponseWriter, r *http.Request) {
+	key, name := r.PathValue("key"), r.PathValue("name")
+	if name == "index.m3u8" {
+		data, err := s.hls.Playlist(r.Context(), key)
+		if err != nil {
+			s.hlsError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write(data)
+		return
+	}
+	match := segmentName.FindStringSubmatch(name)
+	if match == nil || match[1] == "init" && match[3] != "mp4" || match[1] == "seg" && match[3] != "m4s" {
+		writeError(w, http.StatusNotFound, "unknown HLS resource")
+		return
+	}
+	index, err := strconv.Atoi(match[2])
+	if err != nil {
+		writeError(w, http.StatusNotFound, "invalid fragment")
+		return
+	}
+	file, err := s.hls.Segment(r.Context(), key, index, match[1] == "init")
+	if err != nil {
+		s.hlsError(w, err)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	args = append(append(append(args, "-i", src), out...),
-		"-strict", "-2", "-f", "hls", "-hls_time", strconv.Itoa(segmentSeconds), "-hls_playlist_type", "event",
-		"-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4",
-		"-hls_segment_filename", filepath.Join(sess.dir, "seg-%05d.m4s"), filepath.Join(sess.dir, "index.m3u8"))
-
-	s.hls.mu.Lock()
-	// One viewer seeking starts a new session; the old one is not needed.
-	for key, other := range s.hls.all {
-		if other.file == f.ID {
-			s.hls.stop(key)
-		}
-	}
-	for len(s.hls.all) >= maxSessions {
-		oldest := ""
-		for key, other := range s.hls.all {
-			if oldest == "" || other.last.Before(s.hls.all[oldest].last) {
-				oldest = key
-			}
-		}
-		s.hls.stop(oldest)
-	}
-	ctx, cancel := context.WithCancel(s.ctx)
-	sess.cancel = cancel
-	s.hls.all[sess.key] = sess
-	s.hls.mu.Unlock()
-
-	var stderr limitedBuffer
-	cmd := exec.CommandContext(ctx, s.cfg.FFmpeg, args...)
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		cancel()
-		s.fail(w, fmt.Errorf("start ffmpeg: %w", err))
-		return
-	}
-	go func() {
-		err := cmd.Wait()
-		if err != nil && ctx.Err() == nil {
-			sess.err = fmt.Errorf("ffmpeg: %v: %s", err, strings.TrimSpace(stderr.String()))
-			log.Printf("hls %s/%s: %v", f.Root, f.Path, sess.err)
-		}
-		close(sess.done)
-	}()
-
-	playlist := filepath.Join(sess.dir, "index.m3u8")
-	deadline := time.After(30 * time.Second)
-	for {
-		if data, err := os.ReadFile(playlist); err == nil && strings.Contains(string(data), "#EXTINF") {
-			writeJSON(w, map[string]string{"url": "/api/hls/" + sess.key + "/index.m3u8"})
-			return
-		}
-		select {
-		case <-sess.done:
-			if sess.err == nil {
-				continue // finished before we looked: the playlist is complete
-			}
-			writeError(w, http.StatusUnprocessableEntity, sess.err.Error())
-			return
-		case <-deadline:
-			writeError(w, http.StatusGatewayTimeout, "ffmpeg produced no output in time")
-			return
-		case <-r.Context().Done():
-			return
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-}
-
-var segmentName = regexp.MustCompile(`^(index\.m3u8|init\.mp4|seg-\d{5}\.m4s)$`)
-
-// segment serves a session's playlist and segments.
-func (s *Server) segment(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	sess, ok := s.hls.get(r.PathValue("key"))
-	if !ok || !segmentName.MatchString(name) {
-		writeError(w, http.StatusNotFound, "playback session ended")
-		return
-	}
-	file := filepath.Join(sess.dir, name)
-	if name == "index.m3u8" {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			writeError(w, http.StatusNotFound, "playlist not ready")
-			return
-		}
-		// A growing playlist looks live, and players would join at its end;
-		// EXT-X-START makes them begin at the start like a video should.
-		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		w.Header().Set("Cache-Control", "no-cache")
-		_, _ = w.Write([]byte(strings.Replace(string(data), "#EXTM3U\n", "#EXTM3U\n#EXT-X-START:TIME-OFFSET=0,PRECISE=YES\n", 1)))
-		return
-	}
 	w.Header().Set("Content-Type", "video/mp4")
-	if _, err := os.Stat(file); errors.Is(err, os.ErrNotExist) {
-		writeError(w, http.StatusNotFound, "segment not ready")
-		return
+	w.Header().Set("Cache-Control", "private, max-age=1800")
+	http.ServeContent(w, r, name, info.ModTime(), file)
+}
+
+func (s *Server) releasePlayback(w http.ResponseWriter, r *http.Request) {
+	s.hls.Release(r.PathValue("key"))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) hlsError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return // the viewer stopped waiting; no response remains to deliver
+	case errors.Is(err, context.DeadlineExceeded):
+		writeError(w, http.StatusGatewayTimeout, "media generation timed out")
+	case errors.Is(err, hls.ErrNotFound):
+		writeError(w, http.StatusNotFound, "playback session ended or fragment not found")
+	case errors.Is(err, hls.ErrSourceChanged):
+		writeError(w, http.StatusConflict, err.Error())
+	default:
+		s.fail(w, err)
 	}
-	http.ServeFile(w, r, file)
-}
-
-// limitedBuffer keeps the tail of ffmpeg's stderr.
-type limitedBuffer struct {
-	mu   sync.Mutex
-	data []byte
-}
-
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.data = append(b.data, p...)
-	if len(b.data) > 8<<10 {
-		b.data = b.data[len(b.data)-8<<10:]
-	}
-	return len(p), nil
-}
-
-func (b *limitedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return string(b.data)
 }

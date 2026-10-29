@@ -89,9 +89,13 @@ func main() {
 		}
 	}()
 
+	api, err := server.New(ctx, cfg, st, scanner, pipeline, client)
+	if err != nil {
+		log.Fatal(err)
+	}
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           server.New(ctx, cfg, st, scanner, pipeline, client).Handler(web.Handler()),
+		Handler:           api.Handler(web.Handler()),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

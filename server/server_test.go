@@ -21,7 +21,8 @@ import (
 )
 
 func TestAPI(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	dir := t.TempDir()
 	root := filepath.Join(dir, "root")
 	os.MkdirAll(filepath.Join(root, "Pictures"), 0o755)
@@ -50,7 +51,12 @@ func TestAPI(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	srv := httptest.NewServer(New(ctx, cfg, st, scanner, pipeline, nil).Handler(http.NotFoundHandler()))
+	api, apiErr := New(ctx, cfg, st, scanner, pipeline, nil)
+	if apiErr != nil {
+		t.Fatal(apiErr)
+	}
+	defer api.hls.Close()
+	srv := httptest.NewServer(api.Handler(http.NotFoundHandler()))
 	defer srv.Close()
 
 	get := func(path string, headers ...string) *http.Response {

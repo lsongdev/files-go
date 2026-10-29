@@ -103,13 +103,11 @@ function Listing({ items, view, onOpen }) {
     </button>`)}</div>`;
 }
 
-// The player module (Media Chrome, hls.js) loads only when something plays,
+// The native player module (with optional hls.js) loads only when something plays,
 // with the same cache-busting version as this file.
 const asset = (name) => new URL(name + new URL(import.meta.url).search, import.meta.url).href;
 
 const loadPlayer = () => import(asset('./player.js'));
-// Fetch the player while the page is idle, so it is ready when needed.
-(window.requestIdleCallback || setTimeout)(() => loadPlayer().catch(() => {}));
 
 function Player({ item }) {
   const ref = useRef(null);
@@ -148,9 +146,9 @@ function TextPreview({ item }) {
 }
 
 const TEXT = new Set(['text', 'code']);
-function Preview({ item }) {
+function Preview({ item, playing }) {
   const raw = `/api/files/${item.id}/raw`;
-  if (item.play) return html`<${Player} key=${item.id} item=${item}/>`;
+  if (item.play) return playing ? html`<${Player} key=${item.id} item=${item}/>` : null;
   if (item.kind === 'image' && !['heic', 'heif', 'psd', 'cr2', 'nef', 'arw', 'dng'].includes(item.name.split('.').pop().toLowerCase())) return html`<img class="full" src=${raw} alt=${item.name}/>`;
   if (item.name.toLowerCase().endsWith('.pdf')) return html`<iframe class="pdf" src=${raw} title=${item.name}></iframe>`;
   if (TEXT.has(item.kind) && item.size < 50 << 20) return html`<${TextPreview} item=${item}/>`;
@@ -158,6 +156,7 @@ function Preview({ item }) {
 }
 
 function Details({ item, onMatch, onRefresh, onConfirm }) {
+  const [playing, setPlaying] = useState(false);
   const m = item.meta || {};
   const rows = [
     ['类型', KIND_LABEL[m.kind] || KIND_LABEL[item.kind] || item.kind || '文件'],
@@ -183,14 +182,15 @@ function Details({ item, onMatch, onRefresh, onConfirm }) {
         ${m.review && html`<p class="review">${REVIEW_REASON[m.review] || '请确认识别结果。'}</p>`}
         <div class="actions">
           ${m.review && m.tmdb && html`<button onClick=${onConfirm}>确认无误</button>`}
+          ${!item.dir && item.play && html`<button disabled=${playing} onClick=${() => setPlaying(true)}><${Icon} name="play"/>播放</button>`}
           ${!item.dir && html`<a class="button" href=${`/api/files/${item.id}/raw?download`}><${Icon} name="download"/>下载</a>`}
-          ${!item.dir && html`<a class="button ghost" href=${`/api/files/${item.id}/raw`} target="_blank"><${Icon} name="link"/>打开原文件</a>`}
+          ${!item.dir && !item.play && html`<a class="button ghost" href=${`/api/files/${item.id}/raw`} target="_blank"><${Icon} name="link"/>打开原文件</a>`}
           ${canMatch && html`<button class="ghost" onClick=${onMatch}>匹配 TMDB</button>`}
           <button class="ghost" onClick=${onRefresh}><${Icon} name="refresh"/>${item.dir ? '重新扫描' : '重新识别'}</button>
         </div>
       </div>
     </div>
-    ${!item.dir && html`<${Preview} item=${item}/>`}
+    ${!item.dir && html`<${Preview} item=${item} playing=${playing}/>`}
     <dl class="info">${rows.map(([k, v]) => html`<div><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>
   </section>`;
 }
@@ -393,7 +393,7 @@ function App() {
       <div class="crumbs">${searching ? html`<span>${Object.values(ISSUES).includes(searching) ? searching : `搜索 “${searching}”`} · ${items.length} 个结果</span>` : [...ancestors, current].filter(Boolean).map((f, i, all) => html`
         ${i > 0 && html`<span class="sep">/</span>`}<button disabled=${i === all.length - 1} onClick=${() => load(f.id)}>${f.parent ? f.name : (roots.find((r) => r.id === f.root)?.name || f.name)}</button>`)}</div>
       ${error && html`<p class="error">${error}</p>`}
-      ${current && !searching && (!current.dir || current.meta?.kind) && html`<${Details} item=${current} onMatch=${() => setMatching(true)} onRefresh=${refresh}
+      ${current && !searching && (!current.dir || current.meta?.kind) && html`<${Details} key=${current.id} item=${current} onMatch=${() => setMatching(true)} onRefresh=${refresh}
         onConfirm=${() => api(`/api/files/${current.id}/match`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tmdb: current.meta.tmdb }) }).then(setCurrent).catch((e) => setError(e.message))}/>`}
       ${current?.dir && !searching && !current.meta?.kind && html`<div class="toolbar"><span>${current.size} 项</span><button class="ghost small" onClick=${refresh}><${Icon} name="refresh" size=${14}/>重新扫描</button></div>`}
       ${(current?.dir || searching) && html`<${Listing} items=${items} view=${view} onOpen=${load}/>`}
