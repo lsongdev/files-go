@@ -69,7 +69,7 @@ function subtitle(item) {
   return formatSize(item.size);
 }
 
-const posterKind = (item) => ['movie', 'show', 'season', 'book'].includes(item.meta?.kind);
+const posterKind = (item) => ['movie', 'show', 'season', 'book'].includes(item.meta?.kind) || /\.pdf$/i.test(item.name);
 const route = (id, q) => q ? `/search?q=${encodeURIComponent(q)}` : id ? `/f/${id}` : '/';
 const ISSUES = { review: '待确认', error: '识别失败' };
 const REVIEW_REASON = {

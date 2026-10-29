@@ -136,29 +136,20 @@ func epub(z *zip.Reader, m *Meta) error {
 		m.Set("Protection", "EPUB metadata is encrypted")
 		return nil
 	}
-	data, err := readZip(z, "META-INF/container.xml", 1<<20)
+	packagePath, err := epubPackagePath(z)
 	if err != nil {
 		return err
 	}
-	var container struct {
-		Rootfile struct {
-			Path string `xml:"full-path,attr"`
-		} `xml:"rootfiles>rootfile"`
-	}
-	if err := decodeEPUBXML(data, &container); err != nil {
-		return fmt.Errorf("epub container: %w", err)
-	}
-	if container.Rootfile.Path == "" {
-		return errors.New("epub container: missing rootfile path")
-	}
-	if encrypted[container.Rootfile.Path] {
+	if encrypted[packagePath] {
 		m.Set("Protection", "EPUB metadata is encrypted")
 		return nil
 	}
-	if data, err = readZip(z, container.Rootfile.Path, 4<<20); err != nil {
+	data, err := readZip(z, packagePath, 4<<20)
+	if err != nil {
 		return err
 	}
 	var opf struct {
+		XMLName     xml.Name `xml:"package"`
 		Title       []string `xml:"metadata>title"`
 		Creator     []string `xml:"metadata>creator"`
 		Publisher   string   `xml:"metadata>publisher"`
@@ -196,17 +187,62 @@ func epub(z *zip.Reader, m *Meta) error {
 	}
 	for _, item := range opf.Items {
 		if item.ID == coverID || strings.Contains(item.Properties, "cover-image") {
-			m.Poster = "zip:" + path.Join(path.Dir(container.Rootfile.Path), item.Href)
+			m.Poster = "zip:" + path.Join(path.Dir(packagePath), item.Href)
 			break
 		}
 	}
 	return nil
 }
 
+// Some converted books omit the OCF entry point but retain a single OPF.
+// Only use that fallback when container.xml is absent; never mask a damaged
+// container or guess between multiple packages.
+func epubPackagePath(z *zip.Reader) (string, error) {
+	hasContainer := false
+	for _, f := range z.File {
+		if f.Name == "META-INF/container.xml" {
+			hasContainer = true
+			break
+		}
+	}
+	if !hasContainer {
+		candidate := ""
+		for _, f := range z.File {
+			if f.FileInfo().IsDir() || !strings.EqualFold(path.Ext(f.Name), ".opf") {
+				continue
+			}
+			if candidate != "" {
+				return "", errors.New("epub container: missing container.xml and multiple OPF packages")
+			}
+			candidate = f.Name
+		}
+		if candidate == "" {
+			return "", errors.New("epub container: missing container.xml and OPF package")
+		}
+		return candidate, nil
+	}
+	data, err := readZip(z, "META-INF/container.xml", 1<<20)
+	if err != nil {
+		return "", err
+	}
+	var container struct {
+		Rootfile struct {
+			Path string `xml:"full-path,attr"`
+		} `xml:"rootfiles>rootfile"`
+	}
+	if err := decodeEPUBXML(data, &container); err != nil {
+		return "", fmt.Errorf("epub container: %w", err)
+	}
+	if container.Rootfile.Path == "" {
+		return "", errors.New("epub container: missing rootfile path")
+	}
+	return container.Rootfile.Path, nil
+}
+
 // Only EPUB metadata uses this tolerance. Binary ciphertext and invalid
 // encodings remain errors; external entities are never fetched by encoding/xml.
 func decodeEPUBXML(data []byte, target any) error {
-	clean, err := epubWithoutComments(data)
+	clean, err := epubCleanXML(data)
 	if err != nil {
 		return err
 	}
@@ -217,8 +253,8 @@ func decodeEPUBXML(data []byte, target any) error {
 	return decoder.Decode(target)
 }
 
-// Skip comments without touching comment-looking text in CDATA or attributes.
-func epubWithoutComments(data []byte) ([]byte, error) {
+// Strip malformed comments and repair attributes, preserving text and CDATA.
+func epubCleanXML(data []byte) ([]byte, error) {
 	var out bytes.Buffer
 	for len(data) > 0 {
 		i := bytes.IndexByte(data, '<')
@@ -264,10 +300,46 @@ func epubWithoutComments(data []byte) ([]byte, error) {
 				break
 			}
 		}
-		out.Write(data[:end])
+		out.Write(epubRepairAttributes(data[:end]))
 		data = data[end:]
 	}
 	return out.Bytes(), nil
+}
+
+// Repair two common conversion defects without interpreting markup in text
+// or CDATA: literal < in attributes, and embedded quotes in the optional OPF
+// sorting hint. Other malformed attribute syntax remains an error.
+func epubRepairAttributes(tag []byte) []byte {
+	var out bytes.Buffer
+	quote := byte(0)
+	fileAs := false
+	for i, c := range tag {
+		if quote == 0 {
+			if c == '\'' || c == '"' {
+				quote = c
+				prefix := strings.TrimSpace(string(tag[:i]))
+				fileAs = strings.HasSuffix(strings.TrimSpace(strings.TrimSuffix(prefix, "=")), "opf:file-as")
+			}
+		} else {
+			if c == '<' {
+				out.WriteString("&lt;")
+				continue
+			}
+			if c == quote {
+				if fileAs && i+1 < len(tag) && !strings.ContainsRune(" \t\r\n/>", rune(tag[i+1])) {
+					if quote == '"' {
+						out.WriteString("&quot;")
+					} else {
+						out.WriteString("&apos;")
+					}
+					continue
+				}
+				quote = 0
+			}
+		}
+		out.WriteByte(c)
+	}
+	return out.Bytes()
 }
 
 func epubEncryptedEntries(z *zip.Reader) map[string]bool {

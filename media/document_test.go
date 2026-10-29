@@ -46,6 +46,8 @@ func TestOfficeFileContainerDetection(t *testing.T) {
 func TestEPUBMetadataCompatibility(t *testing.T) {
 	for _, tc := range []struct{ name, opf, title, author string }{
 		{"bare ampersand and comment", `<package><metadata><title>A & B</title><!-- invalid -- comment --><creator>Writer</creator><description><![CDATA[keep <!--literal--> text]]></description></metadata></package>`, "A & B", "Writer"},
+		{"quotes in sorting hint", `<package><metadata><title opf:file-as="hechushi"jiangnan":qingchao">何处是“江南”</title><creator>杨念群</creator></metadata></package>`, "何处是“江南”", "杨念群"},
+		{"markup in guide attribute", `<package><metadata><title>大数据</title><creator>涂子沛</creator></metadata><guide><reference title="<volum>序言</volum>" href="1.xhtml"/></guide></package>`, "大数据", "涂子沛"},
 		{"html entity", `<package><metadata><title>A&nbsp;B</title></metadata></package>`, "A\u00a0B", ""},
 		{"latin1", "<?xml version=\"1.0\" encoding=\"iso-8859-1\"?><package><metadata><title>Caf\xe9</title></metadata></package>", "Café", ""},
 	} {
@@ -84,6 +86,46 @@ func TestEPUBEncryptedContainer(t *testing.T) {
 	z = epubFixture(t, map[string]string{"META-INF/container.xml": "\x9ewG&\xff"})
 	if err := epub(z, &Meta{}); err == nil {
 		t.Fatal("unexplained binary data must remain an error")
+	}
+}
+
+func TestEPUBMissingContainer(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		files     map[string]string
+		wantError bool
+	}{
+		{"single package", map[string]string{
+			"OPS/content.opf": `<package><metadata><title>Book</title><creator>Author</creator><meta name="cover" content="cover"/></metadata><manifest><item id="cover" href="images/cover.jpg"/></manifest></package>`,
+		}, false},
+		{"no package", map[string]string{"book.html": "<html>Not EPUB</html>"}, true},
+		{"ambiguous packages", map[string]string{"a.opf": `<package/>`, "b.opf": `<package/>`}, true},
+		{"unrelated XML", map[string]string{"content.opf": `<html/>`}, true},
+		{"damaged container", map[string]string{"META-INF/container.xml": "broken", "content.opf": `<package/>`}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var m Meta
+			err := epub(epubFixture(t, tc.files), &m)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("error: %v", err)
+			}
+			if !tc.wantError && (m.Title != "Book" || m.Author != "Author" || m.Poster != "zip:OPS/images/cover.jpg") {
+				t.Fatalf("metadata: %#v", m)
+			}
+		})
+	}
+}
+
+func TestEPUBAttributeRepairScope(t *testing.T) {
+	var v struct {
+		Value string `xml:"value"`
+	}
+	data := []byte(`<root><value><![CDATA[<x title="<raw>" opf:file-as="a"b"/>]]></value></root>`)
+	if err := decodeEPUBXML(data, &v); err != nil || v.Value != `<x title="<raw>" opf:file-as="a"b"/>` {
+		t.Fatalf("CDATA: %q, error: %v", v.Value, err)
+	}
+	if err := decodeEPUBXML([]byte(`<root bad="a"b"><value>Text</value></root>`), &v); err == nil {
+		t.Fatal("unrelated malformed attributes must remain errors")
 	}
 }
 
