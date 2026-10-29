@@ -19,6 +19,7 @@ import (
 
 	"github.com/lsongdev/files-go/config"
 	"github.com/lsongdev/files-go/media"
+	"github.com/lsongdev/files-go/pkg/hls"
 	"github.com/lsongdev/files-go/store"
 )
 
@@ -30,7 +31,7 @@ type Server struct {
 	pipeline *media.Pipeline
 	tmdb     *media.TMDB
 	thumbs   *Thumbs
-	hls      *hls
+	hls      *hls.Manager
 	vaapi    string // render device when hardware transcoding works
 
 	statsMu sync.Mutex
@@ -38,11 +39,15 @@ type Server struct {
 	statsAt time.Time
 }
 
-func New(ctx context.Context, cfg *config.Config, st *store.Store, scanner *store.Scanner, pipeline *media.Pipeline, client *media.TMDB) *Server {
+func New(ctx context.Context, cfg *config.Config, st *store.Store, scanner *store.Scanner, pipeline *media.Pipeline, client *media.TMDB) (*Server, error) {
+	streams, err := hls.New(ctx, hls.Config{CacheDir: filepath.Join(cfg.Data, "cache", "hls"), FFmpeg: cfg.FFmpeg, FFprobe: cfg.FFprobe})
+	if err != nil {
+		return nil, err
+	}
 	return &Server{ctx: ctx, cfg: cfg, store: st, scanner: scanner, pipeline: pipeline, tmdb: client,
 		thumbs: NewThumbs(cfg, st, scanner, client),
-		hls:    newHLS(ctx, filepath.Join(cfg.Data, "cache", "hls")),
-		vaapi:  detectVAAPI(cfg.FFmpeg, cfg.HWAccel, cfg.HWDevice)}
+		hls:    streams,
+		vaapi:  detectVAAPI(cfg.FFmpeg, cfg.HWAccel, cfg.HWDevice)}, nil
 }
 
 // Handler serves the API and wraps everything (including web) in auth.
@@ -61,6 +66,7 @@ func (s *Server) Handler(web http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/files/{id}/backdrop", s.thumb)
 	mux.HandleFunc("GET /api/files/{id}/play", s.play)
 	mux.HandleFunc("GET /api/hls/{key}/{name}", s.segment)
+	mux.HandleFunc("DELETE /api/hls/{key}", s.releasePlayback)
 	mux.HandleFunc("GET /api/files/{id}/subtitles", s.subtitles)
 	mux.HandleFunc("GET /api/files/{id}/subtitles/{track}", s.subtitle)
 	mux.HandleFunc("GET /api/files/{id}/match", s.candidates)

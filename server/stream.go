@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -33,8 +32,6 @@ func (s *Server) ffmpegArgs(f store.File, m media.Meta, transcode bool) (in, out
 		out = append(out, "-map", "0:a:0", "-vn")
 	} else {
 		out = append(out, "-map", "0:v:0", "-map", "0:a:0?")
-		// Keyframes at segment boundaries keep HLS segments even.
-		keyframes := []string{"-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", segmentSeconds)}
 		switch {
 		case !transcode && (m.Video == "h264" || m.Video == "vp9" || m.Video == "av1"):
 			out = append(out, "-c:v", "copy")
@@ -45,14 +42,14 @@ func (s *Server) ffmpegArgs(f store.File, m media.Meta, transcode bool) (in, out
 			// the GPU (scale_vaapi) is broken with ffmpeg 4.4 and current
 			// Intel drivers, and H.264 handles 4K fine.
 			in = append(in, "-vaapi_device", s.vaapi, "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi")
-			out = append(append(out, "-c:v", "h264_vaapi", "-qp", "24"), keyframes...)
+			out = append(out, "-c:v", "h264_vaapi", "-qp", "24")
 		case s.vaapi != "":
 			// Decode in software (old codecs, 10-bit), encode on the GPU.
 			in = append(in, "-vaapi_device", s.vaapi)
-			out = append(append(out, "-vf", "scale=-2:'min(1080,ih)',format=nv12,hwupload", "-c:v", "h264_vaapi", "-qp", "24"), keyframes...)
+			out = append(out, "-vf", "scale=-2:'min(1080,ih)',format=nv12,hwupload", "-c:v", "h264_vaapi", "-qp", "24")
 		default:
-			out = append(append(out, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-				"-vf", "scale=-2:'min(1080,ih)'"), keyframes...)
+			out = append(out, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+				"-vf", "scale=-2:'min(1080,ih)'")
 		}
 	}
 	if !transcode && m.Audio == "aac" {
