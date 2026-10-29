@@ -16,6 +16,7 @@ import (
 
 	"github.com/lsongdev/files-go/config"
 	"github.com/lsongdev/files-go/media"
+	"github.com/lsongdev/files-go/pkg/theporndb"
 	"github.com/lsongdev/files-go/server"
 	"github.com/lsongdev/files-go/store"
 	"github.com/lsongdev/files-go/web"
@@ -23,9 +24,9 @@ import (
 
 func main() {
 	home, _ := os.UserHomeDir()
-	configPath := flag.String("c", filepath.Join(home, ".filesgo", "config.yaml"), "config file")
+	configDir := flag.String("d", filepath.Join(home, ".filesgo"), "directory containing config.yaml")
 	flag.Parse()
-	cfg, err := config.Load(*configPath)
+	cfg, err := config.Load(filepath.Join(*configDir, "config.yaml"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -49,6 +50,14 @@ func main() {
 	if cfg.TMDB.Key != "" {
 		client = media.NewTMDB(cfg.TMDB.Key, cfg.TMDB.Language, st)
 	}
+	var tpdb *theporndb.Client
+	if cfg.ThePornDB.Token != "" {
+		_ = st.CachePrune(ctx, "theporndb:", 30*24*time.Hour)
+		tpdb, err = theporndb.New(theporndb.Options{Token: cfg.ThePornDB.Token, Cache: media.ThePornDBCache{Store: st}})
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 	pdfinfo, _ := exec.LookPath("pdfinfo")
 	resolve := scanner.Abs
 	library := &media.Library{Store: st, TMDB: client, Path: resolve, Hint: func(f store.File) (string, string) {
@@ -63,11 +72,12 @@ func main() {
 			hints[root.ID] = fmt.Sprint(root.Type, root.Types) // maps print sorted
 		}
 	}
-	tag := fmt.Sprintf("tmdb=%t/%s pdf=%t hints=%v", client != nil, cfg.TMDB.Language, pdfinfo != "", hints)
+	tag := fmt.Sprintf("theporndb=%t tmdb=%t/%s pdf=%t hints=%v", tpdb != nil, client != nil, cfg.TMDB.Language, pdfinfo != "", hints)
 	pipeline, err := media.NewPipeline(ctx, st, tag,
 		&media.Probe{Bin: cfg.FFprobe, Path: resolve},
 		library.Videos(),
 		library.Folders(),
+		&media.JAV{Client: tpdb, Hint: library.Hint},
 		media.Photo{Path: resolve, FFprobe: cfg.FFprobe},
 		media.Document{Path: resolve, PDFInfo: pdfinfo},
 		media.App{Path: resolve},

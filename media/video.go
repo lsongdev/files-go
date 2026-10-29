@@ -43,6 +43,9 @@ func (v videos) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 		return nil // not playable, or a sample/trailer next to the real thing
 	}
 	hint, base := v.Hint(*f)
+	if hint == "jav" {
+		return nil
+	}
 	n := ParseName(f.Name)
 	m.Set("Release", strings.Join(nonEmpty(n.Resolution, n.Source, n.Codec), " · "))
 	if !m.Locked {

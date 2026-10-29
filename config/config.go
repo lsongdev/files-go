@@ -21,6 +21,7 @@ type Config struct {
 	HWAccel      string        `yaml:"hwaccel"`        // auto (default), vaapi or none
 	HWDevice     string        `yaml:"hwaccel_device"` // default /dev/dri/renderD128
 	Auth         Auth          `yaml:"auth"`
+	ThePornDB    ThePornDB     `yaml:"theporndb"`
 	TMDB         TMDB          `yaml:"tmdb"`
 	Roots        []Root        `yaml:"roots"`
 }
@@ -28,6 +29,10 @@ type Config struct {
 type Auth struct {
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
+}
+
+type ThePornDB struct {
+	Token string `yaml:"token"`
 }
 
 type TMDB struct {

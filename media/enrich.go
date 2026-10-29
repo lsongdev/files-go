@@ -38,6 +38,7 @@ type Meta struct {
 	Subtitles []Subtitle        `json:"subtitles,omitempty"`
 	Rating    float64           `json:"rating,omitempty"`
 	Genres    []string          `json:"genres,omitempty"`
+	ThePornDB string            `json:"theporndb,omitempty"`
 	TMDB      string            `json:"tmdb,omitempty"` // movie/123, tv/456
 	Locked    bool              `json:"locked,omitempty"`
 	Review    string            `json:"review,omitempty"` // ambiguous or unmatched: worth a manual look
