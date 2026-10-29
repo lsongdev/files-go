@@ -8,7 +8,7 @@ Wants=network-online.target
 User=files
 Group=files
 SupplementaryGroups=render
-ExecStart=/opt/files-go/files-go -d /etc/files-go
+ExecStart=/opt/files-go/files-go -d /data/files-go
 Environment=TMPDIR=/data/files-go/tmp
 Restart=on-failure
 Nice=5
