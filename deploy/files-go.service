@@ -1,13 +1,15 @@
 [Unit]
 Description=files-go file index and media server
 After=network-online.target local-fs.target
+RequiresMountsFor=/data
 Wants=network-online.target
 
 [Service]
 User=files
 Group=files
 SupplementaryGroups=render
-ExecStart=/opt/files-go/files-go -c /etc/files-go/config.yaml
+ExecStart=/opt/files-go/files-go -d /etc/files-go
+Environment=TMPDIR=/data/files-go/tmp
 Restart=on-failure
 Nice=5
 IOSchedulingClass=idle
@@ -15,7 +17,7 @@ IOSchedulingClass=idle
 # (config "data") is writable. Create that directory before starting.
 ProtectSystem=strict
 ReadOnlyPaths=/data
-ReadWritePaths=/var/lib/files-go
+ReadWritePaths=/data/files-go
 PrivateTmp=true
 NoNewPrivileges=true
 

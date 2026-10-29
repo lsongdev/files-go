@@ -75,7 +75,7 @@ web/      Preact UI (embedded)
 
 ```yaml
 listen: ":8088"
-data: /var/lib/files-go       # database and thumbnail cache
+data: /data/files-go          # database, thumbnails, subtitles and HLS cache
 workers: 4                    # concurrent enrichment jobs
 scan_interval: 6h
 hwaccel: auto                 # auto | vaapi | none; checked with a test encode at startup
@@ -83,6 +83,8 @@ hwaccel: auto                 # auto | vaapi | none; checked with a test encode 
 auth:                         # HTTP basic auth; omit to run without auth
   username: me
   password: secret
+theporndb:
+  token: "${THEPORNDB_TOKEN}" # optional; used only for roots/subpaths with type: jav
 tmdb:
   key: "${TMDB_KEY}"          # v3 API key or v4 read token; omit to stay offline
   language: zh-CN
@@ -93,6 +95,9 @@ roots:
     types:                    # media hints for subfolders
       Movies: movies
       TV Shows: tv
+  - name: JAV
+    path: /data/porn/JAV
+    type: jav
   - name: Music
     path: /data/Music
     type: music
@@ -100,17 +105,24 @@ roots:
     path: /data/Documents
 ```
 
+`type: jav` enables ThePornDB identification by exact release code (filename or parent folder),
+with cached metadata and artwork. Similar codes are never accepted automatically.
+
 `type` is a hint for identification. Under `movies`, each folder or loose
 video is looked up as a film; under `tv`, the folders directly below are
 shows, `S01` / `Season 1` folders are seasons, and files are episodes.
 Elsewhere, only release-style names (title, year and a quality tag) are
 looked up, and plain videos stay plain videos.
 
-Run with `files-go -c config.yaml`. `ffmpeg` / `ffprobe` are needed for video
+Run with `files-go -d dir` to load `dir/config.yaml` (default: `~/.filesgo/config.yaml`).
+If `data` is omitted, the configuration directory also stores the database and caches.
+`ffmpeg` / `ffprobe` are needed for video
 and audio; `pdfinfo` / `pdftoppm` (poppler) are optional for PDFs.
 
 See [`deploy/`](deploy) for a systemd unit that additionally enforces
-read-only access to the data volume; it joins the `render` group for VAAPI.
+read-only access to the media volume; it joins the `render` group for VAAPI.
+Create `/data/files-go` and `/data/files-go/tmp` owned by the service user;
+the service writes its index, caches and temporary files on this data volume.
 
 ## API
 
@@ -140,5 +152,5 @@ DELETE /api/files/{id}/match         unlock and re-identify
 
 ```sh
 go test ./...
-go run . -c config.yaml
+go run . -d .
 ```

@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -168,6 +169,31 @@ func (t *Thumbs) Get(ctx context.Context, f store.File, m media.Meta, ref, size 
 }
 
 func (t *Thumbs) render(ctx context.Context, f store.File, m media.Meta, ref, size string) ([]byte, error) {
+	if remote, ok := strings.CutPrefix(ref, "theporndb:"); ok {
+		u, err := url.Parse(remote)
+		if err != nil || u.Scheme != "https" || (u.Host != "thumb.theporndb.net" && u.Host != "cdn.theporndb.net") {
+			return nil, errNoThumb
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, remote, nil)
+		if err != nil {
+			return nil, err
+		}
+		client := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
+		res, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", errRetry, err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("%w: artwork HTTP %d", errRetry, res.StatusCode)
+		}
+		data, err := io.ReadAll(io.LimitReader(res.Body, 10<<20))
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", errRetry, err)
+		}
+		return data, nil
+	}
+
 	if p, ok := strings.CutPrefix(ref, "tmdb:"); ok {
 		if t.tmdb == nil {
 			return nil, errNoThumb

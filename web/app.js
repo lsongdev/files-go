@@ -165,7 +165,7 @@ function Details({ item, onMatch, onRefresh, onConfirm }) {
     m.duration && ['时长', formatDuration(m.duration)], m.width && ['分辨率', `${m.width}×${m.height}`],
     m.video && ['编码', join(m.video, m.audio, m.container)], !m.video && m.audio && ['编码', join(m.audio, m.container)],
     m.genres?.length && ['类型标签', m.genres.join(' / ')],
-    m.subtitles?.length && ['内嵌字幕', m.subtitles.map((x) => x.title || x.lang || x.codec).join(' / ')], m.tmdb && ['TMDB', html`<a href=${`https://www.themoviedb.org/${m.tmdb}`} target="_blank" rel="noreferrer">${m.tmdb}${m.locked ? '（已锁定）' : ''}</a>`],
+    m.subtitles?.length && ['内嵌字幕', m.subtitles.map((x) => x.title || x.lang || x.codec).join(' / ')], m.theporndb && ['ThePornDB', html`<a href=${`https://theporndb.net/${m.theporndb}`} target="_blank" rel="noreferrer">${m.theporndb}</a>`], m.tmdb && ['TMDB', html`<a href=${`https://www.themoviedb.org/${m.tmdb}`} target="_blank" rel="noreferrer">${m.tmdb}${m.locked ? '（已锁定）' : ''}</a>`],
     ...Object.entries(m.info || {}).map(([k, v]) => [INFO_LABEL[k] || k, v]),
     item.error && ['增强错误', item.error],
   ].filter(Boolean);
