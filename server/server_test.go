@@ -52,7 +52,7 @@ func TestAPI(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	api, apiErr := New(ctx, cfg, st, scanner, pipeline, nil)
+	api, apiErr := New(ctx, cfg, st, scanner, pipeline, nil, nil)
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}

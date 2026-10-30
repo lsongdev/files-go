@@ -86,6 +86,7 @@ main { min-width: 0; padding: 0 1.5rem 3rem; overflow-x: clip; } /* the backdrop
 .cover { width: 12rem; flex: none; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); }
 .cover .art, .cover > img, .cover > .glyph { display: grid; place-items: center; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; background: var(--hover); color: var(--muted); }
 .cover.poster > img, .cover.poster > .glyph { aspect-ratio: 2 / 3; }
+.cover.album > img, .cover.album > .glyph { aspect-ratio: 1; }
 .heading { min-width: 0; }
 .heading > small { color: var(--accent); font-weight: 600; }
 .heading h1 { margin: .2rem 0 .4rem; font-size: 1.8rem; line-height: 1.2; overflow-wrap: anywhere; }

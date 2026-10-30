@@ -18,6 +18,7 @@ import (
 type JAV struct {
 	Client *theporndb.Client
 	Hint   func(store.File) (string, string)
+	Store  *store.Store
 }
 
 var javCodePattern = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])([a-z]{2,10})[-_ ]?([0-9]{2,6})(?:[^0-9]|$)`)
@@ -30,66 +31,76 @@ func javCode(name string) string {
 	n, _ := strconv.Atoi(m[2])
 	return fmt.Sprintf("%s-%03d", strings.ToUpper(m[1]), n)
 }
-func (j *JAV) Match(f *store.File) bool {
-	hint, _ := j.Hint(*f)
-	return hint == "jav" && (f.Kind == "video" || f.Dir)
-}
+func (j *JAV) Match(f *store.File) bool { return !f.Dir && f.Kind == "video" }
 func (j *JAV) Enrich(ctx context.Context, f *store.File, m *Meta) error {
-	if m.Locked || (!f.Dir && isExtra(f.Name)) {
+	if f.Dir || isExtra(f.Name) || (m.Match != nil && m.Match.Provider != "theporndb") {
+		return nil
+	}
+	hint := "jav"
+	if j.Hint != nil {
+		hint, _ = j.Hint(*f)
+	}
+	if hint != "jav" && !m.Locked {
 		return nil
 	}
 	code := javCode(strings.TrimSuffix(f.Name, path.Ext(f.Name)))
-	if code == "" && !f.Dir {
+	if code == "" {
 		code = javCode(path.Base(path.Dir(f.Path)))
 	}
-	if code == "" {
+	if code == "" && !m.Locked {
 		return nil
 	}
+	m.Kind, m.Title = "movie", code
 	m.Set("Code", code)
 	if j.Client == nil {
 		return nil
 	}
 	var scene *theporndb.SceneResource
-	page, err := j.Client.SearchJAV(ctx, url.Values{"q": {code}, "per_page": {"50"}})
-	if err != nil {
-		return javError(err)
-	}
-	for _, candidate := range page.Data {
-		sku := ""
-		if candidate.SKU != nil {
-			sku = *candidate.SKU
+	if m.Locked && m.Match != nil {
+		detail, err := j.Client.GetJAV(ctx, m.Match.ID, nil)
+		if err != nil {
+			return javError(err)
 		}
-		if javCode(candidate.Title) != code && javCode(sku) != code {
-			continue
+		scene = &detail.Data
+	} else {
+		page, err := j.Client.SearchJAV(ctx, url.Values{"q": {code}, "per_page": {"50"}})
+		if err != nil {
+			return javError(err)
 		}
-		if scene != nil {
-			m.Review = "ambiguous"
+		for _, candidate := range page.Data {
+			sku := ""
+			if candidate.SKU != nil {
+				sku = *candidate.SKU
+			}
+			if javCode(candidate.Title) != code && javCode(sku) != code {
+				continue
+			}
+			if scene != nil {
+				m.Review = "ambiguous"
+				return nil
+			}
+			copy := candidate
+			scene = &copy
+		}
+		if scene == nil {
+			m.Review = "unmatched"
 			return nil
 		}
-		copy := candidate
-		scene = &copy
-	}
-	if scene != nil {
 		detail, err := j.Client.GetJAV(ctx, scene.ID, nil)
 		if err != nil {
 			return javError(err)
 		}
 		scene = &detail.Data
 	}
-	if scene == nil {
-		m.Review = "unmatched"
-		return nil
-	}
-	m.Kind = "movie"
 	m.Title, m.Summary, m.Year, m.Rating = scene.Title, scene.Description, leadingYear(scene.Date), scene.Rating
-	m.ThePornDB = "jav/" + scene.ID
+	m.setMatch("theporndb", "jav", scene.ID)
 	if m.Duration == 0 && scene.Duration != nil {
 		m.Duration = *scene.Duration
 	}
-	if scene.Poster != nil && *scene.Poster != "" {
+	if scene.Poster != nil && *scene.Poster != "" && (m.Poster == "" || m.Poster == "self") {
 		m.Poster = "theporndb:" + *scene.Poster
 	}
-	if scene.Background.Full != nil && *scene.Background.Full != "" {
+	if scene.Background.Full != nil && *scene.Background.Full != "" && m.Backdrop == "" {
 		m.Backdrop = "theporndb:" + *scene.Background.Full
 	}
 	if scene.Site != nil {
@@ -102,6 +113,9 @@ func (j *JAV) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	m.Set("Performers", strings.Join(performers, ", "))
 	for _, tag := range scene.Tags {
 		m.Genres = append(m.Genres, tag.Name)
+	}
+	if j.Store != nil {
+		return (&Library{Store: j.Store}).artwork(ctx, f.Parent, m)
 	}
 	return nil
 }

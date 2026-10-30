@@ -107,23 +107,23 @@ func TestIdentifyMoviesAndEpisodes(t *testing.T) {
 	if ep.Kind != "episode" || ep.Show != "最后生还者" || ep.Season != 1 || ep.Episode != 3 || ep.Title != "漫长岁月" || ep.Poster != "tmdb:/still.jpg" {
 		t.Errorf("episode = %+v", ep)
 	}
-	if ep := get("TV/The Last of Us (2023)/Season 1/E04.mkv"); ep.Kind != "episode" || ep.Episode != 4 || ep.TMDB != "tv/100" {
+	if ep := get("TV/The Last of Us (2023)/Season 1/E04.mkv"); ep.Kind != "episode" || ep.Episode != 4 || ep.providerID("tmdb") != "tv/100" {
 		t.Errorf("episode-only name = %+v", ep)
 	}
-	if show := get("TV/The Last of Us (2023)"); show.Kind != "show" || show.TMDB != "tv/100" || show.Year != 2023 {
+	if show := get("TV/The Last of Us (2023)"); show.Kind != "show" || show.providerID("tmdb") != "tv/100" || show.Year != 2023 {
 		t.Errorf("show folder = %+v", show)
 	}
 	if season := get("TV/The Last of Us (2023)/Season 1"); season.Kind != "season" || season.Season != 1 {
 		t.Errorf("season folder = %+v", season)
 	}
 	movie := get("Movies/Dune (2021)/Dune.2021.2160p.WEB-DL.mkv")
-	if movie.Kind != "movie" || movie.Title != "沙丘" || movie.Original != "Dune" || movie.TMDB != "movie/200" || movie.Info["Release"] != "2160p · WEB-DL" {
+	if movie.Kind != "movie" || movie.Title != "沙丘" || movie.Original != "Dune" || movie.providerID("tmdb") != "movie/200" || movie.Info["Release"] != "2160p · WEB-DL" {
 		t.Errorf("movie = %+v", movie)
 	}
-	if folder := get("Movies/Dune (2021)"); folder.Kind != "movie" || folder.TMDB != "movie/200" || folder.Poster[:5] != "file:" || folder.Backdrop != "tmdb:/bd.jpg" {
+	if folder := get("Movies/Dune (2021)"); folder.Kind != "movie" || folder.providerID("tmdb") != "movie/200" || folder.Poster[:5] != "file:" || folder.Backdrop != "tmdb:/bd.jpg" {
 		t.Errorf("movie folder (local poster wins) = %+v", folder)
 	}
-	if clip := get("Clips/holiday.mp4"); clip.Kind != "video" || clip.TMDB != "" {
+	if clip := get("Clips/holiday.mp4"); clip.Kind != "video" || clip.providerID("tmdb") != "" {
 		t.Errorf("plain clip = %+v", clip)
 	}
 	// One search per title and language, however many files share it.
@@ -133,7 +133,10 @@ func TestIdentifyMoviesAndEpisodes(t *testing.T) {
 
 	// A manual match survives re-enrichment and overrides the guess.
 	f, _ := st.ByPath(ctx, "r", "Clips/holiday.mp4")
-	f.Meta, _ = json.Marshal(Meta{Locked: true, TMDB: "movie/200"})
+	if err := st.SetMatch(ctx, f, &store.Match{Provider: "tmdb", Type: "movie", ID: "200"}); err != nil {
+		t.Fatal(err)
+	}
+	f, _ = st.Get(ctx, f.ID)
 	if err := pipeline.Rematch(ctx, f); err != nil {
 		t.Fatal(err)
 	}
@@ -208,37 +211,29 @@ func TestDisambiguation(t *testing.T) {
 	library := &Library{Store: st, TMDB: newTMDB(tmdb.Options{Key: "k", Language: "zh-CN", BaseURL: api.URL, Cache: storeCache{st}}),
 		Path: scanner.Abs, Hint: func(f store.File) (string, string) { return cfgRoot.TypeOf(f.Path) }}
 	pipeline, _ := NewPipeline(ctx, st, "test", fakeVideo{}, library.Videos(), library.Folders())
-	// Folders first, as a real run usually gets to them: then episodes reuse
-	// the show's match.
-	for _, p := range []string{"TV/One.Piece", "TV/In.the.Name.of.the.People", "Movies/Before", "Movies/Alien",
-		"TV/One.Piece/OnePiece.ep840.mp4", "TV/In.the.Name.of.the.People/[www.domp4.cc]人民的名义.DVD版.07.HD1080p.mp4"} {
-		f, _ := st.ByPath(ctx, "r", p)
-		if err := pipeline.Rematch(ctx, f); err != nil {
-			t.Fatal(err)
-		}
-	}
+	runPipeline(t, ctx, st, pipeline)
 	get := func(p string) Meta {
 		f, _ := st.ByPath(ctx, "r", p)
 		var m Meta
 		json.Unmarshal(f.Meta, &m)
 		return m
 	}
-	if m := get("TV/One.Piece"); m.TMDB != "tv/37854" || m.Review != "conflict" || m.Locked {
+	if m := get("TV/One.Piece"); m.providerID("tmdb") != "tv/37854" || m.Review != "conflict" || m.Locked {
 		t.Errorf("One Piece: NFO points at the 8-episode remake, local has ep840: %+v", m)
 	}
-	if m := get("TV/One.Piece/OnePiece.ep840.mp4"); m.Kind != "episode" || m.Episode != 840 || m.TMDB != "tv/37854" {
+	if m := get("TV/One.Piece/OnePiece.ep840.mp4"); m.Kind != "episode" || m.Episode != 840 || m.providerID("tmdb") != "tv/37854" {
 		t.Errorf("One Piece episode = %+v", m)
 	}
-	if m := get("TV/In.the.Name.of.the.People"); m.TMDB != "tv/69740" || m.Review != "" {
+	if m := get("TV/In.the.Name.of.the.People"); m.providerID("tmdb") != "tv/69740" || m.Review != "" {
 		t.Errorf("55 local episodes should pick the 55-episode show: %+v", m)
 	}
-	if m := get("TV/In.the.Name.of.the.People/[www.domp4.cc]人民的名义.DVD版.07.HD1080p.mp4"); m.Kind != "episode" || m.Episode != 7 || m.TMDB != "tv/69740" {
+	if m := get("TV/In.the.Name.of.the.People/[www.domp4.cc]人民的名义.DVD版.07.HD1080p.mp4"); m.Kind != "episode" || m.Episode != 7 || m.providerID("tmdb") != "tv/69740" {
 		t.Errorf("number-only episode = %+v", m)
 	}
-	if m := get("Movies/Before"); m.Kind != "" || m.TMDB != "" || m.Review != "" {
+	if m := get("Movies/Before"); m.Kind != "" || m.providerID("tmdb") != "" || m.Review != "" {
 		t.Errorf("a trilogy folder is a collection, not a movie: %+v", m)
 	}
-	if m := get("Movies/Alien"); m.TMDB != "movie/348" || m.Review != "ambiguous" {
+	if m := get("Movies/Alien"); m.providerID("tmdb") != "movie/348" || m.Review != "ambiguous" {
 		t.Errorf("two equally named movies without evidence: %+v", m)
 	}
 }
@@ -286,7 +281,7 @@ func TestMovieSidecarAndNonMovieFolders(t *testing.T) {
 		var m Meta
 		json.Unmarshal(f.Meta, &m)
 		if strings.HasPrefix(p, "Cats") {
-			if m.TMDB != "movie/26598" || m.Year != 1998 || m.Review != "" {
+			if m.providerID("tmdb") != "movie/26598" || m.Year != 1998 || m.Review != "" {
 				t.Fatalf("%s: %#v", p, m)
 			}
 		} else if m.Kind == "movie" || m.Review != "" {
@@ -318,5 +313,25 @@ func TestSplitClipEvidence(t *testing.T) {
 	}
 	if ev.Episodes != 2 || ev.MaxEpisode != 0 {
 		t.Fatalf("split clip evidence = %+v", ev)
+	}
+}
+
+func runPipeline(t *testing.T, ctx context.Context, st *store.Store, pipeline *Pipeline) {
+	t.Helper()
+	run, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { pipeline.Run(run, 4); close(done) }()
+	defer func() { stop(); <-done }()
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		stats, err := st.Stats(ctx, pipeline.Version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stats.Pending == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pipeline did not settle: %+v", stats)
+		}
 	}
 }

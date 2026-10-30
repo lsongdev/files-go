@@ -2,7 +2,6 @@ package media
 
 import (
 	"context"
-	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -13,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/lsongdev/files-go/store"
 	"github.com/lsongdev/tmdb-go"
@@ -26,12 +26,14 @@ type Library struct {
 	TMDB  *TMDB // nil disables online lookups
 	Path  Resolver
 	Hint  func(store.File) (hint, base string)
+	mu    sync.Mutex
+	shows map[string]*showFlight
 }
 
 // Videos returns the enricher for video files; it runs after Probe.
 func (l *Library) Videos() Enricher { return videos{l} }
 
-// Folders returns the enricher for directories: artwork, NFO, shows, movies.
+// Folders aggregates file results and local artwork without catalog requests.
 func (l *Library) Folders() Enricher { return folders{l} }
 
 type videos struct{ *Library }
@@ -43,7 +45,7 @@ func (v videos) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 		return nil // not playable, or a sample/trailer next to the real thing
 	}
 	hint, base := v.Hint(*f)
-	if hint == "jav" {
+	if (hint == "jav" && !m.Locked) || (m.Match != nil && m.Match.Provider != "tmdb") {
 		return nil
 	}
 	n := ParseName(f.Name)
@@ -57,7 +59,25 @@ func (v videos) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 			// sidecar's identifier contradicts the local runtime.
 		}
 	}
-	lockedMovie, lockedShow := strings.HasPrefix(m.TMDB, "movie/"), strings.HasPrefix(m.TMDB, "tv/")
+	// A directory NFO is shared input, consumed by its videos. Directories
+	// themselves never resolve catalog identities.
+	if !m.Locked && !strings.HasPrefix(m.providerID("tmdb"), "tv/") && hint != "tv" {
+		if nfo, err := v.Store.ChildByName(ctx, f.Parent, "movie.nfo"); err == nil && m.Match == nil {
+			if err := (folders{v.Library}).readNFO(nfo, m); err != nil {
+				return err
+			}
+		}
+	}
+	if n.Year == 0 && hint == "movies" && parentPath(f.Path) != base && m.Match == nil && genericMovieName.MatchString(n.Title) {
+		parent := ParseName(path.Base(parentPath(f.Path)))
+		if parent.Title != "" {
+			n.Title, n.Year = parent.Title, parent.Year
+		}
+	}
+	if err := v.artwork(ctx, f.Parent, m); err != nil {
+		return err
+	}
+	lockedMovie, lockedShow := strings.HasPrefix(m.providerID("tmdb"), "movie/"), strings.HasPrefix(m.providerID("tmdb"), "tv/")
 	switch {
 	case !lockedMovie && (lockedShow || hint == "tv" || n.Season > 0 && n.Episode > 0):
 		return v.episode(ctx, f, m, n, hint, base)
@@ -69,7 +89,7 @@ func (v videos) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 		if item == nil && hint != "movies" && !lockedMovie {
 			return nil
 		}
-		m.Kind, m.Title, m.Year = "movie", n.Title, n.Year
+		m.Kind, m.Title, m.Year = "movie", first(m.Title, n.Title), max(m.Year, n.Year)
 		if item != nil {
 			apply(m, item)
 		} else {
@@ -86,9 +106,10 @@ func (v videos) episode(ctx context.Context, f *store.File, m *Meta, n Name, hin
 	}
 	season, episode := n.Season, n.Episode
 	if episode == 0 {
-		if episode, _ = EpisodeNumber(f.Name); episode == 0 && !strings.HasPrefix(m.TMDB, "tv/") {
-			return nil // a loose video in a TV folder, e.g. a trailer
-		}
+		episode, _ = EpisodeNumber(f.Name)
+	}
+	if episode == 0 && !strings.HasPrefix(m.providerID("tmdb"), "tv/") {
+		return nil
 	}
 	var show *store.File
 	for i := len(ancestors) - 1; i >= 0; i-- {
@@ -112,38 +133,51 @@ func (v videos) episode(ctx context.Context, f *store.File, m *Meta, n Name, hin
 		return nil
 	}
 	m.Kind, m.Season, m.Episode, m.Show = "episode", season, episode, title
-	if !m.Locked && show != nil {
-		var shown Meta
-		if json.Unmarshal(show.Meta, &shown) == nil && strings.HasPrefix(shown.TMDB, "tv/") {
-			m.TMDB = shown.TMDB // reuse the show folder's (possibly manual) match
-		}
-	}
+	work := &Meta{Match: m.Match, Locked: m.Locked}
 	var ev evidence
-	if show != nil && !strings.HasPrefix(m.TMDB, "tv/") {
-		if ev, err = v.showEvidence(ctx, *show); err != nil {
+	if show != nil {
+		if !work.Locked {
+			if nfo, e := v.Store.ChildByName(ctx, show.ID, "tvshow.nfo"); e == nil {
+				if err := (folders{v.Library}).readNFO(nfo, work); err != nil {
+					return err
+				}
+				title, year = first(work.Title, title), max(work.Year, year)
+			}
+		}
+		ev, err = v.showEvidence(ctx, *show)
+		if err != nil {
 			return err
 		}
 	}
-	item, err := v.find(ctx, m, "tv", title, year, ev)
+	item, review, err := v.resolveShow(ctx, work, title, year, ev)
 	if err != nil {
 		return err
 	}
+	m.Series = &Series{Title: title, Year: year, Review: review}
 	if item == nil {
-		if show == nil && hint == "tv" {
-			m.Review = "unmatched" // otherwise the show folder carries the flag
-		}
+		m.Review = review
 		return nil
 	}
+	m.Match = &store.Match{Provider: "tmdb", Type: "tv", ID: strconv.Itoa(item.ID)}
+	m.Show = item.Title
+	m.Series = &Series{Title: item.Title, Original: item.Original, Year: item.Year, Summary: item.Overview,
+		Rating: item.Rating, Genres: item.Genres, Review: review}
+	if item.Poster != "" {
+		m.Series.Poster = "tmdb:" + item.Poster
+	}
+	if item.Backdrop != "" {
+		m.Series.Backdrop = "tmdb:" + item.Backdrop
+	}
 	if show != nil {
-		m.Review = "" // ambiguity is reviewed once, on the show folder
+		art := &Meta{Poster: m.Series.Poster, Backdrop: m.Series.Backdrop}
+		if err := v.artwork(ctx, show.ID, art); err != nil {
+			return err
+		}
+		m.Series.Poster, m.Series.Backdrop = art.Poster, art.Backdrop
 	}
-	m.Show, m.TMDB = item.Title, fmt.Sprintf("tv/%d", item.ID)
-	m.Poster, m.Backdrop, m.Genres = "tmdb:"+item.Poster, "tmdb:"+item.Backdrop, item.Genres
-	if item.Poster == "" {
-		m.Poster = ""
-	}
-	if item.Backdrop == "" {
-		m.Backdrop = ""
+	m.Poster, m.Backdrop, m.Genres = m.Series.Poster, m.Series.Backdrop, item.Genres
+	if show == nil {
+		m.Review = review
 	}
 	if episode == 0 {
 		m.Title, m.Summary = item.Title, item.Overview
@@ -171,105 +205,6 @@ var (
 	posterNames   = []string{"poster.jpg", "folder.jpg", "cover.jpg", "poster.png", "folder.png", "cover.png", "front.jpg", "poster.webp"}
 	backdropNames = []string{"fanart.jpg", "backdrop.jpg", "background.jpg", "fanart.png", "backdrop.png"}
 )
-
-func (d folders) Enrich(ctx context.Context, f *store.File, m *Meta) error {
-	if p, err := d.Store.ChildByName(ctx, f.ID, posterNames...); err == nil {
-		m.Poster = fmt.Sprintf("file:%d", p.ID)
-	}
-	if p, err := d.Store.ChildByName(ctx, f.ID, backdropNames...); err == nil {
-		m.Backdrop = fmt.Sprintf("file:%d", p.ID)
-	}
-	hint, base := d.Hint(*f)
-	n := ParseName(f.Name)
-	kind := ""
-	switch {
-	case hint == "tv" && parentPath(f.Path) == base:
-		kind = "tv"
-	case hint == "movies" && parentPath(f.Path) == base:
-		kind = "movie"
-	case hint == "tv":
-		if season, ok := SeasonNumber(f.Name); ok {
-			m.Kind, m.Season = "season", season
-			if m.Poster == "" {
-				m.Poster = d.parentPoster(ctx, *f)
-			}
-		}
-		return nil
-	}
-	var err error
-	if nfo, nfoErr := d.Store.ChildByName(ctx, f.ID, "tvshow.nfo", "movie.nfo"); nfoErr == nil {
-		if err := d.readNFO(nfo, m); err != nil {
-			return err
-		}
-		n.Title, n.Year = first(m.Title, n.Title), max(m.Year, n.Year)
-		kind = map[bool]string{true: "tv", false: "movie"}[strings.EqualFold(nfo.Name, "tvshow.nfo")]
-	}
-	if k, _, ok := strings.Cut(m.TMDB, "/"); ok && m.Locked {
-		kind = k // manually matched
-	}
-	if kind == "" {
-		return nil
-	}
-	var ev evidence
-	if kind == "tv" {
-		ev, err = d.showEvidence(ctx, *f)
-	} else if !m.Locked {
-		var collection bool
-		var main store.File
-		if ev, main, collection, err = d.movieEvidence(ctx, *f); collection {
-			return err // a folder of several films, e.g. a trilogy
-		}
-		if err == nil && main.ID == 0 {
-			return nil
-		} // artwork/subtitle-only folder
-		if err == nil && m.TMDB == "" {
-			parsed := ParseName(main.Name)
-			if parsed.Year > 0 {
-				n.Year = parsed.Year
-				n.Title = parsed.Title
-			}
-			if normalize(f.Name) == normalize(parsed.Title) {
-				n.Title = parsed.Title
-			}
-			if sidecar, sideErr := d.Store.ChildByName(ctx, f.ID, strings.TrimSuffix(main.Name, path.Ext(main.Name))+".nfo"); sideErr == nil {
-				if err := d.readNFO(sidecar, m); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	if err != nil {
-		return err
-	}
-	item, err := d.find(ctx, m, kind, n.Title, n.Year, ev)
-	if err != nil {
-		return err
-	}
-	if item == nil && m.Title == "" {
-		m.Review = "unmatched"
-		return nil
-	}
-	m.Kind = map[string]string{"tv": "show", "movie": "movie"}[kind]
-	m.Title, m.Year = first(m.Title, n.Title), max(m.Year, n.Year)
-	if item != nil {
-		if m.Review == "conflict" {
-			// Local artwork came from the same scraper as the wrong NFO.
-			m.Poster, m.Backdrop = "", ""
-		}
-		apply(m, item)
-	}
-	return nil
-}
-
-func (d folders) parentPoster(ctx context.Context, f store.File) string {
-	parent, err := d.Store.Get(ctx, f.Parent)
-	if err != nil {
-		return ""
-	}
-	var pm Meta
-	_ = json.Unmarshal(parent.Meta, &pm)
-	return pm.Poster
-}
 
 func (d folders) readNFO(nfo store.File, m *Meta) error {
 	name, err := d.Path(nfo)
@@ -313,8 +248,8 @@ func (d folders) readNFO(nfo store.File, m *Meta) error {
 	}
 	if n, _ := strconv.Atoi(strings.TrimSpace(id)); n > 0 && !m.Locked {
 		id = strconv.Itoa(n)
-		kind := map[bool]string{true: "tv", false: "movie"}[strings.EqualFold(nfo.Name, "tvshow.nfo")]
-		m.TMDB = kind + "/" + id // trusted unless the local files disagree
+		kind := map[bool]string{true: "tv", false: "movie"}[doc.XMLName.Local == "tvshow"]
+		m.setMatch("tmdb", kind, id) // trusted unless the local files disagree
 	}
 	return nil
 }
@@ -362,7 +297,7 @@ func (l *Library) find(ctx context.Context, m *Meta, kind, title string, year in
 	if l.TMDB == nil {
 		return nil, nil
 	}
-	if id, ok := strings.CutPrefix(m.TMDB, kind+"/"); ok {
+	if id, ok := strings.CutPrefix(m.providerID("tmdb"), kind+"/"); ok {
 		n, _ := strconv.Atoi(id)
 		item, err := l.TMDB.Details(ctx, kind, n)
 		switch {
@@ -372,10 +307,13 @@ func (l *Library) find(ctx context.Context, m *Meta, kind, title string, year in
 			// An id from an NFO that the local files contradict, e.g. a
 			// scraper that picked the live-action One Piece for the anime.
 			m.Review = "conflict"
+		case m.Locked && tmdb.IsNotFound(err):
+			m.Review = "unmatched"
+			return nil, nil
 		case !tmdb.IsNotFound(err):
 			return nil, transient(err)
 		}
-		m.TMDB, m.Locked = "", false // stale or wrong: search instead
+		m.Match, m.Locked = nil, false // stale or wrong: search instead
 	}
 	if title == "" {
 		return nil, nil
@@ -471,47 +409,12 @@ func (l *Library) showEvidence(ctx context.Context, show store.File) (evidence, 
 	return ev, nil
 }
 
-// movieEvidence uses the main video of a movie folder. A folder of several
-// different films is a collection, not a movie.
-func (l *Library) movieEvidence(ctx context.Context, dir store.File) (ev evidence, main store.File, collection bool, err error) {
-	files, err := l.Store.Children(ctx, dir.ID, 0, 500)
-	if err != nil {
-		return ev, main, false, err
-	}
-	titles := map[string]bool{}
-	identities := map[string]bool{}
-	allIdentified := true
-	for _, f := range files {
-		if f.Kind != "video" || isExtra(f.Name) {
-			continue
-		}
-		parsed := ParseName(f.Name)
-		titles[normalize(moviePart.ReplaceAllString(parsed.Title, ""))] = true
-		var identified Meta
-		if json.Unmarshal(f.Meta, &identified) != nil || !strings.HasPrefix(identified.TMDB, "movie/") || identified.Review != "" || parsed.Year > 0 && identified.Year > 0 && abs(parsed.Year-identified.Year) > 1 {
-			allIdentified = false
-		} else {
-			identities[identified.TMDB] = true
-		}
-		if f.Size > main.Size {
-			main = f
-		}
-	}
-	if len(titles) > 1 && !(allIdentified && len(identities) == 1) {
-		return ev, main, true, nil
-	}
-	var mm Meta
-	if json.Unmarshal(main.Meta, &mm) == nil {
-		ev.Duration = mm.Duration
-	}
-	return ev, main, false, nil
-}
-
 var (
-	splitEpisode    = regexp.MustCompile(`(?i)(?:^|-)\s*([^-]+?)\s*-\s*Part\s+\d+$`)
-	moviePart       = regexp.MustCompile(`(?i)[ ._-]*(?:cd|disc|disk|part|pt)[ ._-]*\d+$`)
-	extra           = regexp.MustCompile(`(?i)(?:^|[ ._()\[\]-])(?:sample|trailer|featurette|preview|花絮|预告)(?:$|[ ._()\[\]-])`)
-	musicVideoLabel = regexp.MustCompile(`(?i)\[mv\]|\(mv\)`)
+	genericMovieName = regexp.MustCompile(`(?i)^(?:movie|video|main|feature|(?:cd|disc|disk|part)[ ._-]*[0-9]+|[0-9]+)$`)
+	splitEpisode     = regexp.MustCompile(`(?i)(?:^|-)\s*([^-]+?)\s*-\s*Part\s+\d+$`)
+	moviePart        = regexp.MustCompile(`(?i)[ ._-]*(?:cd|disc|disk|part|pt)[ ._-]*\d+$`)
+	extra            = regexp.MustCompile(`(?i)(?:^|[ ._()\[\]-])(?:sample|trailer|featurette|preview|花絮|预告)(?:$|[ ._()\[\]-])`)
+	musicVideoLabel  = regexp.MustCompile(`(?i)\[mv\]|\(mv\)`)
 )
 
 func isExtra(name string) bool {
@@ -521,7 +424,7 @@ func isExtra(name string) bool {
 
 func apply(m *Meta, it *Item) {
 	m.Title, m.Year, m.Summary, m.Rating, m.Genres = it.Title, it.Year, it.Overview, it.Rating, it.Genres
-	m.TMDB = fmt.Sprintf("%s/%d", it.Type, it.ID)
+	m.setMatch("tmdb", it.Type, strconv.Itoa(it.ID))
 	if it.Original != it.Title {
 		m.Original = it.Original
 	}

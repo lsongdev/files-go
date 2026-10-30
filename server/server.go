@@ -10,6 +10,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 	"github.com/lsongdev/files-go/config"
 	"github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/pkg/hls"
+	"github.com/lsongdev/files-go/pkg/theporndb"
 	"github.com/lsongdev/files-go/store"
 )
 
@@ -30,6 +32,7 @@ type Server struct {
 	scanner  *store.Scanner
 	pipeline *media.Pipeline
 	tmdb     *media.TMDB
+	tpdb     *theporndb.Client
 	thumbs   *Thumbs
 	hls      *hls.Manager
 	vaapi    string // render device when hardware transcoding works
@@ -39,12 +42,12 @@ type Server struct {
 	statsAt time.Time
 }
 
-func New(ctx context.Context, cfg *config.Config, st *store.Store, scanner *store.Scanner, pipeline *media.Pipeline, client *media.TMDB) (*Server, error) {
+func New(ctx context.Context, cfg *config.Config, st *store.Store, scanner *store.Scanner, pipeline *media.Pipeline, client *media.TMDB, tpdb *theporndb.Client) (*Server, error) {
 	streams, err := hls.New(ctx, hls.Config{CacheDir: filepath.Join(cfg.Data, "cache", "hls"), FFmpeg: cfg.FFmpeg, FFprobe: cfg.FFprobe})
 	if err != nil {
 		return nil, err
 	}
-	return &Server{ctx: ctx, cfg: cfg, store: st, scanner: scanner, pipeline: pipeline, tmdb: client,
+	return &Server{ctx: ctx, cfg: cfg, store: st, scanner: scanner, pipeline: pipeline, tmdb: client, tpdb: tpdb,
 		thumbs: NewThumbs(cfg, st, scanner, client),
 		hls:    streams,
 		vaapi:  detectVAAPI(cfg.FFmpeg, cfg.HWAccel, cfg.HWDevice)}, nil
@@ -101,13 +104,14 @@ func (s *Server) auth(next http.Handler) http.Handler {
 // View is a file as returned by the API.
 type View struct {
 	store.File
-	Thumb bool   `json:"thumb,omitempty"`
-	Play  string `json:"play,omitempty"` // direct or stream
+	Version int64  `json:"version"`
+	Thumb   bool   `json:"thumb,omitempty"`
+	Play    string `json:"play,omitempty"` // direct or stream
 }
 
 func (s *Server) view(f store.File) View {
 	m := meta(f)
-	v := View{File: f, Thumb: s.thumbs.Has(f, m)}
+	v := View{File: f, Version: f.Revision, Thumb: s.thumbs.Has(f, m)}
 	if f.MetaErr != "" && len(f.MetaErr) > 300 {
 		v.MetaErr = f.MetaErr[:300]
 	}
@@ -280,10 +284,21 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, err)
 			return
 		}
+		files, err := s.store.MediaUnder(r.Context(), f)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		for _, child := range files {
+			if err := s.store.Invalidate(r.Context(), child.ID); err != nil {
+				s.fail(w, err)
+				return
+			}
+		}
 		s.pipeline.Wake()
 		f, _ = s.store.Get(r.Context(), f.ID)
 	}
-	if err := s.pipeline.Rematch(r.Context(), f); err != nil {
+	if err := s.pipeline.Rematch(r.Context(), f); err != nil && !errors.Is(err, store.ErrStale) {
 		s.fail(w, err)
 		return
 	}
@@ -333,54 +348,147 @@ func (s *Server) raw(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, f.Name, info.ModTime(), file)
 }
 
+// Candidate exposes a provider-independent selection; artwork is already a URL.
+type Candidate struct {
+	Match    store.Match `json:"match"`
+	Title    string      `json:"title"`
+	Original string      `json:"original,omitempty"`
+	Year     int         `json:"year,omitempty"`
+	Overview string      `json:"overview,omitempty"`
+	Poster   string      `json:"poster,omitempty"`
+}
+
 func (s *Server) candidates(w http.ResponseWriter, r *http.Request) {
 	f, ok := s.lookup(w, r)
 	if !ok {
 		return
 	}
-	if s.tmdb == nil {
-		writeError(w, http.StatusServiceUnavailable, "TMDB is not configured")
-		return
-	}
-	query, kind := r.URL.Query().Get("q"), r.URL.Query().Get("type")
+	q := r.URL.Query()
+	query, provider, kind := q.Get("q"), q.Get("provider"), q.Get("type")
 	m := meta(f)
 	if query == "" {
-		query = first(m.Show, m.Title, media.ParseName(f.Name).Title)
+		query = first(m.Info["Code"], m.Show, m.Title, media.ParseName(f.Name).Title)
 	}
-	if kind != "tv" {
-		kind = "movie"
+	if provider == "" {
+		provider = "tmdb"
+		root, _ := s.scanner.Root(f.Root)
+		hint, _ := root.TypeOf(f.Path)
+		if hint == "jav" {
+			provider = "theporndb"
+		}
+		if m.Match != nil {
+			provider = m.Match.Provider
+		}
 	}
-	items, err := s.tmdb.Search(r.Context(), kind, query, 0)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+	items := []Candidate{}
+	switch provider {
+	case "tmdb":
+		if s.tmdb == nil {
+			writeError(w, http.StatusServiceUnavailable, "TMDB is not configured")
+			return
+		}
+		if kind == "" {
+			kind = "movie"
+			if m.Kind == "episode" || m.Kind == "show" || m.Kind == "season" {
+				kind = "tv"
+			}
+		}
+		if kind != "movie" && kind != "tv" {
+			writeError(w, 400, "invalid TMDB type")
+			return
+		}
+		found, err := s.tmdb.Search(r.Context(), kind, query, 0)
+		if err != nil {
+			writeError(w, 502, err.Error())
+			return
+		}
+		for _, it := range found {
+			poster := ""
+			if it.Poster != "" {
+				poster = "https://image.tmdb.org/t/p/w92" + it.Poster
+			}
+			items = append(items, Candidate{Match: store.Match{Provider: provider, Type: it.Type, ID: strconv.Itoa(it.ID)}, Title: it.Title, Original: it.Original, Year: it.Year, Overview: it.Overview, Poster: poster})
+		}
+	case "theporndb":
+		if s.tpdb == nil {
+			writeError(w, 503, "ThePornDB is not configured")
+			return
+		}
+		if kind != "" && kind != "jav" {
+			writeError(w, 400, "invalid ThePornDB type")
+			return
+		}
+		found, err := s.tpdb.SearchJAV(r.Context(), url.Values{"q": {query}, "per_page": {"50"}})
+		if err != nil {
+			writeError(w, 502, err.Error())
+			return
+		}
+		for _, it := range found.Data {
+			poster := ""
+			if it.Poster != nil {
+				poster = *it.Poster
+			}
+			year, _ := strconv.Atoi(strings.Split(it.Date, "-")[0])
+			items = append(items, Candidate{Match: store.Match{Provider: provider, Type: "jav", ID: it.ID}, Title: it.Title, Year: year, Overview: it.Description, Poster: poster})
+		}
+	default:
+		writeError(w, 400, "invalid catalog provider")
 		return
 	}
-	writeJSON(w, map[string]any{"items": items})
+	scope, err := s.pipeline.MatchScope(r.Context(), f)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"items": items, "scope": map[string]any{"id": scope.ID, "name": scope.Name, "dir": scope.Dir}})
 }
 
-// match locks a file to a TMDB id (PUT {"tmdb":"movie/123"}) or removes
-// the lock (DELETE), then re-enriches it immediately.
+// match persists a shared work's manual choice before scheduling enrichment.
+// Directory selections apply to their files; the directory only aggregates.
 func (s *Server) match(w http.ResponseWriter, r *http.Request) {
 	f, ok := s.lookup(w, r)
 	if !ok {
 		return
 	}
-	m := meta(f)
-	m.Locked, m.TMDB = false, ""
-	if r.Method == http.MethodPut {
-		var body struct{ TMDB string }
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !strings.HasPrefix(body.TMDB, "movie/") && !strings.HasPrefix(body.TMDB, "tv/") {
-			writeError(w, http.StatusBadRequest, `expected {"tmdb": "movie/<id>"} or "tv/<id>"`)
-			return
-		}
-		m.Locked, m.TMDB = true, body.TMDB
-	}
-	f.Meta, _ = json.Marshal(m)
-	if err := s.pipeline.Rematch(r.Context(), f); err != nil {
+	scope, err := s.pipeline.MatchScope(r.Context(), f)
+	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	f, _ = s.store.Get(r.Context(), f.ID)
+	var choice *store.Match
+	if r.Method == http.MethodPut {
+		var body struct {
+			Match store.Match `json:"match"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil || media.ValidateMatch(body.Match) != nil {
+			writeError(w, 400, `expected {"match":{"provider":"tmdb|theporndb","type":"movie|tv|jav","id":"..."}}`)
+			return
+		}
+		if (!f.Dir && f.Kind != "video") || scope.Path == "" || (scope.Dir && meta(scope).Kind != "movie" && meta(scope).Kind != "show" && meta(scope).Kind != "season") {
+			writeError(w, 400, "select a media file or an identified work directory")
+			return
+		}
+		choice = &body.Match
+	}
+	if err := s.store.SetMatch(r.Context(), scope, choice); err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.pipeline.Wake()
+	f, err = s.store.Get(r.Context(), f.ID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if err := s.pipeline.Rematch(r.Context(), f); err != nil && !errors.Is(err, store.ErrStale) {
+		s.fail(w, err)
+		return
+	}
+	f, err = s.store.Get(r.Context(), f.ID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	writeJSON(w, s.view(f))
 }
 

@@ -1,170 +1,105 @@
 # 架构与元数据增强流程
 
-> 状态：**现状说明（as-is）**。基于 2026-10-30 `master` 分支的静态代码阅读；本文不表示这些行为均已通过运行时验证。待改进事项见 [improvements.md](improvements.md)。
+> 状态：现状说明，更新于 2026-10-30。未完成的审计项目及验证边界见 [improvements.md](improvements.md)。
 
 ## 目标和边界
 
-files-go 是面向 NAS 的**只读**文件索引与媒体浏览器。原文件系统是事实来源；SQLite 主要保存可重建的目录索引与派生元数据，HTTP API 和 Preact UI 从索引读取。当前唯一的进程负责扫描、增强和 Web 服务，FFmpeg/FFprobe 等按需作为子进程执行。
+files-go 是面向 NAS 的只读文件索引与媒体浏览器。源媒体只读；同一进程负责扫描、增强和 HTTP 服务，SQLite 保存索引、派生结果、缓存和人工匹配。没有独立任务队列或媒体服务。
 
 ```text
-config.yaml / roots
-       |
-       v
-Scanner: 逐目录读取、分类、比对变化
-       |
-       v
-SQLite files: 文件/目录记录 + meta_ver(待处理状态)
-       |                                   |
-       v                                   v
-Pipeline: workers -> Enrichers          HTTP API -> Web UI
-       |                                   |
-       v                                   +--> /raw 直接访问
-SQLite meta/title/kind/meta_err             +--> /thumb 按需生成缓存
-                                           +--> /play /hls 按需封装/转码
+文件系统事件 / 启动、周期、手动扫描
+                  |
+                  v
+Scanner → files（来源信息、revision、meta_ver）
+                  |
+                  v
+文件增强：Probe → Videos / JAV / Photo / Document / App / Archive
+                  |
+         按 ID + revision 保存
+                  |
+          结果变化使父目录待汇总
+                  v
+目录汇总：共同作品 / Show、Season / Album / 普通目录
+                  |
+          结果变化继续向父级传播
+                  v
+SQLite → HTTP API → Preact UI
+                  |
+        按需封面 / 字幕 / 原生播放 / HLS
 ```
 
-相关实现： [main.go](../main.go)、[store/scan.go](../store/scan.go)、[store/store.go](../store/store.go)、[media/enrich.go](../media/enrich.go)、[server/server.go](../server/server.go)、[web/app.js](../web/app.js)。
+相关实现：[store](../store)、[media](../media)、[server](../server)、[web](../web)。
 
-## 从新增文件到前端显示
+## 发现、排队和保存
 
-1. **发现**：启动后及每次周期扫描，`Scanner.ScanAll` 逐个扫描 Root。访问文件夹时，`Stale` 根据目录修改时间判断是否需要同步当前层。没有文件系统事件订阅，不能保证内容变化立即可见。
-2. **快速分类**：`Classify(name, size)` 仅根据扩展名和少量大小规则给出初始 `files.kind`（如 `video`、`audio`、`image`、`book`、`folder`），不用为初次建索引打开所有文件。
-3. **协调入库**：按 `(root, path)` 唯一标识条目，更新文件名、父目录、大小、mtime 等。新记录 `meta_ver=0`；变更记录重新置零；目录内容变化也使该目录待增强。删除索引对应的已消失文件及其子树。
-4. **排队**：`Pipeline` 从 `files` 表选出 `meta_ver < Pipeline.Version` 的记录。正在查看的条目通过 `Prioritize` 尝试进入 `hot` 优先通道。`inflight` 只抑制当前进程内的重复派发。
-5. **顺序增强**：一个 Worker 取得一个文件快照，创建新的 `Meta`，依次调用每个 `Enricher.Match`；命中才执行 `Enrich`，所有增强器共享 `*store.File` 和 `*Meta`。
-6. **保存**：结果先经 `results` 通道，再按最多 200 条或约 1 秒批量写入 `files` 的 `kind`、`title`、`meta`、`meta_ver`、`meta_err`。`meta` 是 JSON 文本，不是另一张媒体表。
-7. **读取与展示**：`/api/files/{id}`、`/children`、`/search` 从 SQLite 返回 `store.File` / `View`。UI 根据 `meta.kind`、`meta.title`、`meta.info` 等生成不同列表/详情样式。
+1. `Scanner.Run` 注册文件系统监控，将同目录事件合并到两秒静默期后协调；启动、周期扫描和监控错误后的恢复扫描用于兜底。浏览和分页只读索引，不 stat 媒体目录。
+2. Scanner 按扩展名等规则快速分类，按 `(root, path)` 协调新增、更新、删除。无法读取某条目的信息时，放弃该目录的本次协调，不把不完整视图当成删除依据。
+3. 来源变化递增 `revision`，并把 `meta_ver` 置零。NFO、图片或目录成员变更还会使相关范围的视频／音频待处理，确保共享输入重新读取。
+4. Pipeline 读取 `meta_ver < Version` 的行，使用 `inflight` 去重，浏览中的条目可通过优先通道提前处理。
+5. 一个文件内仍按顺序执行小型 `Enricher{Match, Enrich}`，共享 `Meta`；不同文件可并发。
+6. `SaveResults` 在事务中校验 `ID + revision`、条件写入并检查影响行数。过期结果丢弃；同批有效结果仍提交。ID 使用 AUTOINCREMENT，删除并重建不会复用旧任务的 ID。
+7. 只有实际派生输出变化才递增父目录 revision、标记待汇总。目录保存使用相同校验，父级聚合因此可逐层收敛；不会因目录展示变化重新触发子文件 Probe。
 
-当前 `files` 中 `path`、独立的 `title`、`meta_ver` 不直接序列化给 Web API；标题仍通过 `meta.title` 展示。SQLite FTS5 trigram 搜索文件名和独立 `title`，不是任意 `meta.info` 字段。
+`meta_ver` 是算法／配置处理版本，`revision` 是输入修订号，两者职责不同。目录可能先于子文件处理，之后会因子文件结果变化重新汇总；最终一致不依赖任务完成顺序。
 
-## 增强器接口、执行顺序与错误
+## 文件识别与目录汇总
 
-接口非常小：
-
-```go
-type Enricher interface {
-    Match(f *store.File) bool
-    Enrich(ctx context.Context, f *store.File, m *Meta) error
-}
-```
-
-在 `main.go` 中注册的当前顺序为：
-
-1. `Probe`：对视频/音频运行 ffprobe，提取时长、视频/音频编码、音轨、字幕和音频标签，也可能纠正 `f.Kind`。
-2. `Videos`：对视频解析发布名、NFO、目录提示，利用 TMDB、年份、时长等信息识别电影和剧集单集。
-3. `Folders`：对非 Root 的文件夹寻找本地海报、NFO，识别电影目录、电视剧目录和季度目录。
-4. `JAV`：对标记为 `jav` 的位置执行对应作品识别。
-5. `Photo`：解析图片尺寸及 JPEG/TIFF EXIF；无法直接解析的格式可交给 ffprobe。
-6. `Document`：解析 EPUB、MOBI、Office 文件、PDF 等元数据。
-7. `App`：读取部分应用程序/可执行文件信息。
-8. `Archive`：读取受支持压缩包的文件数与总体积。
-
-**不是每个文件都会执行八个处理器。** `Match` 不命中便跳过；视频通常先经 `Probe` 再经 `Videos`；FLAC 通常只经过 `Probe`；EPUB 由 `Document` 处理。尚无独立的 `Music`/专辑聚合增强器。
-
-一个核心区分：
-
-| 字段 | 意义 | 例子 |
+| 场景 | 文件增强 | 目录汇总 |
 | --- | --- | --- |
-| `files.kind` | 文件本身的物理/粗分类（用于播放、下载等） | `video`、`audio`、`image`、`folder` |
-| `meta.kind` | 增强后的语义分类（用于展示） | `movie`、`show`、`season`、`episode`、`photo`、`book` |
+| 电影 | Probe、发布名、本文件 NFO／`movie.nfo`、TMDB | 成员属于同一作品时采用公共信息；不同作品保持普通目录 |
+| JAV | Probe、文件名或父目录番号、ThePornDB 精确匹配 | 使用文件作品信息；目录不查询 ThePornDB |
+| 电视剧 | 视频流程共享 Show 匹配，按季集号获取分集信息 | 季目录汇总单集，Show 目录汇总季度／单集 |
+| 音乐 | Probe 读取标题、Artist、AlbumArtist、Album、年份、曲目／碟号、时长、内嵌封面 | 同专辑及专辑艺术家一致时汇总为 Album；支持 CD／Disc 子目录 |
+| 混合目录 | 每个文件独立处理 | 保留普通目录，不采用任意一个成员的身份 |
 
-同一电影可以是 `files.kind=video`，同时 `meta.kind=movie`。不要把前者直接改成 `movie`，否则现有播放判断可能失效。
+`Folders` 不访问在线目录服务，也不重新解析 NFO。NFO 是视频识别的输入；`poster.jpg`、`folder.jpg`、`cover.jpg`、背景图等本地引用继续由目录读取，优先于自动选择的封面。
 
-错误语义（当前实现）：
+目录只复制公共作品字段：身份、标题、原名、年份、简介、评分、类型、封面和少量作品属性。视频编码、分辨率、字幕、曲目号等留在文件。代表封面按稳定的子项顺序选取；`self` 转换为 `file:<id>`，缩略图服务可从音频内嵌封面或视频帧生成目录封面。引用文件的修订号参与 artwork 版本，封面内容变化会沿聚合结果传播并更新浏览器缓存标识。
 
-- 一般增强错误追加到 `meta_err`；其他匹配的增强器继续执行，已取得的部分结果仍可保存，并将该文件标记为当前增强版本。
-- `ErrTransient` 或上下文取消导致本次处理不保存；后台 Pipeline 使用全局约五分钟暂停，然后再重新尝试。这是当前实现，不是理想的逐任务退避方案。
-- `meta_ver` 标记**处理版本**，不是文件内容的并发修订号；无法保证旧任务结果不会覆盖扫描后的新状态（见改进清单）。
+普通目录也可带媒体文件数、音乐总时长、曲目数、专辑目录数及代表封面。空目录不保留已经消失的自动作品身份。尚无识别结果或不支持的媒体成员会阻止目录过早归为某一已识别作品。
 
-## 示例 1：松散电影文件
+`files.kind` 保持物理分类（`video`、`audio`、`folder` 等），`meta.kind` 表示语义分类（`movie`、`episode`、`show`、`season`、`album` 等），播放判断仍使用前者。
 
-```text
-Videos/Movies/Interstellar.2014.1080p.BluRay.mkv
-```
+## 电视剧共享识别
 
-- Scanner：保存一个初始 `kind=video` 的文件。
-- Probe：例如读取 `duration`、`width`、`height`、`video=h264`、`audio=aac`。
-- Videos：由扩展名和媒体提示进入识别，从文件名解析 `Interstellar`、`2014`、`1080p`、`BluRay`，查询 TMDB；依据标题、年份、流行度、时长等证据评估候选，结果可能是 `meta.kind=movie`。
-- 结果仅存储 TMDB 海报引用（如 `tmdb:/xxx.jpg`），不是把封面原始字节塞到 SQLite。海报 API 在首次访问时生成/缓存内容。
+Show 的匹配由视频增强流程完成，不依赖已经增强的父目录 JSON。共享匹配依据包括目录名、`tvshow.nfo`、本地季集结构及人工选择；同一输入的并发请求合并，成功结果缓存在 SQLite。输入证据或选择变化使用新的缓存标识。
 
-示意结果（ID、时长和海报路径均为例子，非实际查询结果）：
+单集的 `meta.series` 单独保存 Show 标题、年份、简介、评分、类型和海报；单集自身的 `title`、`summary`、`poster` 可保存分集标题、剧情及剧照。目录汇总使用前者，避免把第一集的标题或年份当成整部剧的信息。
+
+## 匹配来源和人工覆盖
+
+有效身份统一表示为：
 
 ```json
-{
-  "kind": "movie",
-  "title": "星际穿越",
-  "original": "Interstellar",
-  "year": 2014,
-  "duration": 10149,
-  "width": 1920,
-  "height": 1080,
-  "video": "h264",
-  "audio": "aac",
-  "tmdb": "movie/123",
-  "poster": "tmdb:/example.jpg",
-  "info": {"Release": "1080p · BluRay"}
-}
+{"provider":"tmdb","type":"movie","id":"123"}
+{"provider":"tmdb","type":"tv","id":"456"}
+{"provider":"theporndb","type":"jav","id":"resource-id"}
 ```
 
-TMDB 未配置或没有可靠候选时，不应推断所有这些字段必然存在；自动识别不确定会标记 `meta.review`（如 `unmatched`、`ambiguous`、`conflict`）。
+结果保存在 `meta.match`；不再输出原来的 `meta.tmdb`／`meta.theporndb`。自动路由由媒体提示决定：`jav` 使用 ThePornDB，电影／电视剧使用 TMDB，不自动跨来源回退。人工选择可明确切换来源。
 
-## 示例 2：带 NFO、海报和字幕的电影文件夹
+人工选择单独写入 SQLite `overrides(root,path,choice)`，不是从自动 JSON 中恢复。目录选择适用于子树，更具体的文件／子目录选择优先。已经共同识别为一部作品的目录，或一部 Show 的单集，其人工操作会定位到共同作品范围；候选接口返回 `scope`，界面显示影响范围。
+
+修改／解除选择与该范围的 revision 递增在同一事务完成。后台重新增强相关文件，目录随后汇总；选择即使网络失败仍已持久化。目录空置时，其自身的人工选择仍可查看、解除，便于文件重新出现后继续使用。
+
+保留策略：同一 Root ID 与路径的删除／重新出现保留选择；移除 Root 配置也保留选择；改名／移动不自动转移选择。schema v1 → v2 在事务内迁移文件、缓存及旧 TMDB 锁定；不支持的 schema 版本直接报错，不静默重建数据库。
+
+匹配 API：
 
 ```text
-Movies/Interstellar (2014)/
-  movie.nfo
-  poster.jpg
-  fanart.jpg
-  Interstellar.mkv
-  Interstellar.zh.srt
+GET    /api/files/{id}/match?provider=tmdb&type=movie|tv&q=...
+GET    /api/files/{id}/match?provider=theporndb&type=jav&q=...
+PUT    /api/files/{id}/match  {"match":{"provider":"...","type":"...","id":"..."}}
+DELETE /api/files/{id}/match
 ```
 
-每一个文件和文件夹都是独立索引行：
+候选包含 `match`、标题、年份、简介及完整封面 URL。SDK 的供应商协议仍留在各自包内；Store 只保存通用身份和覆盖范围。
 
-- 文件夹的 `Folders` 增强器发现 `poster.jpg` / `fanart.jpg`，写入 `poster=file:<文件ID>` 和 `backdrop=file:<文件ID>`。
-- `movie.nfo` 提供本地标题、年份、简介及可能的 TMDB ID；电影目录的主视频可以提供片长证据；本地 NFO ID 和实际证据冲突时会重新评估。
-- `Interstellar.mkv` 有自己的 `Probe` 和 `Videos` 增强结果，不直接与父级共享同一 JSON。
-- 外挂 `.srt` 依然是独立文件。播放时 `server/subtitle.go` 才查找附近字幕并按需转换 WebVTT；不是在扫描时将字幕全文写进文件夹的 `meta`。
+## 错误、播放和当前边界
 
-本地封面引用通常优先于远端 TMDB 封面。`file:<ID>`、`tmdb:<path>`、`zip:<entry>`、`self` 都是内部 artwork 引用，实际图片由 `server/thumb.go` 按需提供。
-
-## 示例 3：电视剧、季度和单集
-
-```text
-TV Shows/The Expanse/
-  tvshow.nfo
-  Season 01/
-    The.Expanse.S01E01.mkv
-    The.Expanse.S01E02.mkv
-```
-
-在 `type: tv` 的配置提示下，系统可以形成不同层级的语义：
-
-| 索引行 | `files.kind` | 典型 `meta.kind` | 主要来源 |
-| --- | --- | --- | --- |
-| `The Expanse/` | `folder` | `show` | 目录名、NFO、TMDB、下层单集证据 |
-| `Season 01/` | `folder` | `season` | 目录名提取季号，可能继承父级海报引用 |
-| `S01E01.mkv` | `video` | `episode` | ffprobe、文件名、祖先目录、TMDB 分集信息 |
-
-单集先从文件名提取季号/集号，再沿祖先查找 Show 文件夹；可使用已经增强的父级 TMDB ID，也可独立查找。由于任务并行，**不保证父目录总是先于子文件增强完成**。父级后来得到更准确匹配时，目前没有完整的依赖传播体系来自动刷新所有子项。
-
-## 示例 4：音乐、照片、电子书
-
-- `Music/Artist/Album/01 - Track.flac`：Scanner 标记 `audio`；`Probe` 读取内嵌 Tag（标题、艺术家、专辑、年份、曲目号等）、时长和音频编码；UI 显示标题及 `艺术家 · 专辑 · 时长`。当前不会独立生成 `artist` / `album` 聚合对象。
-- `Photos/IMG_0001.jpg`：Scanner 标记 `image`；`Photo` 读取图片尺寸、拍摄时间、相机、镜头和可能的 GPS 信息，令 `meta.kind=photo`；缩略图延迟生成。无 EXIF 不是增强失败。
-- `Books/The Little Prince.epub`：Scanner 标记 `book`；`Document` 从 EPUB OPF 读取标题、作者、简介、出版社、语言等；`poster=zip:<entry>` 指向 EPUB 内封面图片。
-
-## 前端如何拼装三行信息与详情
-
-[web/app.js](../web/app.js) 的 `title(item)`、`subtitle(item)`、`Details` 根据 `meta.kind`、`meta.title` 和 `meta.info` 拼装标题、副标题、详情字段；当前**没有持久化的 `line1/line2/line3` 列**。如需更加可配置的三行展示，优先保留结构化元数据，只在展示层派生这些行，不要将翻译好的展示字符串当作唯一事实来源。
-
-文件详情 API 可立即返回原始条目，即使后台仍在增强；界面随后读取到更新的 `meta`，才显示识别标题、简介、海报等信息。`/api/search` 使用 `files_fts` 检索文件名与提取标题，不搜索全部 `meta` 字段。
-
-## 当前边界与后续方向
-
-- 扫描由周期任务和浏览时的目录 mtime 检测驱动，未采用实时文件监控；文件内容原地修改不会必然更新父目录 mtime。
-- `Match + Enrich` 和同一个 `Meta` 已满足当前内部可组合需求；无需引入动态插件、独立任务队列、Redis 或复杂 DAG 引擎。
-- 缺少“文件版本与后台写回”的并发校验、父子元数据失效传播、用户覆盖数据的独立持久化；这些是下一步的正确性改进重点。
-- 元数据增强、海报/字幕缓存和视频转码是不同阶段，不能把查看列表理解为一定已下载封面或转码了整部视频。
-
-具体问题、修复策略、测试及分阶段顺序参见 [improvements.md](improvements.md)。
+- 一般增强错误记录在 `meta_err`，可保留部分结果；临时错误使本次文件保持待处理，按文件退避，其他文件继续执行。
+- 退避次数／时间目前保存在进程内，重启后重新尝试；尚未做持久化退避、按供应商熔断或单文件内各阶段独立保存。
+- 海报、字幕和 HLS 独立按需生成。原生 audio/video 控件负责进度条与 seek；必要时使用 hls.js 加载 HLS。
+- HLS 提供完整 VOD 时间轴，片段按需生成。运行期按来源、纳秒 mtime、大小和输出参数共享时间轴／片段；尚未持久化时间轴。
+- UI 在增强期间刷新当前目录信息和列表，并处理最后一批完成的状态；没有全量文件系统事件推送，不能把后台监控等同于页面实时订阅。
+- Scanner 仍以毫秒 mtime 比较文件；挂载验证、源文件安全打开、资源上界和 NAS 压力测试等尚未全部完成。

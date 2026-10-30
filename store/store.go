@@ -16,13 +16,15 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
-// schemaVersion is bumped on incompatible changes. The index is derived
-// from the filesystem, so an old database is simply rebuilt.
-const schemaVersion = 1
+// ErrStale means a result was discarded because its inputs changed.
+var ErrStale = errors.New("enrichment inputs changed")
+
+// Schema upgrades migrate user choices and never silently rebuild the database.
+const schemaVersion = 2
 
 const schema = `
 CREATE TABLE files (
-	id       INTEGER PRIMARY KEY,
+	id       INTEGER PRIMARY KEY AUTOINCREMENT,
 	root     TEXT    NOT NULL,
 	parent   INTEGER,
 	path     TEXT    NOT NULL,
@@ -35,6 +37,7 @@ CREATE TABLE files (
 	meta     TEXT,
 	meta_ver INTEGER NOT NULL DEFAULT 0,
 	meta_err TEXT,
+	revision INTEGER NOT NULL DEFAULT 1,
 	UNIQUE(root, path)
 );
 CREATE INDEX files_parent ON files(parent, dir DESC, name COLLATE NOCASE);
@@ -49,7 +52,8 @@ CREATE TRIGGER files_ad AFTER DELETE ON files BEGIN
 	INSERT INTO files_fts(files_fts, rowid, name, title) VALUES ('delete', old.id, old.name, old.title);
 END;
 
-CREATE TABLE cache (key TEXT PRIMARY KEY, value BLOB NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value BLOB NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE overrides (root TEXT NOT NULL, path TEXT NOT NULL, choice TEXT NOT NULL, PRIMARY KEY(root, path));
 `
 
 // triggers and indexes are (re)created on every open so fixes apply
@@ -66,19 +70,20 @@ END;
 `
 
 type File struct {
-	ID      int64           `json:"id"`
-	Root    string          `json:"root"`
-	Parent  int64           `json:"parent,omitempty"`
-	Path    string          `json:"-"`
-	Name    string          `json:"name"`
-	Dir     bool            `json:"dir"`
-	Size    int64           `json:"size"` // bytes, or child count for directories
-	MTime   int64           `json:"mtime"`
-	Kind    string          `json:"kind,omitempty"`
-	Title   string          `json:"-"`
-	Meta    json.RawMessage `json:"meta,omitempty"`
-	MetaVer int             `json:"-"`
-	MetaErr string          `json:"error,omitempty"`
+	ID       int64           `json:"id"`
+	Root     string          `json:"root"`
+	Parent   int64           `json:"parent,omitempty"`
+	Path     string          `json:"-"`
+	Name     string          `json:"name"`
+	Dir      bool            `json:"dir"`
+	Size     int64           `json:"size"` // bytes, or child count for directories
+	MTime    int64           `json:"mtime"`
+	Kind     string          `json:"kind,omitempty"`
+	Title    string          `json:"-"`
+	Meta     json.RawMessage `json:"meta,omitempty"`
+	MetaVer  int             `json:"-"`
+	MetaErr  string          `json:"error,omitempty"`
+	Revision int64           `json:"-"`
 }
 
 type Store struct{ db *sql.DB }
@@ -95,7 +100,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	if version != schemaVersion {
-		if err := reset(db); err != nil {
+		if err := migrate(db, version); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("create schema: %w", err)
 		}
@@ -107,33 +112,39 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-func reset(db *sql.DB) error {
+func migrate(db *sql.DB, version int) error {
+	if version != 0 && version != 1 {
+		return fmt.Errorf("unsupported schema version %d (expected at most %d)", version, schemaVersion)
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	rows, err := tx.Query(`SELECT type, name FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'files_fts_%'`)
-	if err != nil {
-		return err
-	}
-	var drops []string
-	for rows.Next() {
-		var kind, name string
-		if err := rows.Scan(&kind, &name); err != nil {
-			rows.Close()
-			return err
-		}
-		drops = append(drops, fmt.Sprintf(`DROP %s IF EXISTS "%s"`, strings.ToUpper(kind), name))
-	}
-	rows.Close()
-	for _, statement := range drops {
-		if _, err := tx.Exec(statement); err != nil {
+	if version == 1 {
+		// Rebuild only the index table to make IDs non-reusable. Copy all rows,
+		// including metadata; cache and manual matches survive this transaction.
+		if _, err := tx.Exec(`DROP TRIGGER IF EXISTS files_ai; DROP TRIGGER IF EXISTS files_ad;
+			DROP TRIGGER IF EXISTS files_au; DROP TABLE files_fts;
+			DROP INDEX IF EXISTS files_parent; DROP INDEX IF EXISTS files_pending;
+			DROP INDEX IF EXISTS files_kind; DROP INDEX IF EXISTS files_review; DROP INDEX IF EXISTS files_error;
+			ALTER TABLE files RENAME TO files_v1;`); err != nil {
 			return err
 		}
 	}
 	if _, err := tx.Exec(schema); err != nil {
 		return err
+	}
+	if version == 1 {
+		if _, err := tx.Exec(`INSERT INTO files(id,root,parent,path,name,dir,size,mtime,kind,title,meta,meta_ver,meta_err)
+			SELECT id,root,parent,path,name,dir,size,mtime,kind,title,meta,0,meta_err FROM files_v1;
+			INSERT INTO overrides(root,path,choice)
+			SELECT root,path,json_object('provider','tmdb','type',substr(json_extract(meta,'$.tmdb'),1,instr(json_extract(meta,'$.tmdb'),'/')-1),
+				'id',substr(json_extract(meta,'$.tmdb'),instr(json_extract(meta,'$.tmdb'),'/')+1))
+			FROM files WHERE json_extract(meta,'$.locked')=1 AND json_extract(meta,'$.tmdb') IS NOT NULL;
+			DROP TABLE files_v1;`); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
 		return err
@@ -143,12 +154,12 @@ func reset(db *sql.DB) error {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-const columns = `id, root, COALESCE(parent, 0), path, name, dir, size, mtime, kind, title, COALESCE(meta, ''), meta_ver, COALESCE(meta_err, '')`
+const columns = `id, root, COALESCE(parent, 0), path, name, dir, size, mtime, kind, title, COALESCE(meta, ''), meta_ver, COALESCE(meta_err, ''), revision`
 
 func scanFile(row interface{ Scan(...any) error }) (File, error) {
 	var f File
 	var meta string
-	err := row.Scan(&f.ID, &f.Root, &f.Parent, &f.Path, &f.Name, &f.Dir, &f.Size, &f.MTime, &f.Kind, &f.Title, &meta, &f.MetaVer, &f.MetaErr)
+	err := row.Scan(&f.ID, &f.Root, &f.Parent, &f.Path, &f.Name, &f.Dir, &f.Size, &f.MTime, &f.Kind, &f.Title, &meta, &f.MetaVer, &f.MetaErr, &f.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return f, ErrNotFound
 	}
@@ -282,41 +293,73 @@ func (s *Store) Pending(ctx context.Context, version int, after Cursor, limit in
 }
 
 type Result struct {
-	ID      int64
-	Kind    string
-	Title   string
-	Meta    []byte // nil keeps no metadata
-	Version int
-	Err     string
+	ID       int64
+	Kind     string
+	Title    string
+	Meta     []byte // nil keeps no metadata
+	Version  int
+	Err      string
+	Revision int64
 }
 
-// SaveResults stores enrichment results in one transaction.
+// SaveResults conditionally stores results and invalidates a parent only when
+// derived output changed. Valid results in a mixed batch are committed even if
+// some were stale; ErrStale reports discarded results without losing good work.
 func (s *Store) SaveResults(ctx context.Context, results []Result) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	statement, err := tx.PrepareContext(ctx, `UPDATE files SET kind=?, title=?, meta=?, meta_ver=?, meta_err=NULLIF(?, '') WHERE id=?`)
-	if err != nil {
-		return err
-	}
-	defer statement.Close()
+	stale := false
 	for _, r := range results {
-		var meta any
-		if r.Meta != nil {
-			meta = string(r.Meta)
+		var parent int64
+		var before, kind, title, failure string
+		err := tx.QueryRowContext(ctx, `SELECT COALESCE(parent,0),COALESCE(meta,''),kind,title,COALESCE(meta_err,'')
+			FROM files WHERE id=? AND revision=?`, r.ID, r.Revision).Scan(&parent, &before, &kind, &title, &failure)
+		if errors.Is(err, sql.ErrNoRows) {
+			stale = true
+			continue
 		}
-		if _, err := statement.ExecContext(ctx, r.Kind, r.Title, meta, r.Version, r.Err, r.ID); err != nil {
+		if err != nil {
 			return err
 		}
+		var data any
+		if r.Meta != nil {
+			data = string(r.Meta)
+		}
+		updated, err := tx.ExecContext(ctx, `UPDATE files SET kind=?,title=?,meta=?,meta_ver=?,meta_err=NULLIF(?,'') WHERE id=? AND revision=?`,
+			r.Kind, r.Title, data, r.Version, r.Err, r.ID, r.Revision)
+		if err != nil {
+			return err
+		}
+		n, err := updated.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			stale = true
+			continue
+		}
+		if parent != 0 && (before != string(r.Meta) || kind != r.Kind || title != r.Title || failure != r.Err) {
+			if _, err := tx.ExecContext(ctx, `UPDATE files SET meta_ver=0,revision=revision+1 WHERE id=?`, parent); err != nil {
+				return err
+			}
+		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if stale {
+		return ErrStale
+	}
+	return nil
 }
 
-// Invalidate marks a row for re-enrichment.
+// Invalidate marks a row pending and prevents an already-running worker from
+// publishing a result based on the old inputs.
 func (s *Store) Invalidate(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE files SET meta_ver=0 WHERE id=?`, id)
+	_, err := s.db.ExecContext(ctx, `UPDATE files SET meta_ver=0,revision=revision+1 WHERE id=?`, id)
 	return err
 }
 

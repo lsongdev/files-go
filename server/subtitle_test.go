@@ -44,7 +44,7 @@ func TestSubtitles(t *testing.T) {
 	scanner.Init(ctx)
 	scanner.Scan(ctx, "r", false)
 	pipeline, _ := media.NewPipeline(ctx, st, "test")
-	api, apiErr := New(ctx, cfg, st, scanner, pipeline, nil)
+	api, apiErr := New(ctx, cfg, st, scanner, pipeline, nil, nil)
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}

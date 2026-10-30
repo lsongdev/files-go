@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -188,7 +189,7 @@ func TestSearchFollowsTitles(t *testing.T) {
 	}
 	movie, _ := st.ByPath(ctx, "r", "Movies/Dune (2021)/Dune.2021.mkv")
 	save := func(title string) {
-		if err := st.SaveResults(ctx, []Result{{ID: movie.ID, Kind: "video", Title: title, Meta: []byte(`{}`), Version: 3}}); err != nil {
+		if err := st.SaveResults(ctx, []Result{{ID: movie.ID, Revision: movie.Revision, Kind: "video", Title: title, Meta: []byte(`{}`), Version: 3}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -244,4 +245,58 @@ func TestInitRemovesUnconfiguredRoots(t *testing.T) {
 	if n := count(t, st); n != 1 {
 		t.Fatalf("recreated root has %d rows", n)
 	}
+}
+
+func TestSharedInputInvalidationStaysWithinWork(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	for _, p := range []string{"Movies/A/a.mkv", "Movies/B/b.mkv", "TV/Show/Season 1/E01.mkv", "TV/Other/E01.mkv"} {
+		write(t, filepath.Join(root, p), "video")
+	}
+	st, err := Open(filepath.Join(t.TempDir(), "files.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	scanner := NewScanner(st, []config.Root{{ID: "r", Path: root, Types: map[string]string{"TV": "tv", "Movies": "movies"}}}, nil, func(name string, _ int64) string {
+		if strings.HasSuffix(name, ".mkv") {
+			return "video"
+		}
+		return "text"
+	})
+	scan := func() {
+		t.Helper()
+		if err := scanner.Scan(ctx, "r", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mark := func() {
+		t.Helper()
+		if _, err := st.db.Exec(`UPDATE files SET meta_ver=7`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(p string, pending bool) {
+		t.Helper()
+		f, err := st.ByPath(ctx, "r", p)
+		if err != nil || (f.MetaVer == 0) != pending {
+			t.Fatalf("%s pending=%t: %+v %v", p, pending, f, err)
+		}
+	}
+	scan()
+	mark()
+	write(t, filepath.Join(root, "note.txt"), "unrelated")
+	scan()
+	check("Movies/A/a.mkv", false)
+	check("TV/Show/Season 1/E01.mkv", false)
+	write(t, filepath.Join(root, "Movies/A/movie.nfo"), "nfo")
+	scan()
+	check("Movies/A/a.mkv", true)
+	check("Movies/B/b.mkv", false)
+	mark()
+	write(t, filepath.Join(root, "TV/Show/Season 1/E02.mkv"), "video")
+	scan()
+	check("TV/Show/Season 1/E01.mkv", true)
+	check("TV/Other/E01.mkv", false)
+	check("Movies/B/b.mkv", false)
 }
