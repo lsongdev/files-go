@@ -1,7 +1,7 @@
 # hls
 
 A context-aware, on-demand HLS VOD backend using `ffprobe` and `ffmpeg`.
-It depends only on the Go standard library and has no knowledge of files-go's
+It uses the small `pkg/source` file/descriptor helpers and has no knowledge of files-go's
 index, metadata models, HTTP routes, authentication, or hardware/codec policy.
 
 `Open` probes the source and creates a complete, immutable VOD timeline. It
@@ -28,7 +28,7 @@ if err != nil {
 defer manager.Close()
 
 playback, err := manager.Open(requestContext, hls.Source{
-    Path: "/media/movie.mkv",
+    File: source.Local("/media/movie.mkv"), // or a rooted File{Key, Open} supplied by the caller
     CopyVideo: true,
     OutputArgs: []string{
         "-map", "0:v:0", "-map", "0:a:0?",
@@ -75,8 +75,8 @@ in the media element's reported duration.
 
 - Independent random capability tokens share a rendition cache. Releasing one
   playback does not invalidate another viewer's token or discard cached media.
-- Cache identity includes the absolute source path, file size, modification
-  time and encoder options. Changed sources cannot generate new fragments
+- Cache identity includes the caller source key, file size, modification
+  time, encoder options, segment policy and executable identities. Changed sources cannot generate new fragments
   under an old timeline.
 - Concurrent requests for one fragment, including its init section, share one
   job. A job is canceled when its last waiting request goes away.
@@ -88,7 +88,16 @@ in the media element's reported duration.
   most 128 tokens are retained; opening another evicts the least recently used.
 - A private temporary cache directory is created inside `CacheDir`. `Close` or
   canceling the manager's context stops jobs, waits for them and removes it.
-  Cache contents are not reused across process restarts.
+  Timeline JSON is reused across restarts; fragments are not. CacheDir is
+  exclusively locked for a manager lifetime; next startup removes abandoned
+  private fragment directories. Timelines have a 32 MiB / 1024-entry budget and
+  30-day idle expiry, checksums and strict validation. Corrupt entries regenerate.
+- Default MaxSegments is 32768 per source; increase Config.MaxSegments for
+  unusually long media. In-memory timeline count follows MaxSessions.
+- Go 1.25+ is required. The caller provides a context-aware opener returning a
+  regular file; subprocesses inherit that descriptor rather than reopen paths.
+  External-tool input currently requires Linux/macOS; Windows does not fall back
+  to unchecked paths.
 
 The HTTP adapter owns routing and authorization, serves playlists and open
 fragment files, and maps `ErrNotFound`, `ErrSourceChanged`, context errors and

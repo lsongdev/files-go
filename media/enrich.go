@@ -110,20 +110,19 @@ type Pipeline struct {
 	wake      chan struct{}
 
 	mu       sync.Mutex
-	inflight map[int64]bool       // sent to a worker and not yet saved
-	retry    map[int64]retryState // transient failures delay only their own file
+	inflight map[int64]bool // sent to a worker and not yet saved
 }
 
 // NewPipeline gets its Version from the store for the code version plus a
 // configuration tag (e.g. whether TMDB is enabled), so changing either
 // re-enriches everything in the background.
 func NewPipeline(ctx context.Context, st *store.Store, tag string, enrichers ...Enricher) (*Pipeline, error) {
-	version, err := st.Version(ctx, "v5:"+tag)
+	version, err := st.Version(ctx, "v6:"+tag)
 	if err != nil {
 		return nil, err
 	}
 	return &Pipeline{Version: version, store: st, enrichers: enrichers,
-		hot: make(chan int64, 512), wake: make(chan struct{}, 1), inflight: map[int64]bool{}, retry: map[int64]retryState{}}, nil
+		hot: make(chan int64, 512), wake: make(chan struct{}, 1), inflight: map[int64]bool{}}, nil
 }
 
 // Prioritize moves files a user is looking at to the front of the queue.
@@ -160,12 +159,12 @@ func (p *Pipeline) Run(ctx context.Context, workers int) {
 			for f := range jobs {
 				result, err := p.Enrich(ctx, f)
 				if err != nil { // transient: leave it pending and back off
+					if ctx.Err() == nil {
+						if saveErr := p.store.Retry(ctx, f, err); saveErr != nil {
+							log.Printf("save retry: %v", saveErr)
+						}
+					}
 					p.mu.Lock()
-					retry := p.retry[f.ID]
-					retry.attempts++
-					retry.revision = f.Revision
-					retry.after = time.Now().Add(min(5*time.Minute, 5*time.Second*time.Duration(1<<min(retry.attempts-1, 6))))
-					p.retry[f.ID] = retry
 					delete(p.inflight, f.ID)
 					p.mu.Unlock()
 					if ctx.Err() == nil {
@@ -192,8 +191,7 @@ func (p *Pipeline) Run(ctx context.Context, workers int) {
 func (p *Pipeline) feed(ctx context.Context, jobs chan<- store.File) {
 	send := func(f store.File) bool {
 		p.mu.Lock()
-		retry := p.retry[f.ID]
-		if retry.revision == f.Revision && time.Now().Before(retry.after) {
+		if f.RetryAfter > time.Now().UnixMilli() {
 			p.mu.Unlock()
 			return true
 		}
@@ -261,7 +259,6 @@ func (p *Pipeline) save(ctx context.Context, results <-chan store.Result) {
 		p.mu.Lock()
 		for _, r := range batch {
 			delete(p.inflight, r.ID)
-			delete(p.retry, r.ID)
 		}
 		p.mu.Unlock()
 		batch = batch[:0]

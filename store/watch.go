@@ -93,7 +93,9 @@ func (s *Scanner) syncChanged(ctx context.Context, changed dirtyDir) (result err
 				return
 			}
 			st.State, st.Error = "idle", ""
-			if errors.Is(result, ErrOffline) {
+			if errors.Is(result, ErrMountChanged) {
+				st.State, st.Error = "mount_changed", result.Error()
+			} else if errors.Is(result, ErrOffline) {
 				st.State = "offline"
 			} else if result != nil {
 				st.State, st.Error = "error", result.Error()
@@ -103,11 +105,16 @@ func (s *Scanner) syncChanged(ctx context.Context, changed dirtyDir) (result err
 	s.scanMu.Lock()
 	defer s.scanMu.Unlock()
 	root, _ := s.Root(changed.root)
+	rootFS, err := s.sourceRoot(ctx, root, false)
+	if err != nil {
+		return err
+	}
+	defer rootFS.Close()
 	rel := changed.path
 	for {
 		dir, err := s.store.ByPath(ctx, root.ID, rel)
 		if err == nil && dir.Dir {
-			err = s.syncNew(ctx, root, dir)
+			err = s.syncNew(ctx, rootFS, root, dir)
 		}
 		if err == nil {
 			return nil

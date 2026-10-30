@@ -43,11 +43,12 @@ type TMDB struct {
 // Root is one indexed directory. Type is a hint for media identification
 // (movies, tv, music, photos, books); Types overrides it for subpaths.
 type Root struct {
-	ID    string            `yaml:"id"`
-	Name  string            `yaml:"name"`
-	Path  string            `yaml:"path"`
-	Type  string            `yaml:"type"`
-	Types map[string]string `yaml:"types"`
+	ID     string            `yaml:"id"`
+	Name   string            `yaml:"name"`
+	Path   string            `yaml:"path"`
+	Marker string            `yaml:"mount_marker"`
+	Type   string            `yaml:"type"`
+	Types  map[string]string `yaml:"types"`
 }
 
 // TypeOf returns the media hint for a root-relative path and the base path
@@ -116,6 +117,9 @@ func Load(path string) (*Config, error) {
 			return nil, err
 		}
 		root.Path = abs
+		if root.Marker != "" && !filepath.IsLocal(root.Marker) {
+			return nil, fmt.Errorf("root %s: mount_marker must be relative", root.ID)
+		}
 		if root.Name == "" {
 			root.Name = filepath.Base(abs)
 		}

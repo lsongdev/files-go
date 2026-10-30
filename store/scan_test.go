@@ -126,13 +126,19 @@ func TestScanEmptyRoot(t *testing.T) {
 			os.RemoveAll(filepath.Join(root, e.Name()))
 		}
 	}
-	// Emptied on the same filesystem as before: a real deletion.
+	// Even on the same device, an empty mount point is ambiguous without a marker.
 	empty()
-	if err := scanner.Scan(ctx, "r", false); err != nil {
-		t.Fatalf("emptied root: %v", err)
+	if err := scanner.Scan(ctx, "r", false); !errors.Is(err, ErrOffline) {
+		t.Fatalf("ambiguous empty root: %v", err)
 	}
-	if n := count(t, st); n != 1 {
-		t.Fatalf("emptied root kept %d rows", n)
+	if count(t, st) != before {
+		t.Fatal("ambiguous root lost its index")
+	}
+	if err := scanner.Scan(ctx, "r", true); err != nil {
+		t.Fatal(err)
+	}
+	if count(t, st) != 1 {
+		t.Fatal("forced empty root did not reconcile")
 	}
 
 	// Empty on another filesystem than last time: an unmounted disk.
@@ -141,12 +147,12 @@ func TestScanEmptyRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	before = count(t, st)
-	st.CachePut(ctx, "root-device:r", []byte("12345"))
+	st.CachePut(ctx, "mount:r", []byte("12345"))
 	empty()
-	if err := scanner.Scan(ctx, "r", false); !errors.Is(err, ErrOffline) {
-		t.Fatalf("scan of unmounted root = %v, want ErrOffline", err)
+	if err := scanner.Scan(ctx, "r", false); !errors.Is(err, ErrMountChanged) {
+		t.Fatalf("scan of unmounted root = %v, want ErrMountChanged", err)
 	}
-	if status := scanner.Status()[0]; status.State != "offline" || count(t, st) != before {
+	if status := scanner.Status()[0]; status.State != "mount_changed" || count(t, st) != before {
 		t.Fatalf("offline scan changed the index or state: %q", status.State)
 	}
 	// The user can confirm that it is really empty.

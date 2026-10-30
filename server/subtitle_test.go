@@ -48,7 +48,7 @@ func TestSubtitles(t *testing.T) {
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}
-	defer api.hls.Close()
+	defer api.Close()
 	srv := httptest.NewServer(api.Handler(http.NotFoundHandler()))
 	defer srv.Close()
 

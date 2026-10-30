@@ -45,7 +45,7 @@ func TestAPI(t *testing.T) {
 	if err := scanner.Scan(ctx, "home", false); err != nil {
 		t.Fatal(err)
 	}
-	pipeline, _ := media.NewPipeline(ctx, st, "test", media.Photo{Path: scanner.Abs})
+	pipeline, _ := media.NewPipeline(ctx, st, "test", media.Photo{Open: scanner.Open})
 	pending, _ := st.Pending(ctx, pipeline.Version, store.Cursor{}, 100)
 	for _, f := range pending {
 		if err := pipeline.Rematch(ctx, f); err != nil {
@@ -56,7 +56,7 @@ func TestAPI(t *testing.T) {
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}
-	defer api.hls.Close()
+	defer api.Close()
 	srv := httptest.NewServer(api.Handler(http.NotFoundHandler()))
 	defer srv.Close()
 

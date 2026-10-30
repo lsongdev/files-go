@@ -1,4 +1,4 @@
-import { html, render, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'https://unpkg.com/htm@3.1.1/preact/standalone.module.js';
+import { html, render, useCallback, useEffect, useLayoutEffect, useRef, useState } from './vendor/htm-preact-3.1.1.mjs';
 
 // Absolute URLs keep fetch working when the page was opened as http://user:pass@host/.
 const request = (url, options) => fetch(new URL(url, location.origin), options);
@@ -169,7 +169,7 @@ function Details({ item, onMatch, onRefresh, onConfirm }) {
     m.genres?.length && ['类型标签', m.genres.join(' / ')],
     m.subtitles?.length && ['内嵌字幕', m.subtitles.map((x) => x.title || x.lang || x.codec).join(' / ')], m.match && [m.match.provider === 'tmdb' ? 'TMDB' : 'ThePornDB', html`<a href=${`${m.match.provider === 'tmdb' ? 'https://www.themoviedb.org' : 'https://theporndb.net'}/${m.match.type}/${m.match.id}`} target="_blank" rel="noreferrer">${m.match.type}/${m.match.id}${m.locked ? '（已锁定）' : ''}</a>`],
     ...Object.entries(m.info || {}).map(([k, v]) => [INFO_LABEL[k] || k, v]),
-    item.error && ['增强错误', item.error],
+    item.error && ['增强错误', item.error], item.retryCount && ['重试次数', item.retryCount], item.retryAfter && ['下次重试', formatDate(item.retryAfter)],
   ].filter(Boolean);
   const canMatch = ['video', 'movie', 'episode', 'show', 'season'].includes(m.kind) || item.kind === 'video' || m.locked;
   return html`<section class="details">
@@ -246,14 +246,14 @@ function MatchDialog({ item, onClose, onDone }) {
 function Status({ status }) {
   if (!status) return null;
   const scanning = status.roots.filter((r) => r.state === 'scanning');
-  const offline = status.roots.filter((r) => r.state === 'offline' || r.state === 'error');
+  const offline = status.roots.filter((r) => r.state === 'offline' || r.state === 'error' || r.state === 'mount_changed');
   const { files, dirs, pending, failed } = status.stats;
   return html`<div class="status">
     <div>${files.toLocaleString()} 个文件 · ${dirs.toLocaleString()} 个文件夹</div>
     ${scanning.map((r) => html`<div class="busy">正在扫描 ${r.name} · ${r.scanned.toLocaleString()}</div>`)}
     ${pending > 0 && html`<div class="busy">正在识别 · 剩余 ${pending.toLocaleString()}</div>`}
     ${failed > 0 && html`<div class="muted">${failed.toLocaleString()} 个文件识别失败</div>`}
-    ${offline.map((r) => html`<div class="warn">${r.name}：${r.state === 'offline' ? '离线' : r.error}</div>`)}
+    ${offline.map((r) => html`<div class="warn">${r.name}：${r.state === 'offline' ? '离线' : r.state === 'mount_changed' ? '挂载发生变化' : r.error}</div>`)}
   </div>`;
 }
 

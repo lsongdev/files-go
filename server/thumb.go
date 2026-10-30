@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -17,10 +18,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rwcarlsen/goexif/exif"
@@ -28,6 +27,8 @@ import (
 
 	"github.com/lsongdev/files-go/config"
 	"github.com/lsongdev/files-go/media"
+	"github.com/lsongdev/files-go/pkg/ffmpeg"
+	"github.com/lsongdev/files-go/pkg/source"
 	"github.com/lsongdev/files-go/store"
 	"github.com/lsongdev/tmdb-go"
 )
@@ -40,24 +41,30 @@ var (
 )
 
 // Thumbs renders thumbnails lazily on first request and caches them on
-// disk. A failed attempt is cached as an empty file so it is not retried.
+// disk. Failures have a bounded negative-cache lifetime.
 type Thumbs struct {
 	dir      string
 	ffmpeg   string
+	ffprobe  string
 	pdftoppm string
 	store    *store.Store
 	scanner  *store.Scanner
 	tmdb     *media.TMDB
 	slots    chan struct{}
 
-	mu       sync.Mutex
-	inflight map[string]*sync.WaitGroup
+	lifetime                         context.Context
+	work                             jobs
+	imageSlots, videoSlots, pdfSlots chan struct{}
 }
 
-func NewThumbs(cfg *config.Config, st *store.Store, scanner *store.Scanner, client *media.TMDB) *Thumbs {
+func NewThumbs(ctx context.Context, cfg *config.Config, st *store.Store, scanner *store.Scanner, client *media.TMDB) *Thumbs {
 	pdftoppm, _ := exec.LookPath("pdftoppm")
-	return &Thumbs{dir: filepath.Join(cfg.Data, "cache"), ffmpeg: cfg.FFmpeg, pdftoppm: pdftoppm, store: st,
-		scanner: scanner, tmdb: client, slots: make(chan struct{}, runtime.NumCPU()), inflight: map[string]*sync.WaitGroup{}}
+	probe := cfg.FFprobe
+	if probe == "" {
+		probe = "ffprobe"
+	}
+	return &Thumbs{dir: filepath.Join(cfg.Data, "cache"), ffmpeg: cfg.FFmpeg, ffprobe: probe, pdftoppm: pdftoppm, store: st,
+		scanner: scanner, tmdb: client, slots: make(chan struct{}, 4), lifetime: ctx, imageSlots: make(chan struct{}, 1), videoSlots: make(chan struct{}, 2), pdfSlots: make(chan struct{}, 1)}
 }
 
 var goImage = map[string]bool{"jpg": true, "jpeg": true, "png": true, "gif": true, "webp": true, "bmp": true, "tif": true, "tiff": true}
@@ -112,58 +119,59 @@ func (t *Thumbs) Get(ctx context.Context, f store.File, m media.Meta, ref, size 
 		}
 		return t.Get(ctx, other, meta(other), "self", size)
 	}
-	sum := sha1.Sum([]byte(fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s\x00%s", f.Root, f.Path, f.MTime, f.Size, ref, size)))
+	sum := sha1.Sum([]byte(fmt.Sprintf("v2:%s\x00%s\x00%d\x00%d\x00%s\x00%s", f.Root, f.Path, f.MTimeNS, f.Size, ref, size)))
 	if p, ok := strings.CutPrefix(ref, "tmdb:"); ok {
 		sum = sha1.Sum([]byte(size + p)) // shared by every file with this artwork
 	}
 	key := hex.EncodeToString(sum[:])
 	name := filepath.Join(t.dir, key[:2], key+".jpg")
-	if info, err := os.Stat(name); err == nil {
-		if info.Size() == 0 {
-			return "", errNoThumb
-		}
+	if info, err := os.Stat(name); err == nil && info.Size() > 0 {
 		return name, nil
 	}
-	// Collapse concurrent requests for the same thumbnail.
-	t.mu.Lock()
-	if wg, ok := t.inflight[key]; ok {
-		t.mu.Unlock()
-		wg.Wait()
-		return t.Get(ctx, f, m, ref, size)
-	}
-	wg := &sync.WaitGroup{}
-	wg.Add(1)
-	t.inflight[key] = wg
-	t.mu.Unlock()
-	defer func() {
-		t.mu.Lock()
-		delete(t.inflight, key)
-		t.mu.Unlock()
-		wg.Done()
-	}()
-
-	select {
-	case t.slots <- struct{}{}:
-		defer func() { <-t.slots }()
-	case <-ctx.Done():
-		return "", ctx.Err()
-	}
-	// Generation continues if the client goes away; the result is cached.
-	genCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-	defer cancel()
-	data, err := t.render(genCtx, f, m, ref, size)
-	if err != nil {
-		log.Printf("thumbnail %s/%s: %v", f.Root, f.Path, err)
-		if errors.Is(err, errRetry) {
-			return "", errNoThumb // do not cache network failures
+	err := t.work.do(ctx, t.lifetime, key, time.Minute, func(ctx context.Context) error {
+		if info, err := os.Stat(name); err == nil && info.Size() > 0 {
+			return nil
 		}
-		data = nil
-	}
-	if err := writeFile(name, data); err != nil {
+		var failure struct{ Until int64 }
+		if b, err := os.ReadFile(name + ".err"); err == nil && json.Unmarshal(b, &failure) == nil && time.Now().UnixMilli() < failure.Until {
+			return errNoThumb
+		}
+		release, err := slot(ctx, t.slots)
+		if err != nil {
+			return err
+		}
+		defer release()
+		data, err := t.render(ctx, f, m, ref, size)
+		if err == nil && len(data) == 0 {
+			err = errNoThumb
+		}
+		if err != nil {
+			log.Printf("thumbnail %s/%s: %v", f.Root, f.Path, err)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			ttl := time.Minute
+			if errors.Is(err, errNoThumb) || errors.Is(err, source.ErrLimit) {
+				ttl = 24 * time.Hour
+			}
+			failure.Until = time.Now().Add(ttl).UnixMilli()
+			b, _ := json.Marshal(failure)
+			if e := source.WriteFile(name+".err", b); e != nil {
+				return e
+			}
+			return errNoThumb
+		}
+		if len(data) == 0 {
+			return errNoThumb
+		}
+		if err := writeFile(name, data); err != nil {
+			return err
+		}
+		os.Remove(name + ".err")
+		return nil
+	})
+	if err != nil {
 		return "", err
-	}
-	if len(data) == 0 {
-		return "", errNoThumb
 	}
 	return name, nil
 }
@@ -187,7 +195,7 @@ func (t *Thumbs) render(ctx context.Context, f store.File, m media.Meta, ref, si
 		if res.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("%w: artwork HTTP %d", errRetry, res.StatusCode)
 		}
-		data, err := io.ReadAll(io.LimitReader(res.Body, 10<<20))
+		data, err := source.ReadAll(res.Body, 10<<20)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", errRetry, err)
 		}
@@ -206,18 +214,27 @@ func (t *Thumbs) render(ctx context.Context, f store.File, m media.Meta, ref, si
 			return nil, fmt.Errorf("%w: %v", errRetry, err)
 		}
 		defer body.Close()
-		return io.ReadAll(io.LimitReader(body, 10<<20))
+		return source.ReadAll(body, 10<<20)
 	}
-	src, err := t.scanner.Abs(f)
+	src, err := t.scanner.Open(ctx, f)
 	if err != nil {
 		return nil, err
 	}
+	defer src.Close()
 	if entry, ok := strings.CutPrefix(ref, "zip:"); ok {
-		z, err := zip.OpenReader(src)
+		release, e := slot(ctx, t.imageSlots)
+		if e != nil {
+			return nil, e
+		}
+		defer release()
+		info, err := src.Stat()
 		if err != nil {
 			return nil, err
 		}
-		defer z.Close()
+		z, err := zip.NewReader(src, info.Size())
+		if err != nil {
+			return nil, err
+		}
 		for _, file := range z.File {
 			if file.Name == entry {
 				r, err := file.Open()
@@ -225,7 +242,7 @@ func (t *Thumbs) render(ctx context.Context, f store.File, m media.Meta, ref, si
 					return nil, err
 				}
 				defer r.Close()
-				data, err := io.ReadAll(io.LimitReader(r, 32<<20))
+				data, err := source.ReadAll(r, 32<<20)
 				if err != nil {
 					return nil, err
 				}
@@ -234,15 +251,44 @@ func (t *Thumbs) render(ctx context.Context, f store.File, m media.Meta, ref, si
 		}
 		return nil, fmt.Errorf("%s not in archive", entry)
 	}
+	if f.Kind == "image" {
+		release, e := slot(ctx, t.imageSlots)
+		if e != nil {
+			return nil, e
+		}
+		defer release()
+		info, e := src.Stat()
+		if e != nil {
+			return nil, e
+		}
+		if info.Size() > 128<<20 {
+			return nil, source.ErrLimit
+		}
+		if !goImage[media.Ext(f.Name)] {
+			data, e := source.Output(ffmpeg.Command(ctx, t.ffprobe, src, "-v", "error", "-max_alloc", "67108864", "-show_entries", "stream=width,height", "-of", "json", source.Input), 1<<20)
+			if e != nil {
+				return nil, e
+			}
+			var probe struct{ Streams []struct{ Width, Height int } }
+			if e := json.Unmarshal(data, &probe); e != nil {
+				return nil, e
+			}
+			if len(probe.Streams) == 0 {
+				return nil, errNoThumb
+			}
+			w, h := probe.Streams[0].Width, probe.Streams[0].Height
+			if w <= 0 || h <= 0 || int64(w) > 32_000_000/int64(h) {
+				return nil, source.ErrLimit
+			}
+		}
+	}
 	switch {
 	case f.Kind == "image" && goImage[media.Ext(f.Name)]:
-		file, err := os.Open(src)
-		if err != nil {
-			return nil, err
-		}
-		defer file.Close()
+		file := src
 		if data, err := scale(file, media.Ext(f.Name)); err == nil {
 			return data, nil
+		} else if errors.Is(err, source.ErrLimit) {
+			return nil, err
 		}
 		return t.frame(ctx, src, -1)
 	case f.Kind == "document":
@@ -259,35 +305,40 @@ func (t *Thumbs) render(ctx context.Context, f store.File, m media.Meta, ref, si
 }
 
 // frame extracts one scaled frame with ffmpeg; at < 0 means the first frame.
-func (t *Thumbs) frame(ctx context.Context, src string, at float64) ([]byte, error) {
-	args := []string{"-v", "error", "-nostdin"}
+func (t *Thumbs) frame(ctx context.Context, src *os.File, at float64) ([]byte, error) {
+	args := []string{"-v", "error", "-nostdin", "-max_alloc", "67108864"}
 	if at >= 0 {
 		args = append(args, "-ss", strconv.FormatFloat(at, 'f', 2, 64))
 	}
-	args = append(args, "-i", src, "-map", "0:v:0", "-frames:v", "1",
+	args = append(args, "-threads", "1", "-i", source.Input, "-map", "0:v:0", "-frames:v", "1",
 		"-vf", fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease", thumbSize, thumbSize),
 		"-f", "image2", "-c:v", "mjpeg", "-q:v", "4", "pipe:1")
-	var out, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, t.ffmpeg, args...)
-	cmd.Stdout, cmd.Stderr = &out, &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("ffmpeg: %v: %s", err, strings.TrimSpace(stderr.String()))
+	release, err := slot(ctx, t.videoSlots)
+	if err != nil {
+		return nil, err
 	}
-	if out.Len() == 0 && at > 0 {
-		return t.frame(ctx, src, 0) // seek past the end of a short clip
+	cmd := ffmpeg.Command(ctx, t.ffmpeg, src, args...)
+	data, err := source.Output(cmd, 5<<20)
+	release()
+	if err != nil {
+		return nil, err
 	}
-	return out.Bytes(), nil
+	if len(data) == 0 && at > 0 {
+		return t.frame(ctx, src, 0)
+	}
+	return data, nil
 }
 
-func (t *Thumbs) pdf(ctx context.Context, src string) ([]byte, error) {
+func (t *Thumbs) pdf(ctx context.Context, src *os.File) ([]byte, error) {
 	if t.pdftoppm == "" {
 		return nil, errNoThumb
 	}
-	out, err := exec.CommandContext(ctx, t.pdftoppm, "-f", "1", "-l", "1", "-singlefile", "-scale-to", strconv.Itoa(thumbSize), "-jpeg", src).Output()
+	release, err := slot(ctx, t.pdfSlots)
 	if err != nil {
-		return nil, fmt.Errorf("pdftoppm: %w", err)
+		return nil, err
 	}
-	return out, nil
+	defer release()
+	return source.Output(source.Command(ctx, t.pdftoppm, src, "-f", "1", "-l", "1", "-singlefile", "-scale-to", strconv.Itoa(thumbSize), "-jpeg", source.Input), 5<<20)
 }
 
 // scale decodes an image, applies EXIF orientation and fits it into the
@@ -297,8 +348,8 @@ func scale(r io.ReadSeeker, ext string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Width*cfg.Height > 120_000_000 {
-		return nil, fmt.Errorf("image too large: %dx%d", cfg.Width, cfg.Height)
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width) > 32_000_000/int64(cfg.Height) {
+		return nil, source.ErrLimit
 	}
 	orientation := 1
 	if ext == "jpg" || ext == "jpeg" || ext == "" {
@@ -370,13 +421,4 @@ func orient(src *image.RGBA, orientation int) image.Image {
 	return dst
 }
 
-func writeFile(name string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
-		return err
-	}
-	tmp := name + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, name)
-}
+func writeFile(name string, data []byte) error { return source.WriteFile(name, data) }

@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/lsongdev/files-go/pkg/source"
 	"github.com/lsongdev/files-go/store"
 	"github.com/richardlehane/mscfb"
 	"golang.org/x/net/html/charset"
@@ -23,7 +23,7 @@ import (
 
 // Document reads titles, authors and covers from e-books and office files.
 type Document struct {
-	Path    Resolver
+	Open    Opener
 	PDFInfo string // optional pdfinfo binary; PDFs get no metadata without it
 }
 
@@ -36,40 +36,36 @@ func (Document) Match(f *store.File) bool {
 }
 
 func (d Document) Enrich(ctx context.Context, f *store.File, m *Meta) error {
-	name, err := d.Path(*f)
+	input, err := d.Open(ctx, *f)
 	if err != nil {
 		return err
 	}
+	defer input.Close()
 	switch ext := Ext(f.Name); ext {
 	case "epub":
 		m.Kind = "book"
-		return withZip(name, func(z *zip.Reader) error { return epub(z, m) })
+		return withZip(input, func(z *zip.Reader) error { return epub(z, m) })
 	case "mobi", "azw", "azw3":
 		m.Kind = "book"
-		return mobi(name, m)
+		return mobi(input, m)
 	case "pdf":
 		m.Kind = "document"
-		return d.pdf(ctx, name, m)
+		return d.pdf(ctx, input, m)
 	default:
 		m.Kind = "document"
-		return officeFile(name, m)
+		return officeFile(input, m)
 	}
 }
 
 // Some libraries contain legacy DOC/XLS data with DOCX/XLSX suffixes.
 // Detect the actual container before selecting a metadata reader.
-func officeFile(name string, m *Meta) error {
-	f, err := os.Open(name)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
+func officeFile(f *os.File, m *Meta) error {
 	var header [8]byte
 	if _, err := io.ReadFull(f, header[:]); err != nil {
 		return err
 	}
 	if !bytes.Equal(header[:], []byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1}) {
-		return withZip(name, func(z *zip.Reader) error { return office(z, m) })
+		return withZip(f, func(z *zip.Reader) error { return office(z, m) })
 	}
 	doc, err := mscfb.New(f)
 	if err != nil {
@@ -107,13 +103,16 @@ func officeFile(name string, m *Meta) error {
 	return nil
 }
 
-func withZip(name string, fn func(*zip.Reader) error) error {
-	z, err := zip.OpenReader(name)
+func withZip(f *os.File, fn func(*zip.Reader) error) error {
+	info, err := f.Stat()
 	if err != nil {
 		return err
 	}
-	defer z.Close()
-	return fn(&z.Reader)
+	z, err := zip.NewReader(f, info.Size())
+	if err != nil {
+		return err
+	}
+	return fn(z)
 }
 
 func readZip(z *zip.Reader, name string, limit int64) ([]byte, error) {
@@ -397,12 +396,7 @@ func office(z *zip.Reader, m *Meta) error {
 }
 
 // mobi reads the PalmDB/MOBI header and its EXTH title and author records.
-func mobi(name string, m *Meta) error {
-	file, err := os.Open(name)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
+func mobi(file *os.File, m *Meta) error {
 	head := make([]byte, 78+8)
 	if _, err := io.ReadFull(file, head); err != nil {
 		return err
@@ -450,13 +444,13 @@ func mobi(name string, m *Meta) error {
 	return nil
 }
 
-func (d Document) pdf(ctx context.Context, name string, m *Meta) error {
+func (d Document) pdf(ctx context.Context, input *os.File, m *Meta) error {
 	if d.PDFInfo == "" {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, d.PDFInfo, "-enc", "UTF-8", name).Output()
+	out, err := source.Output(source.Command(ctx, d.PDFInfo, input, "-enc", "UTF-8", source.Input), 1<<20)
 	if err != nil {
 		return fmt.Errorf("pdfinfo: %w", err)
 	}

@@ -37,7 +37,7 @@ func TestHLS(t *testing.T) {
 	scanner := store.NewScanner(st, cfg.Roots, nil, media.Classify)
 	scanner.Init(ctx)
 	scanner.Scan(ctx, "r", false)
-	pipeline, _ := media.NewPipeline(ctx, st, "test", &media.Probe{Bin: "ffprobe", Path: scanner.Abs})
+	pipeline, _ := media.NewPipeline(ctx, st, "test", &media.Probe{Bin: "ffprobe", Open: scanner.Open})
 	clip, _ := st.ByPath(ctx, "r", "clip.avi")
 	if err := pipeline.Rematch(ctx, clip); err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestHLS(t *testing.T) {
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}
-	defer api.hls.Close()
+	defer api.Close()
 	srv := httptest.NewServer(api.Handler(http.NotFoundHandler()))
 	defer srv.Close()
 

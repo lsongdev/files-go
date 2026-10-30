@@ -19,6 +19,7 @@ import (
 type TMDB struct {
 	client  *tmdb.Client
 	english *tmdb.Client
+	gate    breaker
 	http    *http.Client
 }
 
@@ -66,7 +67,7 @@ func (c storeCache) Set(ctx context.Context, key string, value []byte) {
 }
 
 // Search finds movies ("movie") or shows ("tv").
-func (t *TMDB) Search(ctx context.Context, kind, title string, year int) ([]Item, error) {
+func (t *TMDB) searchLocalized(ctx context.Context, kind, title string, year int) ([]Item, error) {
 	items, err := t.search(ctx, t.client, kind, title, year)
 	if err != nil || strings.HasPrefix(strings.ToLower(t.client.Language()), "en") || t.client.Language() == "" {
 		return items, err
@@ -117,7 +118,7 @@ func (t *TMDB) search(ctx context.Context, c *tmdb.Client, kind, title string, y
 }
 
 // Details fetches a movie or show with genres and runtime.
-func (t *TMDB) Details(ctx context.Context, kind string, id int) (Item, error) {
+func (t *TMDB) details(ctx context.Context, kind string, id int) (Item, error) {
 	if kind == "tv" {
 		s, err := t.client.TV(ctx, id)
 		if err != nil {
@@ -134,7 +135,7 @@ func (t *TMDB) Details(ctx context.Context, kind string, id int) (Item, error) {
 
 // Episode looks an episode up in its season, so a whole season costs one
 // (cached) request.
-func (t *TMDB) Episode(ctx context.Context, show, season, episode int) (*tmdb.Episode, error) {
+func (t *TMDB) episode(ctx context.Context, show, season, episode int) (*tmdb.Episode, error) {
 	s, err := t.client.Season(ctx, show, season)
 	if err != nil {
 		return nil, err
@@ -182,4 +183,26 @@ func genres(list []tmdb.Genre) []string {
 		names = append(names, g.Name)
 	}
 	return names
+}
+
+func (t *TMDB) Search(ctx context.Context, kind, title string, year int) (items []Item, err error) {
+	if err = t.gate.before(ctx); err != nil {
+		return
+	}
+	defer func() { t.gate.after(transient(err)) }()
+	return t.searchLocalized(ctx, kind, title, year)
+}
+func (t *TMDB) Details(ctx context.Context, kind string, id int) (item Item, err error) {
+	if err = t.gate.before(ctx); err != nil {
+		return
+	}
+	defer func() { t.gate.after(transient(err)) }()
+	return t.details(ctx, kind, id)
+}
+func (t *TMDB) Episode(ctx context.Context, show, season, episode int) (item *tmdb.Episode, err error) {
+	if err = t.gate.before(ctx); err != nil {
+		return
+	}
+	defer func() { t.gate.after(transient(err)) }()
+	return t.episode(ctx, show, season, episode)
 }

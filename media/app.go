@@ -21,7 +21,7 @@ import (
 )
 
 // App describes installable packages and executables.
-type App struct{ Path Resolver }
+type App struct{ Open Opener }
 
 func (App) Match(f *store.File) bool {
 	switch Ext(f.Name) {
@@ -32,33 +32,34 @@ func (App) Match(f *store.File) bool {
 }
 
 func (a App) Enrich(ctx context.Context, f *store.File, m *Meta) error {
-	name, err := a.Path(*f)
+	input, err := a.Open(ctx, *f)
 	if err != nil {
 		return err
 	}
+	defer input.Close()
 	m.Kind = "app"
 	switch Ext(f.Name) {
 	case "apk":
-		return withZip(name, func(z *zip.Reader) error { return apk(z, m) })
+		return withZip(input, func(z *zip.Reader) error { return apk(z, m) })
 	case "exe", "dll":
-		return portable(name, m)
+		return portable(input, m)
 	case "msi":
 		m.Set("Type", "Windows Installer")
 		return nil
 	}
-	if file, err := elf.Open(name); err == nil {
+	if file, err := elf.NewFile(input); err == nil {
 		defer file.Close()
 		m.Set("Format", fmt.Sprintf("ELF %s %s", strings.TrimPrefix(file.Class.String(), "ELFCLASS"), strings.TrimPrefix(file.Type.String(), "ET_")))
 		m.Set("Architecture", strings.TrimPrefix(file.Machine.String(), "EM_"))
 		return nil
 	}
-	if file, err := macho.Open(name); err == nil {
+	if file, err := macho.NewFile(input); err == nil {
 		defer file.Close()
 		m.Set("Format", "Mach-O "+file.Type.String())
 		m.Set("Architecture", file.Cpu.String())
 		return nil
 	}
-	if file, err := macho.OpenFat(name); err == nil {
+	if file, err := macho.NewFatFile(input); err == nil {
 		defer file.Close()
 		var arches []string
 		for _, arch := range file.Arches {
@@ -72,10 +73,10 @@ func (a App) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 
 var peVersionKeys = []string{"ProductName", "FileDescription", "CompanyName", "ProductVersion", "FileVersion", "LegalCopyright"}
 
-func portable(name string, m *Meta) error {
-	file, err := pe.Open(name)
+func portable(input *os.File, m *Meta) error {
+	file, err := pe.NewFile(input)
 	if err != nil {
-		if legacyErr := legacyWindows(name, m); legacyErr == nil {
+		if legacyErr := legacyWindows(input, m); legacyErr == nil {
 			return nil
 		}
 		return fmt.Errorf("not a PE file: %w", err)
@@ -138,12 +139,8 @@ func portable(name string, m *Meta) error {
 	return nil
 }
 
-func legacyWindows(name string, m *Meta) error {
-	f, err := os.Open(name)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
+func legacyWindows(f *os.File, m *Meta) error {
+	f.Seek(0, 0)
 	var h [64]byte
 	if _, err := io.ReadFull(f, h[:]); err != nil {
 		return err

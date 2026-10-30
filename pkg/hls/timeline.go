@@ -5,8 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/lsongdev/files-go/pkg/ffmpeg"
+	"github.com/lsongdev/files-go/pkg/source"
 	"math"
-	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -20,7 +21,12 @@ type segment struct {
 // decode or encode media. Copy boundaries follow the source's keyframes;
 // re-encoded media can start at any boundary.
 func (m *Manager) timeline(ctx context.Context, src Source) ([]segment, error) {
-	data, err := exec.CommandContext(ctx, m.cfg.FFprobe, "-v", "error", "-show_entries", "format=duration,start_time", "-of", "json", src.Path).Output()
+	input, err := src.open(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer input.Close()
+	data, err := source.Output(ffmpeg.Command(ctx, m.cfg.FFprobe, input, "-v", "error", "-show_entries", "format=duration,start_time", "-of", "json", source.Input), 1<<20)
 	if err != nil {
 		return nil, fmt.Errorf("probe duration: %w", err)
 	}
@@ -37,13 +43,16 @@ func (m *Manager) timeline(ctx context.Context, src Source) ([]segment, error) {
 	if !finite(duration) || duration <= 0 {
 		return nil, fmt.Errorf("media has no finite positive duration")
 	}
+	if duration/m.cfg.SegmentDuration.Seconds() > float64(m.cfg.MaxSegments) {
+		return nil, fmt.Errorf("timeline exceeds %d segment limit", m.cfg.MaxSegments)
+	}
 	start, _ := strconv.ParseFloat(info.Format.Start, 64)
 	if !finite(start) {
 		start = 0
 	}
 	boundaries := []segment{{}}
 	if src.CopyVideo {
-		cmd := exec.CommandContext(ctx, m.cfg.FFprobe, "-v", "error", "-select_streams", "v:0", "-show_packets", "-show_entries", "packet=pts_time,flags", "-of", "compact=p=0", src.Path)
+		cmd := ffmpeg.Command(ctx, m.cfg.FFprobe, input, "-v", "error", "-select_streams", "v:0", "-show_packets", "-show_entries", "packet=pts_time,flags", "-of", "compact=p=0", source.Input)
 		pipe, err := cmd.StdoutPipe()
 		if err != nil {
 			return nil, err
@@ -79,6 +88,11 @@ func (m *Manager) timeline(ctx context.Context, src Source) ([]segment, error) {
 			last := &boundaries[len(boundaries)-1]
 			if strings.Contains(flags, "K") && t >= last.start+m.cfg.SegmentDuration.Seconds() && t < duration {
 				last.duration, last.frames = t-last.start, frames-last.frames
+				if len(boundaries) >= m.cfg.MaxSegments {
+					cmd.Process.Kill()
+					cmd.Wait()
+					return nil, fmt.Errorf("timeline segment limit exceeded")
+				}
 				boundaries = append(boundaries, segment{start: t, frames: frames})
 			}
 			frames++
@@ -98,6 +112,9 @@ func (m *Manager) timeline(ctx context.Context, src Source) ([]segment, error) {
 		last.frames = frames - last.frames
 	} else {
 		for at := m.cfg.SegmentDuration.Seconds(); at < duration; at += m.cfg.SegmentDuration.Seconds() {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			boundaries[len(boundaries)-1].duration = at - boundaries[len(boundaries)-1].start
 			boundaries = append(boundaries, segment{start: at})
 		}

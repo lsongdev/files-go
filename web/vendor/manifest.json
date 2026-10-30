@@ -1,0 +1,24 @@
+{
+  "htm-preact-3.1.1.mjs": {
+    "url": "https://unpkg.com/htm@3.1.1/preact/standalone.module.js",
+    "sha256": "7e06cf4b150d94d93aba6430b0953b9bc59d8f70aab3fcb099d8ea20f1989d88",
+    "modifications": "Removed sourceMappingURL and added this notice; runtime code unchanged."
+  },
+  "hls-1.6.13.mjs": {
+    "url": "https://unpkg.com/hls.js@1.6.13/dist/hls.mjs",
+    "sha256": "a70af1b55a921dc2a7409f6221f878078e4ad660535a58ab52689043ca165e4b",
+    "modifications": "Removed sourceMappingURL and added this notice; runtime code unchanged."
+  },
+  "htm.LICENSE": {
+    "url": "https://unpkg.com/htm@3.1.1/LICENSE",
+    "sha256": "740725f7252e750af735d0028cc534970772f513331e9f68150fede8fb3ce00f"
+  },
+  "preact.LICENSE": {
+    "url": "https://unpkg.com/preact@10.11.0/LICENSE",
+    "sha256": "1fe6958409c8c257a70c587a18b6f7f412b179b456630790d30b2ec9a8e4b7d4"
+  },
+  "hls.LICENSE": {
+    "url": "https://unpkg.com/hls.js@1.6.13/LICENSE",
+    "sha256": "ca8773cf798c7ed997d4dd7c8e23c348699f8d5b7462636694cc14de6cda12db"
+  }
+}

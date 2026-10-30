@@ -86,3 +86,35 @@ func TestUnknownSchemaIsNotRebuilt(t *testing.T) {
 		t.Fatalf("future database modified: %d %v", count, err)
 	}
 }
+
+func TestV2MigrationAddsSourcePrecisionAndRetryWithoutLosingChoices(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "v2.db")
+	db, e := sql.Open("sqlite", name)
+	if e != nil {
+		t.Fatal(e)
+	}
+	old := schema
+	for _, line := range []string{"\tmtime_ns INTEGER NOT NULL DEFAULT 0,\n", "\tretry_count INTEGER NOT NULL DEFAULT 0,\n", "\tretry_after INTEGER NOT NULL DEFAULT 0,\n"} {
+		old = strings.ReplaceAll(old, line, "")
+	}
+	if _, e := db.Exec(old); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := db.Exec(`INSERT INTO files(root,path,name,mtime) VALUES('r','a','a',1234);INSERT INTO overrides VALUES('r','a','{"provider":"theporndb","type":"jav","id":"abc"}');PRAGMA user_version=2`); e != nil {
+		t.Fatal(e)
+	}
+	db.Close()
+	st, e := Open(name)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer st.Close()
+	f, e := st.ByPath(context.Background(), "r", "a")
+	if e != nil || f.MTimeNS != 1234000000 || f.RetryAfter != 0 {
+		t.Fatalf("v2 migration: %+v %v", f, e)
+	}
+	m, e := st.Match(context.Background(), f)
+	if e != nil || m == nil || m.ID != "abc" {
+		t.Fatalf("choice lost: %+v %v", m, e)
+	}
+}

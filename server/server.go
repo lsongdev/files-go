@@ -11,7 +11,6 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -27,6 +26,7 @@ import (
 
 type Server struct {
 	ctx      context.Context
+	cancel   context.CancelFunc
 	cfg      *config.Config
 	store    *store.Store
 	scanner  *store.Scanner
@@ -37,18 +37,22 @@ type Server struct {
 	hls      *hls.Manager
 	vaapi    string // render device when hardware transcoding works
 
-	statsMu sync.Mutex
-	stats   store.Stats
-	statsAt time.Time
+	statsMu       sync.Mutex
+	stats         store.Stats
+	statsAt       time.Time
+	subtitleJobs  jobs
+	subtitleSlots chan struct{}
 }
 
 func New(ctx context.Context, cfg *config.Config, st *store.Store, scanner *store.Scanner, pipeline *media.Pipeline, client *media.TMDB, tpdb *theporndb.Client) (*Server, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	streams, err := hls.New(ctx, hls.Config{CacheDir: filepath.Join(cfg.Data, "cache", "hls"), FFmpeg: cfg.FFmpeg, FFprobe: cfg.FFprobe})
 	if err != nil {
+		cancel()
 		return nil, err
 	}
-	return &Server{ctx: ctx, cfg: cfg, store: st, scanner: scanner, pipeline: pipeline, tmdb: client, tpdb: tpdb,
-		thumbs: NewThumbs(cfg, st, scanner, client),
+	return &Server{cancel: cancel, ctx: ctx, cfg: cfg, store: st, scanner: scanner, pipeline: pipeline, tmdb: client, tpdb: tpdb, subtitleSlots: make(chan struct{}, 2),
+		thumbs: NewThumbs(ctx, cfg, st, scanner, client),
 		hls:    streams,
 		vaapi:  detectVAAPI(cfg.FFmpeg, cfg.HWAccel, cfg.HWDevice)}, nil
 }
@@ -298,11 +302,25 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 		s.pipeline.Wake()
 		f, _ = s.store.Get(r.Context(), f.ID)
 	}
+	if err := s.store.Invalidate(r.Context(), f.ID); err != nil {
+		s.fail(w, err)
+		return
+	}
+	fresh, err := s.store.Get(r.Context(), f.ID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	f = fresh
 	if err := s.pipeline.Rematch(r.Context(), f); err != nil && !errors.Is(err, store.ErrStale) {
 		s.fail(w, err)
 		return
 	}
-	f, _ = s.store.Get(r.Context(), f.ID)
+	f, err = s.store.Get(r.Context(), f.ID)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
 	writeJSON(w, s.view(f))
 }
 
@@ -315,14 +333,9 @@ func (s *Server) raw(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "not a file")
 		return
 	}
-	name, err := s.scanner.Abs(f)
+	file, err := s.scanner.Open(r.Context(), f)
 	if err != nil {
 		s.fail(w, err)
-		return
-	}
-	file, err := os.Open(name)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "file is unavailable")
 		return
 	}
 	defer file.Close()
@@ -515,4 +528,12 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+// Close stops and joins shared media jobs before the index is closed.
+func (s *Server) Close() error {
+	s.cancel()
+	s.subtitleJobs.close()
+	s.thumbs.work.close()
+	return s.hls.Close()
 }

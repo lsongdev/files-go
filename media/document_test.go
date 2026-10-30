@@ -15,7 +15,7 @@ func TestOfficeFileContainerDetection(t *testing.T) {
 		if err := os.WriteFile(name, data, 0600); err != nil {
 			t.Fatal(err)
 		}
-		if err := officeFile(name, &Meta{}); err == nil {
+		if err := officeFile(openFixture(t, name), &Meta{}); err == nil {
 			t.Fatal("empty or truncated container accepted")
 		}
 	}
@@ -35,7 +35,7 @@ func TestOfficeFileContainerDetection(t *testing.T) {
 		t.Fatal(err)
 	}
 	var m Meta
-	if err = officeFile(name, &m); err != nil {
+	if err = officeFile(openFixture(t, name), &m); err != nil {
 		t.Fatal(err)
 	}
 	if m.Title != "Workbook" || m.Author != "Author" {

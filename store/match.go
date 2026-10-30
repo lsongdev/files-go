@@ -72,7 +72,7 @@ func (s *Store) SetMatch(ctx context.Context, scope File, m *Match) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE files SET meta_ver=0,revision=revision+1 WHERE root=?
+	_, err = tx.ExecContext(ctx, `UPDATE files SET meta_ver=0,revision=revision+1,retry_count=0,retry_after=0,meta_err=NULL WHERE root=?
 		AND (path=? OR ?='' OR (path>? AND path<?))`, scope.Root, scope.Path, scope.Path, scope.Path+"/", scope.Path+"0")
 	if err != nil {
 		return err

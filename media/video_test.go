@@ -78,7 +78,7 @@ func TestIdentifyMoviesAndEpisodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := newTMDB(tmdb.Options{Key: "key", Language: "zh-CN", BaseURL: api.URL, Cache: storeCache{st}})
-	library := &Library{Store: st, TMDB: client, Path: scanner.Abs, Hint: func(f store.File) (string, string) { return cfgRoot.TypeOf(f.Path) }}
+	library := &Library{Store: st, TMDB: client, Open: scanner.Open, Hint: func(f store.File) (string, string) { return cfgRoot.TypeOf(f.Path) }}
 	pipeline, _ := NewPipeline(ctx, st, "test", fakeVideo{}, library.Videos(), library.Folders())
 	run, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -209,7 +209,7 @@ func TestDisambiguation(t *testing.T) {
 		t.Fatal(err)
 	}
 	library := &Library{Store: st, TMDB: newTMDB(tmdb.Options{Key: "k", Language: "zh-CN", BaseURL: api.URL, Cache: storeCache{st}}),
-		Path: scanner.Abs, Hint: func(f store.File) (string, string) { return cfgRoot.TypeOf(f.Path) }}
+		Open: scanner.Open, Hint: func(f store.File) (string, string) { return cfgRoot.TypeOf(f.Path) }}
 	pipeline, _ := NewPipeline(ctx, st, "test", fakeVideo{}, library.Videos(), library.Folders())
 	runPipeline(t, ctx, st, pipeline)
 	get := func(p string) Meta {
@@ -264,7 +264,7 @@ func TestMovieSidecarAndNonMovieFolders(t *testing.T) {
 	if err = scanner.Scan(ctx, "movies", false); err != nil {
 		t.Fatal(err)
 	}
-	library := &Library{Store: st, Path: scanner.Abs, Hint: func(store.File) (string, string) { return "movies", "" }, TMDB: newTMDB(tmdb.Options{Key: "k", BaseURL: api.URL})}
+	library := &Library{Store: st, Open: scanner.Open, Hint: func(store.File) (string, string) { return "movies", "" }, TMDB: newTMDB(tmdb.Options{Key: "k", BaseURL: api.URL})}
 	pipeline, err := NewPipeline(ctx, st, "sidecars", fakeVideo{}, library.Videos(), library.Folders())
 	if err != nil {
 		t.Fatal(err)
