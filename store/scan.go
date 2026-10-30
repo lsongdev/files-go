@@ -407,7 +407,7 @@ func (s *Scanner) sync(ctx context.Context, rootFS *source.Root, root config.Roo
 	sidecarChanged, membershipChanged := false, false
 	for _, f := range changed {
 		_, existed := existing[f.Name]
-		if strings.EqualFold(path.Ext(f.Name), ".nfo") || f.Kind == "image" {
+		if sidecar(f.Name) || f.Kind == "image" {
 			sidecarChanged = true
 		}
 		if !existed && (f.Dir || f.Kind == "video") {
@@ -417,7 +417,7 @@ func (s *Scanner) sync(ctx context.Context, rootFS *source.Root, root config.Roo
 	for _, p := range removed {
 		k := existing[path.Base(p)]
 		kind := s.classify(path.Base(p), k.size)
-		if strings.EqualFold(path.Ext(p), ".nfo") || kind == "image" {
+		if sidecar(p) || kind == "image" {
 			sidecarChanged = true
 		}
 		if k.dir || kind == "video" {
@@ -450,6 +450,13 @@ func (s *Scanner) sync(ctx context.Context, rootFS *source.Root, root config.Roo
 		}
 	}
 	return current, nil
+}
+
+// sidecar reports metadata files read when identifying their neighbours:
+// NFO files and scraper JSON such as JavBus records.
+func sidecar(name string) bool {
+	ext := path.Ext(name)
+	return strings.EqualFold(ext, ".nfo") || strings.EqualFold(ext, ".json")
 }
 
 func jsonArray(values []any) string {

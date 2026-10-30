@@ -14,11 +14,13 @@ import (
 	"github.com/lsongdev/files-go/store"
 )
 
-// JAV identifies only content explicitly configured with the jav media hint.
+// JAV identifies only content explicitly configured with the jav media hint,
+// through ThePornDB and local JavBus records (see javbus.go).
 type JAV struct {
 	Client *theporndb.Client
 	Hint   func(store.File) (string, string)
 	Store  *store.Store
+	Open   Opener // reads JavBus records; nil skips them
 	gate   breaker
 }
 
@@ -48,11 +50,21 @@ func (j *JAV) Enrich(ctx context.Context, f *store.File, m *Meta) (err error) {
 	if code == "" {
 		code = javCode(path.Base(path.Dir(f.Path)))
 	}
+	record, err := readJavBus(ctx, j.Store, j.Open, f, code)
+	if err != nil {
+		return err
+	}
+	if code == "" && record != nil {
+		code = javCode(record.ID)
+	}
 	if code == "" && !m.Locked {
 		return nil
 	}
 	m.Kind, m.Title = "movie", code
 	m.Set("Code", code)
+	if record != nil {
+		record.apply(m)
+	}
 	if j.Client == nil {
 		return nil
 	}
@@ -72,25 +84,40 @@ func (j *JAV) Enrich(ctx context.Context, f *store.File, m *Meta) (err error) {
 		if err != nil {
 			return javError(err)
 		}
+		var same []theporndb.SceneResource
 		for _, candidate := range page.Data {
 			sku := ""
 			if candidate.SKU != nil {
 				sku = *candidate.SKU
 			}
-			if javCode(candidate.Title) != code && javCode(sku) != code {
-				continue
+			if javCode(candidate.Title) == code || javCode(sku) == code {
+				same = append(same, candidate)
 			}
-			if scene != nil {
-				m.Review = "ambiguous"
-				return nil
-			}
-			copy := candidate
-			scene = &copy
 		}
-		if scene == nil {
+		if len(same) > 1 && record != nil && record.ReleaseDate != "" {
+			// Catalogs list re-releases under the same code; the local
+			// record's release date tells which one this is.
+			var dated []theporndb.SceneResource
+			for _, c := range same {
+				if c.Date == record.ReleaseDate {
+					dated = append(dated, c)
+				}
+			}
+			if len(dated) > 0 {
+				same = dated
+			}
+		}
+		switch {
+		case len(same) > 1:
+			m.Review = "ambiguous"
+			return nil
+		case len(same) == 0 && record != nil:
+			return nil // described by the local record alone
+		case len(same) == 0:
 			m.Review = "unmatched"
 			return nil
 		}
+		scene = &same[0]
 		detail, err := j.Client.GetJAV(ctx, scene.ID, nil)
 		if err != nil {
 			return javError(err)
@@ -116,8 +143,14 @@ func (j *JAV) Enrich(ctx context.Context, f *store.File, m *Meta) (err error) {
 		performers = append(performers, p.Name)
 	}
 	m.Set("Performers", strings.Join(performers, ", "))
+	if len(scene.Tags) > 0 {
+		m.Genres = nil
+	}
 	for _, tag := range scene.Tags {
 		m.Genres = append(m.Genres, tag.Name)
+	}
+	if record != nil {
+		record.supplement(m)
 	}
 	if j.Store != nil {
 		return (&Library{Store: j.Store}).artwork(ctx, f.Parent, m)

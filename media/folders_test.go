@@ -176,7 +176,7 @@ func TestShowFoldersTolerateExtras(t *testing.T) {
 	}
 	library := &Library{Store: st, Open: scanner.Open, Hint: func(f store.File) (string, string) { return cfgRoot.TypeOf(f.Path) }}
 	pipeline, _ := NewPipeline(ctx, st, "shows", library.Folders())
-	show := &Series{Title: "Show", Year: 2015, Poster: "tmdb:/show.jpg"}
+	show := &Series{Title: "Show", Year: 2015, Poster: "tmdb:/show.jpg", Review: "ambiguous"}
 	other := &Series{Title: "Other"}
 	for _, name := range videos {
 		f, _ := st.ByPath(ctx, "r", name)
@@ -204,10 +204,10 @@ func TestShowFoldersTolerateExtras(t *testing.T) {
 		json.Unmarshal(f.Meta, &m)
 		return m
 	}
-	if m := get("TV/Show/S01"); m.Kind != "season" || m.Season != 1 || m.Title != "Show" {
+	if m := get("TV/Show/S01"); m.Kind != "season" || m.Season != 1 || m.Title != "Show" || m.Review != "" {
 		t.Errorf("season with an unnumbered special: %+v", m)
 	}
-	if m := get("TV/Show/S02/Show.S02E01.1080p"); m.Kind != "episode" || m.Season != 2 || m.Episode != 1 || m.Title != "Episode 1" {
+	if m := get("TV/Show/S02/Show.S02E01.1080p"); m.Kind != "episode" || m.Season != 2 || m.Episode != 1 || m.Title != "Episode 1" || m.Review != "" {
 		t.Errorf("episode release folder with a promo clip: %+v", m)
 	}
 	get("TV/Show/S02/Show.S02E02.1080p")
@@ -221,10 +221,79 @@ func TestShowFoldersTolerateExtras(t *testing.T) {
 		t.Errorf("two different shows are not one: %+v", m)
 	}
 	get("TV/Show/mp3")
-	if m := get("TV/Show"); m.Kind != "show" || m.Title != "Show" || m.Match == nil || m.Match.ID != "1" || m.Poster != "tmdb:/show.jpg" {
+	if m := get("TV/Show"); m.Kind != "show" || m.Title != "Show" || m.Match == nil || m.Match.ID != "1" || m.Poster != "tmdb:/show.jpg" || m.Review != "ambiguous" {
 		t.Errorf("show with specials, a movie, a soundtrack and a mixed folder: %+v", m)
 	}
 	if m := get("Downloads"); m.Kind != "" {
 		t.Errorf("one episode among other videos outside a TV library: %+v", m)
+	}
+}
+
+// A guess awaiting review stays on the file; the folder follows once the
+// identity is settled, and a choice for one part covers the whole movie.
+func TestUnsettledMoviesStayOnTheFile(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	for _, name := range []string{"Film/Film.CD1.mkv", "Film/Film.CD2.mkv", "Single/Single.2016.mkv"} {
+		p := filepath.Join(root, name)
+		os.MkdirAll(filepath.Dir(p), 0755)
+		os.WriteFile(p, []byte("x"), 0600)
+	}
+	st, err := store.Open(filepath.Join(t.TempDir(), "files.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	scanner := store.NewScanner(st, []config.Root{{ID: "r", Path: root, Type: "movies"}}, nil, Classify)
+	if err := scanner.Scan(ctx, "r", false); err != nil {
+		t.Fatal(err)
+	}
+	library := &Library{Store: st, Open: scanner.Open, Hint: func(store.File) (string, string) { return "movies", "" }}
+	pipeline, _ := NewPipeline(ctx, st, "unsettled", library.Folders())
+	seed := func(name string, m Meta) {
+		f, _ := st.ByPath(ctx, "r", name)
+		data, _ := json.Marshal(m)
+		if err := st.SaveResults(ctx, []store.Result{{ID: f.ID, Revision: f.Revision, Kind: f.Kind, Meta: data, Version: pipeline.Version}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	guess := Meta{Kind: "movie", Title: "Film", Match: &store.Match{Provider: "tmdb", Type: "movie", ID: "1"}, Review: "ambiguous"}
+	seed("Film/Film.CD1.mkv", guess)
+	seed("Film/Film.CD2.mkv", guess)
+	single := guess
+	single.Title, single.Match = "Single", &store.Match{Provider: "tmdb", Type: "movie", ID: "2"}
+	seed("Single/Single.2016.mkv", single)
+	folder := func(name string) (store.File, Meta) {
+		f, _ := st.ByPath(ctx, "r", name)
+		if err := pipeline.Rematch(ctx, f); err != nil {
+			t.Fatal(err)
+		}
+		f, _ = st.Get(ctx, f.ID)
+		var m Meta
+		json.Unmarshal(f.Meta, &m)
+		return f, m
+	}
+	for _, name := range []string{"Film", "Single"} {
+		if _, m := folder(name); m.Kind != "" || m.Match != nil || m.Review != "" {
+			t.Errorf("%s repeats a guess awaiting review: %+v", name, m)
+		}
+	}
+	dir, _ := folder("Film")
+	part, _ := st.ByPath(ctx, "r", "Film/Film.CD2.mkv")
+	if scope, err := pipeline.MatchScope(ctx, part); err != nil || scope.ID != dir.ID {
+		t.Errorf("a choice for one part should cover the movie: %+v, %v", scope, err)
+	}
+	if ok, err := pipeline.SharedWork(ctx, dir); !ok || err != nil {
+		t.Errorf("parts of one movie are a shared work: %v, %v", ok, err)
+	}
+	file, _ := st.ByPath(ctx, "r", "Single/Single.2016.mkv")
+	if scope, _ := pipeline.MatchScope(ctx, file); scope.ID != file.ID {
+		t.Errorf("a single file keeps its own choice: %+v", scope)
+	}
+	settledMeta := single
+	settledMeta.Review, settledMeta.Locked = "", true
+	seed("Single/Single.2016.mkv", settledMeta)
+	if _, m := folder("Single"); m.Kind != "movie" || m.Title != "Single" || !m.Locked {
+		t.Errorf("a settled movie names its folder: %+v", m)
 	}
 }

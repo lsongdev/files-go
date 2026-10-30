@@ -153,8 +153,10 @@ func (v videos) episode(ctx context.Context, f *store.File, m *Meta, n Name, hin
 		return err
 	}
 	m.Series = &Series{Title: title, Year: year, Review: review}
+	if show == nil {
+		m.Review = review // otherwise reviewed once, on the show folder
+	}
 	if item == nil {
-		m.Review = review
 		return nil
 	}
 	m.Match = &store.Match{Provider: "tmdb", Type: "tv", ID: strconv.Itoa(item.ID)}
@@ -175,9 +177,6 @@ func (v videos) episode(ctx context.Context, f *store.File, m *Meta, n Name, hin
 		m.Series.Poster, m.Series.Backdrop = art.Poster, art.Backdrop
 	}
 	m.Poster, m.Backdrop, m.Genres = m.Series.Poster, m.Series.Backdrop, item.Genres
-	if show == nil {
-		m.Review = review
-	}
 	if episode == 0 {
 		m.Title, m.Summary = item.Title, item.Overview
 		return nil

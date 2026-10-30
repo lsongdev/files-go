@@ -80,5 +80,51 @@ func (p *Pipeline) MatchScope(ctx context.Context, f store.File) (store.File, er
 			return a, nil
 		}
 	}
+	// A movie awaiting review does not identify its folder, but choosing it
+	// for one part applies to every part of the same work.
+	if len(ancestors) > 0 && m.Kind == "movie" {
+		parent := ancestors[len(ancestors)-1]
+		if parts, err := p.parts(ctx, parent); err != nil {
+			return f, err
+		} else if len(parts) > 1 && sameWork(parts) {
+			return parent, nil
+		}
+	}
 	return f, nil
+}
+
+// SharedWork reports whether a choice may be made for a whole directory: an
+// identified work, or the parts of one movie still awaiting review.
+func (p *Pipeline) SharedWork(ctx context.Context, dir store.File) (bool, error) {
+	var m Meta
+	_ = json.Unmarshal(dir.Meta, &m)
+	if m.Kind == "movie" || m.Kind == "show" || m.Kind == "season" {
+		return true, nil
+	}
+	parts, err := p.parts(ctx, dir)
+	return err == nil && len(parts) > 0 && sameWork(parts), err
+}
+
+// parts returns a directory's main videos when all of them are movies and it
+// has no media subfolders; otherwise none.
+func (p *Pipeline) parts(ctx context.Context, dir store.File) ([]member, error) {
+	children, err := p.store.Children(ctx, dir.ID, 0, -1)
+	if err != nil {
+		return nil, err
+	}
+	var parts []member
+	for _, c := range children {
+		var cm Meta
+		_ = json.Unmarshal(c.Meta, &cm)
+		switch {
+		case c.Dir && cm.Files > 0:
+			return nil, nil
+		case c.Kind == "video" && !isExtra(c.Name):
+			if cm.Kind != "movie" {
+				return nil, nil
+			}
+			parts = append(parts, member{c, cm})
+		}
+	}
+	return parts, nil
 }

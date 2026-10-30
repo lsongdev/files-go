@@ -221,7 +221,7 @@ func TestDisambiguation(t *testing.T) {
 	if m := get("TV/One.Piece"); m.providerID("tmdb") != "tv/37854" || m.Review != "conflict" || m.Locked {
 		t.Errorf("One Piece: NFO points at the 8-episode remake, local has ep840: %+v", m)
 	}
-	if m := get("TV/One.Piece/OnePiece.ep840.mp4"); m.Kind != "episode" || m.Episode != 840 || m.providerID("tmdb") != "tv/37854" {
+	if m := get("TV/One.Piece/OnePiece.ep840.mp4"); m.Kind != "episode" || m.Episode != 840 || m.providerID("tmdb") != "tv/37854" || m.Review != "" {
 		t.Errorf("One Piece episode = %+v", m)
 	}
 	if m := get("TV/In.the.Name.of.the.People"); m.providerID("tmdb") != "tv/69740" || m.Review != "" {
@@ -233,8 +233,12 @@ func TestDisambiguation(t *testing.T) {
 	if m := get("Movies/Before"); m.Kind != "" || m.providerID("tmdb") != "" || m.Review != "" {
 		t.Errorf("a trilogy folder is a collection, not a movie: %+v", m)
 	}
-	if m := get("Movies/Alien"); m.providerID("tmdb") != "movie/348" || m.Review != "ambiguous" {
+	if m := get("Movies/Alien/Alien.mkv"); m.providerID("tmdb") != "movie/348" || m.Review != "ambiguous" {
 		t.Errorf("two equally named movies without evidence: %+v", m)
+	}
+	// The folder does not repeat a guess awaiting review.
+	if m := get("Movies/Alien"); m.Kind != "" || m.Match != nil || m.Review != "" {
+		t.Errorf("folder of an ambiguous movie: %+v", m)
 	}
 }
 

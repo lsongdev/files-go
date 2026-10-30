@@ -86,7 +86,7 @@ func run() error {
 		&media.Probe{Bin: cfg.FFprobe, Open: openSource, Store: st},
 		library.Videos(),
 		library.Folders(),
-		&media.JAV{Client: tpdb, Hint: library.Hint, Store: st},
+		&media.JAV{Client: tpdb, Hint: library.Hint, Store: st, Open: openSource},
 		media.Photo{Open: openSource, FFprobe: cfg.FFprobe},
 		media.Document{Open: openSource, PDFInfo: pdfinfo},
 		media.App{Open: openSource},
