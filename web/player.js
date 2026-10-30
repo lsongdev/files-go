@@ -73,8 +73,12 @@ export function createPlayer(container, item, onStatus) {
   listen('playing', () => { starting = false; onStatus?.(''); });
   // Autoplay may be blocked, so a loaded source also ends the start-up phase.
   listen('canplay', () => { starting = false; });
-  // Reset the MSE loader on a distant seek. With independent discontinuities,
-  // hls.js can otherwise keep reloading an old fragment after a native seek.
+  // Restart only the loader on a distant seek. With independent
+  // discontinuities, hls.js can otherwise keep reloading an old fragment after
+  // a native seek; stopLoad resets its transmuxer and fragment state. The
+  // session, playlist, media element and subtitles stay, and the server
+  // renders just the fragment at the new position (an aborted request cancels
+  // its encode, so scrubbing does not queue work).
   listen('seeking', () => {
     if (!hls || starting || destroyed) return;
     const at = media.currentTime;
@@ -82,7 +86,8 @@ export function createPlayer(container, item, onStatus) {
     for (let i = 0; i < buffered.length; i++) {
       if (at >= buffered.start(i) && at < buffered.end(i) - .1) return;
     }
-    start(at);
+    hls.stopLoad();
+    hls.startLoad(at, true); // the element is already at the new position
   });
   // HLS initialization can clear existing cues or reset track modes. Install
   // sidecar tracks after metadata is ready, and keep the user's selection when
