@@ -89,7 +89,7 @@ func Load(dir string) (*Config, error) {
 		return nil, fmt.Errorf("%s: data: %s is no longer supported; all data is written to the -d directory %s", path, cfg.LegacyData, dir)
 	}
 	if cfg.Workers <= 0 {
-		cfg.Workers = 2
+		cfg.Workers = 5
 	}
 	if cfg.ScanInterval == 0 {
 		cfg.ScanInterval = 6 * time.Hour

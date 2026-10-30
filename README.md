@@ -88,7 +88,7 @@ web/      Preact UI (embedded)
 
 ```yaml
 listen: ":8088"
-workers: 4                    # concurrent enrichment jobs
+workers: 5                    # concurrent enrichment jobs (default)
 scan_interval: 6h
 hwaccel: auto                 # auto | vaapi | none; checked with a test encode at startup
 # hwaccel_device: /dev/dri/renderD128
@@ -211,9 +211,14 @@ request/metadata shape has been replaced.
 
 ## Development
 
+The frontend directly imports the static ES modules from `@lsongdev/scripts`.
+There is no JavaScript build step. Install the pinned dependency before running
+Go commands. The Go binary embeds the required module files, so deployment needs
+neither Node.js nor a separate `node_modules` directory. Git ignores installed
+dependencies; commit `web/package.json` and `web/package-lock.json` together.
+
 ```sh
-go test ./...
-node web/app_test.cjs
-node web/metadata_test.cjs
+npm ci --prefix web
+make test
 go run . -d .
 ```

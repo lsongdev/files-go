@@ -1,11 +1,19 @@
+.DEFAULT_GOAL := test
+
 BINARY_NAME=bin/files-go
 
-.PHONY: test build clean
+.PHONY: deps test build clean
 
-test:
+deps: web/node_modules/.package-lock.json
+
+web/node_modules/.package-lock.json: web/package.json web/package-lock.json
+	npm ci --prefix web
+
+test: deps
+	npm test --prefix web
 	go test ./...
 
-build:
+build: deps
 	mkdir -p bin
 	GOARCH=arm64 GOOS=darwin go build -ldflags="-s -w" -o ${BINARY_NAME}-darwin-arm64
 	GOARCH=amd64 GOOS=darwin go build -ldflags="-s -w" -o ${BINARY_NAME}-darwin-amd64

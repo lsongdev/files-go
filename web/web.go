@@ -8,10 +8,13 @@ import (
 	"encoding/hex"
 	"net/http"
 	"path"
+	"strings"
 	"time"
 )
 
 //go:embed index.html app.js player.js styles.css vendor/*
+//go:embed node_modules/@lsongdev/scripts/react/react.js node_modules/@lsongdev/scripts/react/preact.js node_modules/@lsongdev/scripts/react/preact-hooks.js node_modules/@lsongdev/scripts/react/htm.js
+//go:embed node_modules/@lsongdev/scripts/LICENSE node_modules/@lsongdev/scripts/THIRD_PARTY_NOTICES.md
 var files embed.FS
 
 var started = time.Now()
@@ -19,7 +22,12 @@ var started = time.Now()
 // version busts browser caches when the embedded assets change.
 var version = func() string {
 	h := sha256.New()
-	for _, name := range []string{"app.js", "player.js", "styles.css"} {
+	for _, name := range []string{"app.js", "player.js", "styles.css",
+		"node_modules/@lsongdev/scripts/react/react.js",
+		"node_modules/@lsongdev/scripts/react/preact.js",
+		"node_modules/@lsongdev/scripts/react/preact-hooks.js",
+		"node_modules/@lsongdev/scripts/react/htm.js",
+	} {
 		data, _ := files.ReadFile(name)
 		h.Write(data)
 	}
@@ -39,7 +47,12 @@ func Handler() http.Handler {
 			data = bytes.ReplaceAll(data, []byte("{{VERSION}}"), []byte(version))
 			w.Header().Set("Cache-Control", "no-cache")
 		} else {
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			if strings.HasPrefix(name, "node_modules/") {
+				// Relative module imports keep their package paths, so revalidate on reload.
+				w.Header().Set("Cache-Control", "no-cache")
+			} else {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			}
 		}
 		w.Header().Set("Content-Security-Policy", csp)
 		w.Header().Set("X-Content-Type-Options", "nosniff")

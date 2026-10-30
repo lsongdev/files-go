@@ -1,24 +1,145 @@
-listen: ":8088"
-data: /var/lib/files-go
-workers: 4
-scan_interval: 6h
-auth:
-  username: me
-  password: change-me
-tmdb:
-  key: "${TMDB_KEY}"
-  language: zh-CN
+# files-go configuration example
+# Copy this file to <directory>/config.yaml, then start the server with:
+#   files-go -d <directory>
+# -d selects both the configuration and data directory. The database, caches,
+# and temporary files are written there. The data: setting is deprecated; omit it.
+# Without -d, the command defaults to ~/.filesgo. Restart to apply changes.
+#
+# Environment variables ($VAR and ${VAR}) are expanded before YAML parsing.
+# Unset variables become empty strings. Account for YAML quoting/escaping when
+# variable values contain special characters. Paths do not expand ~; use absolute
+# paths or ${HOME}. In double-quoted YAML, \x24 represents a literal dollar sign
+# without triggering environment expansion (see the recycle-bin exclusion below).
+# Optional settings are commented out. Values shown are defaults unless marked
+# as examples. Replace the active example roots with your own media directories.
+
+# HTTP listen address. :8088 listens on all interfaces; use 127.0.0.1:8088
+# to accept local connections only.
+# listen: ":8088"
+
+# Shared background metadata worker pool for photos, videos, music, documents,
+# and directory aggregation. Values <= 0 select the default of 5.
+# This does not control scanning, thumbnail generation, or HLS concurrency.
+# workers: 5
+
+# Full reconciliation scan interval. Filesystem monitoring handles live changes;
+# periodic scans also recover missed changes or unavailable watches.
+# A scan also runs at startup. Use Go duration syntax, e.g. 30m, 6h, or 24h.
+# Values <= 0 use 6h; setting 0 does not disable scanning.
+# scan_interval: 6h
+
+# Exclude individual file/directory names at every level, not full paths.
+# Patterns use Go path.Match syntax (*, ?, [...]); excluded directories are
+# skipped with their entire subtree. A custom list REPLACES all defaults.
+# Use exclude: [] to disable exclusions. The default list is shown below.
+# exclude:
+#   - ".*"
+#   - "node_modules"
+#   - "__pycache__"
+#   - "@eaDir"
+#   - "#recycle"
+#   - "\x24RECYCLE.BIN"
+#   - "System Volume Information"
+#   - "Thumbs.db"
+#   - "desktop.ini"
+
+# Media executables: command names resolved through PATH, or absolute paths.
+# ffmpeg generates playback fragments, transcodes, thumbnails, and subtitles.
+# ffprobe reads media metadata and builds playback timelines.
+# PDF metadata/previews additionally discover pdfinfo/pdftoppm through PATH;
+# those executables have no separate configuration settings.
+# ffmpeg: ffmpeg
+# ffprobe: ffprobe
+
+# Video hardware transcoding: auto probes VAAPI, vaapi explicitly attempts VAAPI,
+# and none disables it. Both auto and vaapi fall back to software if probing fails.
+# Requires FFmpeg VAAPI support and service-user access to the render device.
+# Media streams eligible for codec copying do not need hardware encoding.
+# hwaccel: auto
+# hwaccel_device: /dev/dri/renderD128
+
+# HTTP Basic Auth protects both the web interface and API.
+# Both fields default to empty. An empty password disables authentication;
+# with a nonempty password, an empty username accepts any username.
+# Environment-variable example; ensure the password variable is nonempty.
+# auth:
+#   username: "${FILES_GO_USERNAME}"
+#   password: "${FILES_GO_PASSWORD}"
+
+# TMDB: key defaults to empty, disabling TMDB online lookups. Local metadata
+# remains available. Accepts a v3 API Key or v4 Read Access Token.
+# language selects the returned metadata language (default zh-CN), e.g. en-US
+# or ja-JP. The key below is an environment-variable example.
+# tmdb:
+#   key: "${TMDB_KEY}"
+#   language: zh-CN
+
+# ThePornDB: token defaults to empty, disabling its online lookups.
+# Environment-variable example below. Set the relevant root/subdirectory hint
+# to jav to enable JAV identification. There is no language setting for this
+# provider, and tmdb.language does not affect it.
+# theporndb:
+#   token: "${THEPORNDB_TOKEN}"
+
+# Indexed roots default to an empty list. Examples below must point to existing,
+# readable directories. Each root supports all of the following fields:
+#   path         Required media source directory. Relative paths resolve against
+#                the process working directory; absolute paths are recommended.
+#   id           Optional stable, unique root identifier. Defaults to a slug of
+#                name: lowercase, spaces/dots replaced by -, keeping ASCII letters,
+#                digits, - and _, plus non-ASCII characters. Other characters are
+#                removed; an empty result becomes root. Explicit stable IDs are
+#                recommended: index entries and manual matches refer to them.
+#   name         Optional display name; defaults to the final component of path.
+#   type         Optional media identification hint; defaults to empty (identify
+#                from file formats/content). Common values: movies, tv, music,
+#                photos, books, jav. tv enables show-folder identification; jav
+#                selects JAV/ThePornDB identification. Hints do not filter out
+#                other file types. Directories aggregate file metadata without
+#                independent online catalog lookups.
+#   types        Optional map overriding type for root-relative subdirectories.
+#                Use / separators. Applies to each path and its descendants;
+#                the longest matching path wins. Defaults to an empty map.
+#   mount_marker Optional root-relative marker file path, empty by default.
+#                Create the file yourself, with stable contents identifying the
+#                mount (at most 4096 bytes). Missing markers or changes to the
+#                device/marker identity block normal scans and file reads.
+#                After verifying the mount, explicitly force a scan to accept
+#                a new identity. Markers may be excluded from indexing without
+#                affecting verification. The server never creates this file.
 roots:
-  - name: Videos
+  - id: videos
+    name: Videos
     path: /data/Videos
+    # type: ""
     types:
       Movies: movies
       TV Shows: tv
-  - name: Music
+      # Nested override example (longest matching path wins):
+      # Movies/JAV: jav
+    # mount_marker: .files-go-mount-id
+  - id: music
+    name: Music
     path: /data/Music
     type: music
-  - name: Pictures
+  - id: photos
+    name: Pictures
     path: /data/Pictures
     type: photos
-  - name: Documents
+  - id: documents
+    name: Documents
     path: /data/Documents
+  # - id: jav
+  #   name: JAV
+  #   path: /data/porn/JAV
+  #   type: jav
+  # - id: books
+  #   name: Books
+  #   path: /data/Books
+  #   type: books
+
+# These limits are currently fixed in code and have no YAML settings:
+# - Thumbnail generation: 4 jobs overall, with separate limits of 1 image job,
+#   2 video jobs, and 1 PDF job.
+# - Subtitle conversion: 2 jobs.
+# Changing workers does not change these limits.
