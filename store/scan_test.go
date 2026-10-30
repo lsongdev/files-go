@@ -166,14 +166,7 @@ func TestSyncDirAndAncestors(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir, _ := st.ByPath(ctx, "r", "Movies/Dune (2021)")
-	if scanner.Stale(dir) {
-		t.Fatal("fresh directory reported stale")
-	}
 	write(t, filepath.Join(root, "Movies", "Dune (2021)", "dune.srt"), "subs")
-	os.Chtimes(filepath.Join(root, "Movies", "Dune (2021)"), time.Now().Add(time.Minute), time.Now().Add(time.Minute))
-	if !scanner.Stale(dir) {
-		t.Fatal("changed directory not reported stale")
-	}
 	if err := scanner.SyncDir(ctx, dir); err != nil {
 		t.Fatal(err)
 	}
@@ -230,5 +223,25 @@ func TestVersionGrows(t *testing.T) {
 	back, _ := st.Version(ctx, "a")
 	if b <= a || back <= b {
 		t.Fatalf("versions must grow on every tag change: a=%d b=%d a'=%d", a, b, back)
+	}
+}
+
+func TestInitRemovesUnconfiguredRoots(t *testing.T) {
+	st, scanner, _ := setup(t)
+	if err := scanner.Scan(context.Background(), "r", false); err != nil {
+		t.Fatal(err)
+	}
+	empty := NewScanner(st, nil, nil, nil)
+	if err := empty.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, st); n != 0 {
+		t.Fatalf("removed root left %d rows", n)
+	}
+	if err := scanner.Init(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, st); n != 1 {
+		t.Fatalf("recreated root has %d rows", n)
 	}
 }

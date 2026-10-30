@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/lsongdev/files-go/config"
 	"github.com/lsongdev/files-go/media"
@@ -92,6 +93,25 @@ func TestAPI(t *testing.T) {
 	decode(get(fmt.Sprintf("/api/files/%d/children", roots[0].FileID)), &list)
 	if len(list.Items) != 2 || !list.Items[0].Dir || list.Items[1].Name != "readme.txt" {
 		t.Fatalf("children = %+v", list.Items)
+	}
+	// Browsing must not reconcile the media filesystem, even if it changes or
+	// disappears. Only an explicit/background scan is allowed to change the index.
+	os.WriteFile(filepath.Join(root, "unscanned.txt"), []byte("new"), 0o644)
+	os.Chtimes(root, time.Now().Add(time.Minute), time.Now().Add(time.Minute))
+	decode(get(fmt.Sprintf("/api/files/%d/children", roots[0].FileID)), &list)
+	if len(list.Items) != 2 {
+		t.Fatal("browsing unexpectedly scanned the directory")
+	}
+	moved := root + "-offline"
+	if err := os.Rename(root, moved); err != nil {
+		t.Fatal(err)
+	}
+	decode(get(fmt.Sprintf("/api/files/%d/children", roots[0].FileID)), &list)
+	if len(list.Items) != 2 {
+		t.Fatal("offline browsing changed the index")
+	}
+	if err := os.Rename(moved, root); err != nil {
+		t.Fatal(err)
 	}
 	readme := list.Items[1]
 	res := get(fmt.Sprintf("/api/files/%d/raw", readme.ID), "Range", "bytes=0-4")

@@ -49,9 +49,8 @@ upload, rename or delete operations.
   writes what changed. A missing root, or one that turned empty and now sits
   on another filesystem than before, is treated as an unmounted disk and
   leaves the index untouched (`POST /api/roots/{root}/scan?force=1` confirms
-  a root that is really empty). A full rescan runs periodically; when
-  a folder is browsed, one `stat` detects whether it changed and resyncs just
-  that level.
+  a root that is really empty). Filesystem events trigger background incremental
+  scans; periodic full scans reconcile missed events. Browsing reads only the index.
 - **Enrichers** share one interface (`Match`, `Enrich`) and run in order on
   the same metadata, so the movie lookup can build on ffprobe's result.
   Manual TMDB matches are locked and survive re-enrichment.
@@ -116,6 +115,17 @@ looked up, and plain videos stay plain videos.
 
 Run with `files-go -d dir` to load `dir/config.yaml` (default: `~/.filesgo/config.yaml`).
 If `data` is omitted, the configuration directory also stores the database and caches.
+File changes are indexed in the background using filesystem notifications.
+Events for the same directory are merged until it has been quiet for two seconds;
+new or moved-in directory trees are discovered and watched recursively. Browsing
+and pagination read only the database and never check the media filesystem.
+Startup scans, `scan_interval` scans, and recovery scans after watcher overflow
+reconcile missed changes. Watch registration failures are logged and exposed as
+`watchError` in root status; periodic scans remain active. Network mounts such as
+NFS/SMB may not deliver notifications and rely on periodic or manual scans.
+This does not add automatic page refresh; reopen or refresh a listing to see the
+updated index. The scan interval starts after each periodic scan completes.
+
 `ffmpeg` / `ffprobe` are needed for video
 and audio; `pdfinfo` / `pdftoppm` (poppler) are optional for PDFs.
 
