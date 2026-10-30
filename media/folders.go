@@ -21,6 +21,11 @@ type member struct {
 // Enrich only reads the index and local artwork references. Identity, title,
 // synopsis and album tags come from completed file results, never an online
 // directory lookup. Stable child order makes representative artwork repeatable.
+//
+// Movies and albums need every member to agree, so a collection never takes
+// the identity of whichever file finished first. A show only needs its
+// episodes and seasons to agree: unnumbered specials, promos and soundtrack
+// folders are extras of the show rather than a different work.
 func (d folders) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	choice := m.Match
 	children, err := d.Store.Children(ctx, f.ID, 0, -1)
@@ -32,7 +37,7 @@ func (d folders) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	lockedMembers := true
 	members := 0
 	allDiscs := true
-	files := 0
+	files, showFiles, extraFiles := 0, 0, 0
 	representative := ""
 	for _, child := range children {
 		var cm Meta
@@ -45,35 +50,43 @@ func (d folders) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 		if representative == "" && (child.Kind == "video" && !isExtra(child.Name) || child.Kind == "audio" || child.Dir && cm.Files > 0) {
 			representative = memberArtwork(entry)
 		}
-		if child.Kind == "video" && !isExtra(child.Name) || child.Kind == "audio" || child.Dir && cm.Kind == "season" {
+		showMember := child.Dir && cm.Series != nil && (cm.Kind == "season" || cm.Kind == "show" || cm.Kind == "episode")
+		if child.Kind == "video" && !isExtra(child.Name) || child.Kind == "audio" || showMember {
 			members++
 			lockedMembers = lockedMembers && cm.Locked
 		}
 		switch {
 		case child.Dir:
-			if cm.Kind == "season" {
+			if showMember {
 				shows = append(shows, entry)
 				files += cm.Files
+				showFiles += cm.Files
 			} else if cm.Kind == "album" {
 				albums = append(albums, entry)
 				files += cm.Tracks
+				extraFiles += cm.Tracks
 				allDiscs = allDiscs && discFolder.MatchString(child.Name)
 			} else if cm.Files > 0 {
 				other = true
 				files += cm.Files
+				extraFiles += cm.Files
 			}
 		case child.Kind == "video" && !isExtra(child.Name):
 			files++
 			switch cm.Kind {
 			case "movie":
 				films = append(films, entry)
+				extraFiles++
 			case "episode":
 				shows = append(shows, entry)
+				showFiles++
 			default:
 				unknown = true
+				extraFiles++
 			}
 		case child.Kind == "audio":
 			files++
+			extraFiles++
 			if cm.Kind == "audio" {
 				tracks = append(tracks, entry)
 			} else {
@@ -81,30 +94,28 @@ func (d folders) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 			}
 		}
 	}
-	// A pending/unsupported member must not silently turn a mixed collection
-	// into the identity of whichever file happened to finish first.
-	if !unknown && !other {
-		switch {
-		case len(films) > 0 && len(shows)+len(tracks)+len(albums) == 0:
-			if sameWork(films) {
-				copyWork(m, films[0])
-				m.Kind = "movie"
-			}
-		case len(shows) > 0 && len(films)+len(tracks)+len(albums) == 0:
-			if sameWork(shows) && shows[0].meta.Series != nil {
-				s := shows[0].meta.Series
-				m.Match = shows[0].meta.Match
-				m.Title, m.Original, m.Year, m.Summary = s.Title, s.Original, s.Year, s.Summary
-				m.Poster, m.Backdrop, m.Rating, m.Genres = s.Poster, s.Backdrop, s.Rating, s.Genres
-				m.Review, m.Series = s.Review, s
-				m.Kind = "show"
-				if season, ok := SeasonNumber(f.Name); ok {
-					m.Kind, m.Season = "season", season
-				}
-			}
-		case len(tracks)+len(albums) > 0 && len(films)+len(shows) == 0:
-			d.album(m, tracks, albums, allDiscs)
+	hint, base := "", ""
+	if d.Hint != nil {
+		hint, base = d.Hint(*f)
+	}
+	// Extras never outweigh the show outside a TV library, so one stray
+	// episode does not turn a downloads folder into a show.
+	extrasAllowed := hint == "tv" || showFiles > extraFiles
+	switch {
+	case len(shows) > 0 && (len(films)+len(tracks)+len(albums) == 0 && !unknown && !other || extrasAllowed):
+		if sameWork(shows) && shows[0].meta.Series != nil {
+			d.show(m, f, shows, hint == "tv" && parentPath(f.Path) == base)
 		}
+	case unknown || other:
+		// A pending/unsupported member must not silently turn a mixed
+		// collection into the identity of whichever file finished first.
+	case len(films) > 0 && len(shows)+len(tracks)+len(albums) == 0:
+		if sameWork(films) {
+			copyWork(m, films[0])
+			m.Kind = "movie"
+		}
+	case len(tracks)+len(albums) > 0 && len(films)+len(shows) == 0:
+		d.album(m, tracks, albums, allDiscs)
 	}
 	if m.Kind == "" {
 		m.Match = choice // keep a persistent choice visible even while files are pending/missing
@@ -115,6 +126,30 @@ func (d folders) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	}
 	m.Files = files
 	return d.artwork(ctx, f.ID, m)
+}
+
+// show names a folder after the series of its episodes and seasons: a season
+// when its name says so, an episode when it only wraps one episode (release
+// folders such as "Show.S02E06.1080p.WEB-DL"), the show otherwise.
+func (d folders) show(m *Meta, f *store.File, shows []member, showFolder bool) {
+	first := shows[0].meta
+	season, isSeason := SeasonNumber(f.Name)
+	if !showFolder && !isSeason && len(shows) == 1 && first.Kind == "episode" {
+		m.Kind, m.Match, m.Series = "episode", first.Match, first.Series
+		m.Title, m.Show, m.Season, m.Episode, m.Year = first.Title, first.Show, first.Season, first.Episode, first.Year
+		m.Summary, m.Rating, m.Genres, m.Duration, m.Review = first.Summary, first.Rating, first.Genres, first.Duration, first.Review
+		m.Poster, m.Backdrop = memberArtwork(shows[0]), first.Backdrop
+		return
+	}
+	s := first.Series
+	m.Match = first.Match
+	m.Title, m.Original, m.Year, m.Summary = s.Title, s.Original, s.Year, s.Summary
+	m.Poster, m.Backdrop, m.Rating, m.Genres = s.Poster, s.Backdrop, s.Rating, s.Genres
+	m.Review, m.Series = s.Review, s
+	m.Kind = "show"
+	if isSeason && !showFolder {
+		m.Kind, m.Season = "season", season
+	}
 }
 
 func sameWork(entries []member) bool {
