@@ -63,8 +63,8 @@ main { --page-padding: 1.5rem; position: relative; isolation: isolate; min-width
 .error { color: var(--error); }
 .empty, .sentinel { color: var(--muted); text-align: center; padding: 2rem 0; min-height: 1px; }
 
-.button, .actions button, .toolbar button, .dialog button { display: inline-flex; align-items: center; gap: .4rem; padding: .5rem .9rem; border-radius: 9px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 500; }
-.ghost, .actions .ghost, .toolbar .ghost, .dialog .ghost { background: var(--hover); color: var(--text); }
+.button, .actions button, .toolbar button, .match-dialog form > button, .match-dialog .dialog-footer > button { display: inline-flex; align-items: center; gap: .4rem; padding: .5rem .9rem; border-radius: 9px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 500; }
+.ghost, .actions .ghost, .toolbar .ghost, .match-dialog .ghost { background: var(--hover); color: var(--text); }
 .small { padding: .3rem .6rem !important; font-size: .85rem; }
 
 .art { position: relative; display: grid; place-items: center; overflow: hidden; background: var(--hover); color: var(--muted); }
@@ -133,8 +133,8 @@ pre.text { max-height: 70vh; overflow: auto; padding: 1rem 1.2rem; border: 1px s
 .match-dialog .dialog-body { display: flex; flex-direction: column; gap: .8rem; min-height: 0; }
 .match-dialog .dialog-body > .hint, .match-dialog .dialog-body > .error { margin: 0; flex: none; }
 .match-dialog form { display: flex; flex-wrap: wrap; gap: .5rem; flex: none; }
-.match-dialog input, .match-dialog select { padding: .5rem .7rem; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
-.match-dialog input { flex: 1; min-width: 0; }
+.match-dialog input, .match-dialog select { font-size: 16px; padding: .5rem .7rem; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.match-dialog input { flex: 1 1 10rem; min-width: 0; }
 .candidates { overflow-y: auto; display: flex; flex-direction: column; gap: .3rem; }
 .candidates button { display: flex; gap: .8rem; align-items: flex-start; padding: .5rem; border-radius: 10px; background: none; color: var(--text); font-weight: 400; }
 .candidates button:hover { background: var(--hover); }
