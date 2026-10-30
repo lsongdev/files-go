@@ -116,7 +116,9 @@ func parseProbe(data []byte, f *store.File, m *Meta) error {
 		tags[strings.ToLower(k)] = strings.TrimSpace(v)
 	}
 	if m.Kind == "audio" {
-		m.Title, m.Artist, m.Album = tags["title"], first(tags["artist"], tags["album_artist"]), tags["album"]
+		m.Title, m.Artist, m.Album = tags["title"], tags["artist"], tags["album"]
+		m.AlbumArtist = first(tags["album_artist"], tags["albumartist"])
+		m.Artist = first(m.Artist, m.AlbumArtist)
 		m.Year = leadingYear(tags["date"])
 		m.Genres = splitList(tags["genre"])
 		m.Set("Track", tags["track"])

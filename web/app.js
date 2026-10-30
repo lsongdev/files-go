@@ -20,10 +20,10 @@ const ICONS = {
   app: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z', archive: 'M3 3h18v5H3zM5 8v13h14V8M10 12h4', video: 'M3 5h13v14H3zM16 10l5-3v10l-5-3',
 };
 const Icon = ({ name, size = 18 }) => html`<svg class="icon" width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d=${ICONS[name] || ICONS.file}/></svg>`;
-const kindIcon = (item) => item.dir ? 'folder' : ({ video: 'video', audio: 'music', image: 'photos', book: 'books', app: 'app', archive: 'archive' }[item.kind] || 'file');
+const kindIcon = (item) => item.meta?.kind === 'album' ? 'music' : item.dir ? 'folder' : ({ video: 'video', audio: 'music', image: 'photos', book: 'books', app: 'app', archive: 'archive' }[item.kind] || 'file');
 const rootIcon = (type) => ({ movies: 'movies', tv: 'tv', music: 'music', photos: 'photos', books: 'books' }[type] || 'folder');
 
-const KIND_LABEL = { movie: '电影', show: '剧集', season: '季', episode: '单集', video: '视频', audio: '音频', photo: '照片', image: '图片', book: '图书', document: '文档', app: '应用', archive: '压缩包', text: '文本', code: '代码', font: '字体', torrent: '种子', folder: '文件夹' };
+const KIND_LABEL = { movie: '电影', show: '剧集', season: '季', episode: '单集', video: '视频', audio: '音频', album: '专辑', photo: '照片', image: '图片', book: '图书', document: '文档', app: '应用', archive: '压缩包', text: '文本', code: '代码', font: '字体', torrent: '种子', folder: '文件夹' };
 const INFO_LABEL = { Release: '版本', Bitrate: '码率', Channels: '声道', 'Sample rate': '采样率', Subtitles: '字幕', Track: '音轨', Disc: '碟', Composer: '作曲', Format: '格式', Taken: '拍摄时间', Camera: '相机', Lens: '镜头', Exposure: '快门', Aperture: '光圈', ISO: 'ISO', 'Focal length': '焦距', Location: '位置', Publisher: '出版社', Language: '语言', Pages: '页数', Slides: '幻灯片', Application: '应用程序', Subject: '主题', Creator: '创建工具', Producer: '生成工具', Package: '包名', Version: '版本', 'Version code': '版本号', 'Min SDK': '最低 SDK', 'Target SDK': '目标 SDK', Architecture: '架构', Type: '类型', Description: '描述', 'File version': '文件版本', Copyright: '版权', Files: '文件数', Uncompressed: '解压后', Runtime: '片长', 'Embedded title': '内嵌标题' };
 
 const formatSize = (bytes) => {
@@ -61,6 +61,7 @@ function subtitle(item) {
     case 'episode': return join(m.title && m.show, episodeCode(m), formatDuration(m.duration));
     case 'video': return join(formatDuration(m.duration), resolution(m), m.video?.toUpperCase());
     case 'audio': return join(m.artist, m.album, formatDuration(m.duration));
+    case 'album': return join(m.artist, m.year, m.tracks && `${m.tracks} 首`, formatDuration(m.duration));
     case 'photo': return join(m.width && `${m.width}×${m.height}`, info.Taken?.slice(0, 10), info.Camera);
     case 'book': case 'document': return join(m.author, info.Pages && `${info.Pages} 页`, formatSize(item.size));
     case 'app': return join(info.Version, info.Package || info.Architecture, formatSize(item.size));
@@ -80,8 +81,8 @@ const REVIEW_REASON = {
 
 function Thumb({ item, size = 18 }) {
   const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [item.id, item.mtime, item.thumb]);
-  if (item.thumb && !failed) return html`<img src=${`/api/files/${item.id}/thumb?v=${item.mtime}-${item.meta?.poster || ''}`} loading="lazy" alt="" onError=${() => setFailed(true)}/>`;
+  useEffect(() => setFailed(false), [item.id, item.version, item.mtime, item.thumb, item.meta?.poster, item.meta?.artworkVersion]);
+  if (item.thumb && !failed) return html`<img src=${`/api/files/${item.id}/thumb?v=${item.version || item.mtime}-${item.meta?.artworkVersion || ''}-${item.meta?.poster || ''}`} loading="lazy" alt="" onError=${() => setFailed(true)}/>`;
   return html`<span class="glyph"><${Icon} name=${kindIcon(item)} size=${size}/></span>`;
 }
 
@@ -162,18 +163,19 @@ function Details({ item, onMatch, onRefresh, onConfirm }) {
     ['类型', KIND_LABEL[m.kind] || KIND_LABEL[item.kind] || item.kind || '文件'],
     !item.dir && ['大小', formatSize(item.size)], ['修改时间', formatDate(item.mtime)],
     m.original && ['原名', m.original], m.author && ['作者', m.author], m.artist && ['艺术家', m.artist], m.album && ['专辑', m.album],
+    m.tracks && ['曲目数', m.tracks], m.albums && ['专辑数', m.albums],
     m.duration && ['时长', formatDuration(m.duration)], m.width && ['分辨率', `${m.width}×${m.height}`],
     m.video && ['编码', join(m.video, m.audio, m.container)], !m.video && m.audio && ['编码', join(m.audio, m.container)],
     m.genres?.length && ['类型标签', m.genres.join(' / ')],
-    m.subtitles?.length && ['内嵌字幕', m.subtitles.map((x) => x.title || x.lang || x.codec).join(' / ')], m.theporndb && ['ThePornDB', html`<a href=${`https://theporndb.net/${m.theporndb}`} target="_blank" rel="noreferrer">${m.theporndb}</a>`], m.tmdb && ['TMDB', html`<a href=${`https://www.themoviedb.org/${m.tmdb}`} target="_blank" rel="noreferrer">${m.tmdb}${m.locked ? '（已锁定）' : ''}</a>`],
+    m.subtitles?.length && ['内嵌字幕', m.subtitles.map((x) => x.title || x.lang || x.codec).join(' / ')], m.match && [m.match.provider === 'tmdb' ? 'TMDB' : 'ThePornDB', html`<a href=${`${m.match.provider === 'tmdb' ? 'https://www.themoviedb.org' : 'https://theporndb.net'}/${m.match.type}/${m.match.id}`} target="_blank" rel="noreferrer">${m.match.type}/${m.match.id}${m.locked ? '（已锁定）' : ''}</a>`],
     ...Object.entries(m.info || {}).map(([k, v]) => [INFO_LABEL[k] || k, v]),
     item.error && ['增强错误', item.error],
   ].filter(Boolean);
-  const canMatch = ['video', 'movie', 'episode', 'show'].includes(m.kind) || item.kind === 'video' || item.dir;
+  const canMatch = ['video', 'movie', 'episode', 'show', 'season'].includes(m.kind) || item.kind === 'video' || m.locked;
   return html`<section class="details">
-    ${m.backdrop && html`<div class="backdrop" style=${{ backgroundImage: `url(/api/files/${item.id}/backdrop)` }}></div>`}
+    ${m.backdrop && html`<div class="backdrop" style=${{ backgroundImage: `url(/api/files/${item.id}/backdrop?v=${item.version || item.mtime}-${m.artworkVersion || ''})` }}></div>`}
     <div class="hero">
-      ${(item.thumb || !item.dir) && html`<div class=${`cover ${posterKind(item) ? 'poster' : ''}`}><${Thumb} item=${item} size=${48}/></div>`}
+      ${(item.thumb || !item.dir) && html`<div class=${`cover ${m.kind === 'album' ? 'album' : posterKind(item) ? 'poster' : ''}`}><${Thumb} item=${item} size=${48}/></div>`}
       <div class="heading">
         <small>${KIND_LABEL[m.kind] || ''}</small>
         <h1>${title(item)}</h1>
@@ -181,7 +183,7 @@ function Details({ item, onMatch, onRefresh, onConfirm }) {
         ${m.summary && html`<p class="summary">${m.summary}</p>`}
         ${m.review && html`<p class="review">${REVIEW_REASON[m.review] || '请确认识别结果。'}</p>`}
         <div class="actions">
-          ${m.review && m.tmdb && html`<button onClick=${onConfirm}>确认无误</button>`}
+          ${m.review && m.match && html`<button onClick=${onConfirm}>确认无误</button>`}
           ${!item.dir && item.play && html`<button disabled=${playing} onClick=${() => setPlaying(true)}><${Icon} name="play"/>播放</button>`}
           ${!item.dir && html`<a class="button" href=${`/api/files/${item.id}/raw?download`}><${Icon} name="download"/>下载</a>`}
           ${!item.dir && !item.play && html`<a class="button ghost" href=${`/api/files/${item.id}/raw`} target="_blank"><${Icon} name="link"/>打开原文件</a>`}
@@ -197,33 +199,43 @@ function Details({ item, onMatch, onRefresh, onConfirm }) {
 
 function MatchDialog({ item, onClose, onDone }) {
   const m = item.meta || {};
-  const [query, setQuery] = useState(m.show || m.title || item.name.replace(/\.[^.]+$/, ''));
-  const [type, setType] = useState(['episode', 'show', 'season'].includes(m.kind) || m.tmdb?.startsWith('tv/') ? 'tv' : 'movie');
+  const [query, setQuery] = useState(m.info?.Code || m.show || m.title || item.name.replace(/\.[^.]+$/, ''));
+  const [provider, setProvider] = useState(m.match?.provider || (m.info?.Code ? 'theporndb' : 'tmdb'));
+  const [type, setType] = useState(['episode', 'show', 'season'].includes(m.kind) || m.match?.type === 'tv' ? 'tv' : 'movie');
   const [results, setResults] = useState([]);
+  const [scope, setScope] = useState(item);
+  const searchVersion = useRef(0);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const search = useCallback(async (event) => {
     event?.preventDefault();
+    const version = ++searchVersion.current;
     setBusy(true); setError('');
-    try { setResults((await api(`/api/files/${item.id}/match?type=${type}&q=${encodeURIComponent(query)}`)).items); } catch (e) { setError(e.message); }
-    setBusy(false);
-  }, [item.id, query, type]);
-  useEffect(() => { search(); }, [type]);
+    try {
+      const data = await api(`/api/files/${item.id}/match?provider=${provider}&type=${provider === 'theporndb' ? 'jav' : type}&q=${encodeURIComponent(query)}`);
+      if (version !== searchVersion.current) return;
+      setResults(data.items); setScope(data.scope || item);
+    } catch (e) { if (version === searchVersion.current) setError(e.message); }
+    if (version === searchVersion.current) setBusy(false);
+  }, [item.id, query, provider, type]);
+  useEffect(() => { search(); }, [provider, type]);
   const choose = async (id) => {
     setBusy(true);
-    try { onDone(await api(`/api/files/${item.id}/match`, { method: id ? 'PUT' : 'DELETE', headers: { 'Content-Type': 'application/json' }, body: id ? JSON.stringify({ tmdb: id }) : undefined })); } catch (e) { setError(e.message); setBusy(false); }
+    try { onDone(await api(`/api/files/${item.id}/match`, { method: id ? 'PUT' : 'DELETE', headers: { 'Content-Type': 'application/json' }, body: id ? JSON.stringify({ match: id }) : undefined })); } catch (e) { setError(e.message); setBusy(false); }
   };
   return html`<div class="overlay" onClick=${(e) => e.target === e.currentTarget && onClose()}>
     <div class="dialog">
       <header><h2>手动匹配</h2><button class="icon-button" onClick=${onClose}><${Icon} name="close"/></button></header>
+      ${(scope.dir || scope.id !== item.id) && html`<p class="hint">匹配将应用于「${scope.name}」中的同一作品文件。</p>`}
       <form onSubmit=${search}>
-        <select value=${type} onChange=${(e) => setType(e.target.value)}><option value="movie">电影</option><option value="tv">剧集</option></select>
+        <select value=${provider} onChange=${(e) => setProvider(e.target.value)}><option value="tmdb">TMDB</option><option value="theporndb">ThePornDB</option></select>
+        ${provider === 'tmdb' && html`<select value=${type} onChange=${(e) => setType(e.target.value)}><option value="movie">电影</option><option value="tv">剧集</option></select>`}
         <input value=${query} onInput=${(e) => setQuery(e.target.value)} placeholder="名称"/>
         <button disabled=${busy}>搜索</button>
       </form>
       ${error && html`<p class="error">${error}</p>`}
-      <div class="candidates">${results.map((r) => html`<button key=${r.id} disabled=${busy} onClick=${() => choose(`${r.type}/${r.id}`)}>
-        ${r.poster ? html`<img src=${`https://image.tmdb.org/t/p/w92${r.poster}`} alt=""/>` : html`<span class="glyph"><${Icon} name="movies"/></span>`}
+      <div class="candidates">${results.map((r) => html`<button key=${`${r.match.provider}/${r.match.type}/${r.match.id}`} disabled=${busy} onClick=${() => choose(r.match)}>
+        ${r.poster ? html`<img src=${r.poster} alt=""/>` : html`<span class="glyph"><${Icon} name="movies"/></span>`}
         <span><strong>${r.title} ${r.year ? `(${r.year})` : ''}</strong><small>${r.original !== r.title ? r.original : ''}</small><small class="clamp">${r.overview}</small></span>
       </button>`)}</div>
       ${m.locked && html`<footer><button class="ghost" disabled=${busy} onClick=${() => choose('')}>解除锁定并自动识别</button></footer>`}
@@ -429,8 +441,12 @@ function App() {
 
   // Refresh the open folder while enrichment is still filling it in.
   const pending = status?.stats.pending || 0;
+  const previousPending = useRef(0);
   useEffect(() => {
-    if (!current?.dir || !pending || searching || loading) return;
+    if (!current?.dir || searching || loading) return;
+    const wasPending = previousPending.current;
+    previousPending.current = pending;
+    if (!pending && !wasPending) return;
     const n = seq.current;
     const count = items.length;
     (async () => {
@@ -442,7 +458,10 @@ function App() {
         children.push(...data.items); more = data.more;
         if (!data.items.length) break;
       } while (more && children.length < count);
+      const detail = await api(`/api/files/${current.id}`);
+      if (n !== seq.current || displayed.current.items.length !== count) return;
       restore.current = position();
+      setCurrent(detail.file); setAncestors(detail.ancestors);
       setItems(children); setMore(more);
     })().catch(() => {});
   }, [pending, status]);
@@ -450,8 +469,15 @@ function App() {
   const refresh = async () => {
     try {
       const updated = await api(`/api/files/${current.id}/refresh`, { method: 'POST' });
-      if (current.dir) load(current.id, false); else setCurrent(updated);
+      if (current.dir) { previousPending.current = 1; load(current.id, false); } else setCurrent(updated);
     } catch (e) { setError(e.message); }
+  };
+
+  const matched = (file) => {
+    // Shared file jobs may finish between status polls. Always perform a final
+    // directory reload after an explicit match, even if pending stayed at zero.
+    if (file.dir) previousPending.current = 1;
+    setMatching(false); setCurrent(file); loadStatus();
   };
 
   const activeRoot = ancestors[0]?.root || current?.root;
@@ -480,14 +506,14 @@ function App() {
       <div class="crumbs">${searching ? html`<span>${Object.values(ISSUES).includes(searching) ? searching : `搜索 “${searching}”`} · ${items.length} 个结果</span>` : [...ancestors, current].filter(Boolean).map((f, i, all) => html`
         ${i > 0 && html`<span class="sep">/</span>`}<button disabled=${i === all.length - 1} onClick=${() => load(f.id)}>${f.parent ? f.name : (roots.find((r) => r.id === f.root)?.name || f.name)}</button>`)}</div>
       ${error && html`<p class="error">${error}</p>`}
-      ${current && !searching && (!current.dir || current.meta?.kind) && html`<${Details} key=${current.id} item=${current} onMatch=${() => setMatching(true)} onRefresh=${refresh}
-        onConfirm=${() => api(`/api/files/${current.id}/match`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tmdb: current.meta.tmdb }) }).then(setCurrent).catch((e) => setError(e.message))}/>`}
-      ${current?.dir && !searching && !current.meta?.kind && html`<div class="toolbar"><span>${current.size} 项</span><button class="ghost small" onClick=${refresh}><${Icon} name="refresh" size=${14}/>重新扫描</button></div>`}
+      ${current && !searching && (!current.dir || current.meta?.kind || current.meta?.locked) && html`<${Details} key=${current.id} item=${current} onMatch=${() => setMatching(true)} onRefresh=${refresh}
+        onConfirm=${() => api(`/api/files/${current.id}/match`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ match: current.meta.match }) }).then(matched).catch((e) => setError(e.message))}/>`}
+      ${current?.dir && !searching && !current.meta?.kind && !current.meta?.locked && html`<div class="toolbar"><span>${current.size} 项</span><button class="ghost small" onClick=${refresh}><${Icon} name="refresh" size=${14}/>重新扫描</button></div>`}
       ${(current?.dir || searching) && html`<${Listing} items=${items} view=${view} onOpen=${load}/>`}
       ${(current?.dir || searching) && !loading && !items.length && html`<p class="empty">${searching ? '没有找到匹配的文件' : '这个文件夹是空的'}</p>`}
       <div ref=${sentinel} class="sentinel">${loading && '加载中…'}</div>
     </main>
-    ${matching && current && html`<${MatchDialog} item=${current} onClose=${() => setMatching(false)} onDone=${(f) => { setMatching(false); setCurrent(f); }}/>`}
+    ${matching && current && html`<${MatchDialog} item=${current} onClose=${() => setMatching(false)} onDone=${matched}/>`}
   </div>`;
 }
 

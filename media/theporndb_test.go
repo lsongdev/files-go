@@ -52,7 +52,7 @@ func TestJAVMatching(t *testing.T) {
 			if err := j.Enrich(context.Background(), &f, m); err != nil {
 				t.Fatal(err)
 			}
-			if m.Review != tc.review || (m.ThePornDB != "") != tc.matched {
+			if m.Review != tc.review || (m.providerID("theporndb") != "") != tc.matched {
 				t.Fatalf("unexpected result: %+v", m)
 			}
 			if tc.matched && (m.Duration != 100 || m.Year != 2024 || m.Poster == "") {
@@ -75,7 +75,7 @@ func TestJAVLive(t *testing.T) {
 	if err := j.Enrich(context.Background(), &store.File{Name: "CAWD-549.mp4", Kind: "video"}, m); err != nil {
 		t.Fatal(err)
 	}
-	if m.ThePornDB == "" {
+	if m.providerID("theporndb") == "" {
 		t.Fatalf("not matched: %+v", m)
 	}
 }

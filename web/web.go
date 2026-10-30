@@ -26,7 +26,7 @@ var version = func() string {
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }()
 
-const csp = "default-src 'self'; script-src 'self' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org; media-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'none'"
+const csp = "default-src 'self'; script-src 'self' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://image.tmdb.org https://thumb.theporndb.net https://cdn.theporndb.net; media-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'none'"
 
 // Handler serves static assets and falls back to index.html for app routes.
 func Handler() http.Handler {

@@ -42,7 +42,7 @@ func TestHLS(t *testing.T) {
 	if err := pipeline.Rematch(ctx, clip); err != nil {
 		t.Fatal(err)
 	}
-	api, apiErr := New(ctx, cfg, st, scanner, pipeline, nil)
+	api, apiErr := New(ctx, cfg, st, scanner, pipeline, nil, nil)
 	if apiErr != nil {
 		t.Fatal(apiErr)
 	}

@@ -46,6 +46,7 @@ func main() {
 		log.Fatal(err)
 	}
 
+	_ = st.CachePrune(ctx, "show:", 30*24*time.Hour)
 	var client *media.TMDB
 	if cfg.TMDB.Key != "" {
 		client = media.NewTMDB(cfg.TMDB.Key, cfg.TMDB.Language, st)
@@ -77,7 +78,7 @@ func main() {
 		&media.Probe{Bin: cfg.FFprobe, Path: resolve},
 		library.Videos(),
 		library.Folders(),
-		&media.JAV{Client: tpdb, Hint: library.Hint},
+		&media.JAV{Client: tpdb, Hint: library.Hint, Store: st},
 		media.Photo{Path: resolve, FFprobe: cfg.FFprobe},
 		media.Document{Path: resolve, PDFInfo: pdfinfo},
 		media.App{Path: resolve},
@@ -89,7 +90,7 @@ func main() {
 	go pipeline.Run(ctx, cfg.Workers)
 	go scanner.Run(ctx, cfg.ScanInterval, pipeline.Wake)
 
-	api, err := server.New(ctx, cfg, st, scanner, pipeline, client)
+	api, err := server.New(ctx, cfg, st, scanner, pipeline, client, tpdb)
 	if err != nil {
 		log.Fatal(err)
 	}

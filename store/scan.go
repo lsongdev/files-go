@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -297,7 +298,7 @@ func (s *Scanner) sync(ctx context.Context, root config.Root, dir File, force bo
 		}
 		info, err := entry.Info()
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("stat %s: %w", entry.Name(), err)
 		}
 		f := File{Root: root.ID, Parent: dir.ID, Name: entry.Name(), Path: path.Join(dir.Path, entry.Name()), Dir: entry.IsDir(), MTime: info.ModTime().UnixMilli()}
 		if f.Dir {
@@ -386,7 +387,7 @@ func (s *Scanner) sync(ctx context.Context, root config.Root, dir File, force bo
 	}
 	upsert, err := tx.PrepareContext(ctx, `INSERT INTO files(root, parent, path, name, dir, size, mtime, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(root, path) DO UPDATE SET parent=excluded.parent, dir=excluded.dir, size=excluded.size,
-			mtime=excluded.mtime, kind=excluded.kind, meta_ver=0
+			mtime=excluded.mtime, kind=excluded.kind, meta_ver=0, revision=files.revision+1
 		RETURNING id`)
 	if err != nil {
 		return nil, err
@@ -401,8 +402,48 @@ func (s *Scanner) sync(ctx context.Context, root config.Root, dir File, force bo
 		ids[f.Name] = id
 	}
 	// The directory row is re-enriched when its contents change (posters, NFO).
-	if _, err := tx.ExecContext(ctx, `UPDATE files SET mtime=?, size=?, meta_ver=0 WHERE id=?`, self.ModTime().UnixMilli(), len(current), dir.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE files SET mtime=?, size=?, meta_ver=0, revision=revision+1 WHERE id=?`, self.ModTime().UnixMilli(), len(current), dir.ID); err != nil {
 		return nil, err
+	}
+	// Re-identify only media whose shared inputs changed. Ordinary additions
+	// in a collection must not reset unrelated subtrees. TV membership is
+	// evidence for the containing Show, including changes inside a season.
+	sidecarChanged, membershipChanged := false, false
+	for _, f := range changed {
+		_, existed := existing[f.Name]
+		if strings.EqualFold(path.Ext(f.Name), ".nfo") || f.Kind == "image" {
+			sidecarChanged = true
+		}
+		if !existed && (f.Dir || f.Kind == "video") {
+			membershipChanged = true
+		}
+	}
+	for _, p := range removed {
+		k := existing[path.Base(p)]
+		kind := s.classify(path.Base(p), k.size)
+		if strings.EqualFold(path.Ext(p), ".nfo") || kind == "image" {
+			sidecarChanged = true
+		}
+		if k.dir || kind == "video" {
+			membershipChanged = true
+		}
+	}
+	hint, base := root.TypeOf(dir.Path)
+	if hint == "tv" && dir.Path != base && (sidecarChanged || membershipChanged) {
+		rel := dir.Path
+		if base != "" {
+			rel = strings.TrimPrefix(rel, base+"/")
+		}
+		show := path.Join(base, strings.SplitN(rel, "/", 2)[0])
+		if _, err := tx.ExecContext(ctx, `UPDATE files SET meta_ver=0,revision=revision+1 WHERE root=? AND dir=0
+			AND kind='video' AND path>? AND path<?`, root.ID, show+"/", show+"0"); err != nil {
+			return nil, err
+		}
+	} else if sidecarChanged {
+		if _, err := tx.ExecContext(ctx, `UPDATE files SET meta_ver=0,revision=revision+1 WHERE parent=? AND dir=0
+			AND kind IN ('video','audio')`, dir.ID); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err

@@ -107,10 +107,10 @@ func (t *Thumbs) Get(ctx context.Context, f store.File, m media.Meta, ref, size 
 	if id, ok := strings.CutPrefix(ref, "file:"); ok {
 		n, _ := strconv.ParseInt(id, 10, 64)
 		other, err := t.store.Get(ctx, n)
-		if err != nil || other.Kind != "image" {
+		if err != nil || (other.Kind != "image" && other.Kind != "video" && other.Kind != "audio") {
 			return "", errNoThumb
 		}
-		return t.Get(ctx, other, media.Meta{}, "self", size)
+		return t.Get(ctx, other, meta(other), "self", size)
 	}
 	sum := sha1.Sum([]byte(fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s\x00%s", f.Root, f.Path, f.MTime, f.Size, ref, size)))
 	if p, ok := strings.CutPrefix(ref, "tmdb:"); ok {

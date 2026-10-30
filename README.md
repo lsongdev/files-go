@@ -7,6 +7,8 @@ then enriches files in the background by type, name and embedded metadata:
 | Files | Enrichment |
 | --- | --- |
 | Movies / TV | release-name parsing, folder layout, `movie.nfo` / `tvshow.nfo`, local `poster.jpg` / `fanart.jpg`, TMDB (cached) |
+| JAV | exact release-code identification through ThePornDB (cached) |
+| Music folders | album tags, album artist, track count, total duration and artwork; CD/Disc folders aggregate into one album |
 | Video / audio | ffprobe: duration, resolution, codecs, tags, embedded cover |
 | Photos | dimensions and EXIF (time, camera, lens, exposure, GPS) |
 | Books / documents | EPUB, MOBI/AZW3, DOCX/XLSX/PPTX, PDF (with `pdfinfo`) |
@@ -37,10 +39,11 @@ upload, rename or delete operations.
 
 ## Design
 
-- **One table.** `files` holds one row per file or folder, with the
-  enrichment result as JSON in the same row (`meta`). A full-text trigram
-  index covers names and titles; a small `cache` table keeps TMDB responses.
-  The index is derived data: an incompatible schema is simply rebuilt.
+- **SQLite.** `files` holds one row per file or folder, with derived JSON
+  metadata (`meta`); FTS covers names and titles. `cache` stores catalog
+  responses and shared show resolutions. `overrides` separately preserves
+  manual matches. Schema upgrades migrate existing data; unsupported versions
+  fail without rebuilding the database.
 - **The table is the queue.** `meta_ver` is the enrichment version a row was
   processed with. Rows below the current version are pending, so changed
   files, new enrichers or configuration changes (TMDB on/off, root types)
@@ -53,7 +56,11 @@ upload, rename or delete operations.
   scans; periodic full scans reconcile missed events. Browsing reads only the index.
 - **Enrichers** share one interface (`Match`, `Enrich`) and run in order on
   the same metadata, so the movie lookup can build on ffprobe's result.
-  Manual TMDB matches are locked and survive re-enrichment.
+  Files identify content through TMDB or ThePornDB. Folders only aggregate
+  file results and local artwork; they never query catalogs. Changed results
+  invalidate their parent for aggregation, with revision checks rejecting stale
+  workers. Shared show matching avoids searching separately for every episode.
+  Manual matches survive re-enrichment, restarts and schema migration.
 - **Identification** scores TMDB candidates on title (exact, partial or
   near), year, popularity and local evidence: the main video's duration
   against the movie runtime, and episode files, highest episode and season
@@ -107,8 +114,8 @@ roots:
 `type: jav` enables ThePornDB identification by exact release code (filename or parent folder),
 with cached metadata and artwork. Similar codes are never accepted automatically.
 
-`type` is a hint for identification. Under `movies`, each folder or loose
-video is looked up as a film; under `tv`, the folders directly below are
+`type` is a hint for identification. Under `movies`, videos are identified
+as films and dedicated folders aggregate their common work; under `tv`, the folders directly below are
 shows, `S01` / `Season 1` folders are seasons, and files are episodes.
 Elsewhere, only release-style names (title, year and a quality tag) are
 looked up, and plain videos stay plain videos.
@@ -153,14 +160,24 @@ GET    /api/hls/{session}/{file}     playlist and on-demand fragments (session k
 DELETE /api/hls/{session}            release playback token; retain cached fragments
 GET    /api/files/{id}/subtitles     subtitle tracks (embedded and external)
 GET    /api/files/{id}/subtitles/{track}.vtt
-GET    /api/files/{id}/match?q=&type=movie|tv     TMDB candidates
-PUT    /api/files/{id}/match         {"tmdb": "movie/123"} lock a match
+GET    /api/files/{id}/match?q=&provider=tmdb|theporndb&type=movie|tv|jav
+PUT    /api/files/{id}/match         {"match":{"provider":"tmdb","type":"movie","id":"123"}}
 DELETE /api/files/{id}/match         unlock and re-identify
 ```
+
+Matches use the same `{provider,type,id}` identity in `meta.match` and candidate
+results. Directory matches apply to their media subtree; matching a file within
+an identified common work targets that work's scope (returned with candidates).
+More specific choices take precedence. Choices remain associated with the same
+root ID and path after deletion/reappearance or removing a root; renames/moves do
+not transfer them. Schema v1 locks are migrated automatically. The old `tmdb`
+request/metadata shape has been replaced.
 
 ## Development
 
 ```sh
 go test ./...
+node web/app_test.cjs
+node web/metadata_test.cjs
 go run . -d .
 ```

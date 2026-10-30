@@ -17,36 +17,41 @@ import (
 // Meta is the enrichment result stored as JSON on the file row. Detailed,
 // type-specific values go into Info as display-ready key/value pairs.
 type Meta struct {
-	Kind      string            `json:"kind,omitempty"` // movie, episode, show, season, video, audio, photo, book, app ...
-	Title     string            `json:"title,omitempty"`
-	Original  string            `json:"original,omitempty"`
-	Year      int               `json:"year,omitempty"`
-	Season    int               `json:"season,omitempty"`
-	Episode   int               `json:"episode,omitempty"`
-	Show      string            `json:"show,omitempty"`
-	Summary   string            `json:"summary,omitempty"`
-	Artist    string            `json:"artist,omitempty"`
-	Album     string            `json:"album,omitempty"`
-	Author    string            `json:"author,omitempty"`
-	Duration  float64           `json:"duration,omitempty"` // seconds
-	Width     int               `json:"width,omitempty"`
-	Height    int               `json:"height,omitempty"`
-	Container string            `json:"container,omitempty"`
-	Video     string            `json:"video,omitempty"` // codec
-	Audio     string            `json:"audio,omitempty"` // codec
-	Depth     int               `json:"depth,omitempty"` // video bit depth
-	Subtitles []Subtitle        `json:"subtitles,omitempty"`
-	Rating    float64           `json:"rating,omitempty"`
-	Genres    []string          `json:"genres,omitempty"`
-	ThePornDB string            `json:"theporndb,omitempty"`
-	TMDB      string            `json:"tmdb,omitempty"` // movie/123, tv/456
-	Locked    bool              `json:"locked,omitempty"`
-	Review    string            `json:"review,omitempty"` // ambiguous or unmatched: worth a manual look
-	Info      map[string]string `json:"info,omitempty"`
+	Kind        string            `json:"kind,omitempty"` // movie, episode, show, season, video, audio, photo, book, app ...
+	Title       string            `json:"title,omitempty"`
+	Original    string            `json:"original,omitempty"`
+	Year        int               `json:"year,omitempty"`
+	Season      int               `json:"season,omitempty"`
+	Episode     int               `json:"episode,omitempty"`
+	Show        string            `json:"show,omitempty"`
+	Summary     string            `json:"summary,omitempty"`
+	Artist      string            `json:"artist,omitempty"`
+	AlbumArtist string            `json:"albumArtist,omitempty"`
+	Tracks      int               `json:"tracks,omitempty"`
+	Albums      int               `json:"albums,omitempty"`
+	Files       int               `json:"files,omitempty"`
+	Series      *Series           `json:"series,omitempty"`
+	Album       string            `json:"album,omitempty"`
+	Author      string            `json:"author,omitempty"`
+	Duration    float64           `json:"duration,omitempty"` // seconds
+	Width       int               `json:"width,omitempty"`
+	Height      int               `json:"height,omitempty"`
+	Container   string            `json:"container,omitempty"`
+	Video       string            `json:"video,omitempty"` // codec
+	Audio       string            `json:"audio,omitempty"` // codec
+	Depth       int               `json:"depth,omitempty"` // video bit depth
+	Subtitles   []Subtitle        `json:"subtitles,omitempty"`
+	Rating      float64           `json:"rating,omitempty"`
+	Genres      []string          `json:"genres,omitempty"`
+	Match       *store.Match      `json:"match,omitempty"`
+	Locked      bool              `json:"locked,omitempty"`
+	Review      string            `json:"review,omitempty"` // ambiguous or unmatched: worth a manual look
+	Info        map[string]string `json:"info,omitempty"`
 	// Poster and Backdrop reference artwork: "self" (frame or embedded cover
 	// of this file), "zip:<entry>", "file:<id>" or "tmdb:<path>".
-	Poster   string `json:"poster,omitempty"`
-	Backdrop string `json:"backdrop,omitempty"`
+	ArtworkVersion string `json:"artworkVersion,omitempty"`
+	Poster         string `json:"poster,omitempty"`
+	Backdrop       string `json:"backdrop,omitempty"`
 }
 
 // Subtitle is an embedded subtitle stream.
@@ -105,20 +110,20 @@ type Pipeline struct {
 	wake      chan struct{}
 
 	mu       sync.Mutex
-	inflight map[int64]bool // sent to a worker and not yet saved
-	paused   time.Time      // set after a transient failure
+	inflight map[int64]bool       // sent to a worker and not yet saved
+	retry    map[int64]retryState // transient failures delay only their own file
 }
 
 // NewPipeline gets its Version from the store for the code version plus a
 // configuration tag (e.g. whether TMDB is enabled), so changing either
 // re-enriches everything in the background.
 func NewPipeline(ctx context.Context, st *store.Store, tag string, enrichers ...Enricher) (*Pipeline, error) {
-	version, err := st.Version(ctx, "v4:"+tag)
+	version, err := st.Version(ctx, "v5:"+tag)
 	if err != nil {
 		return nil, err
 	}
 	return &Pipeline{Version: version, store: st, enrichers: enrichers,
-		hot: make(chan int64, 512), wake: make(chan struct{}, 1), inflight: map[int64]bool{}}, nil
+		hot: make(chan int64, 512), wake: make(chan struct{}, 1), inflight: map[int64]bool{}, retry: map[int64]retryState{}}, nil
 }
 
 // Prioritize moves files a user is looking at to the front of the queue.
@@ -148,7 +153,7 @@ func (p *Pipeline) Run(ctx context.Context, workers int) {
 	jobs := make(chan store.File)
 	results := make(chan store.Result, 64)
 	var wg sync.WaitGroup
-	for range workers {
+	for range max(1, workers) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -156,11 +161,15 @@ func (p *Pipeline) Run(ctx context.Context, workers int) {
 				result, err := p.Enrich(ctx, f)
 				if err != nil { // transient: leave it pending and back off
 					p.mu.Lock()
-					p.paused = time.Now().Add(5 * time.Minute)
+					retry := p.retry[f.ID]
+					retry.attempts++
+					retry.revision = f.Revision
+					retry.after = time.Now().Add(min(5*time.Minute, 5*time.Second*time.Duration(1<<min(retry.attempts-1, 6))))
+					p.retry[f.ID] = retry
 					delete(p.inflight, f.ID)
 					p.mu.Unlock()
 					if ctx.Err() == nil {
-						log.Printf("enrichment paused: %v", err)
+						log.Printf("enrichment retry for %s: %v", f.Path, err)
 					}
 					continue
 				}
@@ -183,6 +192,11 @@ func (p *Pipeline) Run(ctx context.Context, workers int) {
 func (p *Pipeline) feed(ctx context.Context, jobs chan<- store.File) {
 	send := func(f store.File) bool {
 		p.mu.Lock()
+		retry := p.retry[f.ID]
+		if retry.revision == f.Revision && time.Now().Before(retry.after) {
+			p.mu.Unlock()
+			return true
+		}
 		busy := p.inflight[f.ID]
 		p.inflight[f.ID] = true
 		p.mu.Unlock()
@@ -198,16 +212,6 @@ func (p *Pipeline) feed(ctx context.Context, jobs chan<- store.File) {
 	}
 	var cursor store.Cursor
 	for ctx.Err() == nil {
-		p.mu.Lock()
-		wait := time.Until(p.paused)
-		p.mu.Unlock()
-		if wait > 0 {
-			select {
-			case <-ctx.Done():
-			case <-time.After(wait):
-			}
-			continue
-		}
 		select {
 		case id := <-p.hot:
 			if f, err := p.store.Get(ctx, id); err == nil && f.MetaVer != p.Version {
@@ -225,8 +229,13 @@ func (p *Pipeline) feed(ctx context.Context, jobs chan<- store.File) {
 				select { // nothing pending at all
 				case <-ctx.Done():
 				case <-p.wake:
-				case <-time.After(time.Minute):
+				case <-time.After(time.Second):
 				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(50 * time.Millisecond):
 			}
 			cursor = store.Cursor{} // start over to pick up rows changed behind the cursor
 			continue
@@ -246,15 +255,17 @@ func (p *Pipeline) save(ctx context.Context, results <-chan store.Result) {
 		if len(batch) == 0 {
 			return
 		}
-		if err := p.store.SaveResults(context.WithoutCancel(ctx), batch); err != nil {
+		if err := p.store.SaveResults(context.WithoutCancel(ctx), batch); err != nil && !errors.Is(err, store.ErrStale) {
 			log.Printf("save enrichment: %v", err)
 		}
 		p.mu.Lock()
 		for _, r := range batch {
 			delete(p.inflight, r.ID)
+			delete(p.retry, r.ID)
 		}
 		p.mu.Unlock()
 		batch = batch[:0]
+		p.Wake()
 	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -276,11 +287,24 @@ func (p *Pipeline) save(ctx context.Context, results <-chan store.Result) {
 
 // Enrich runs all matching enrichers for one file.
 func (p *Pipeline) Enrich(ctx context.Context, f store.File) (store.Result, error) {
-	m := &Meta{}
-	var previous Meta
-	if len(f.Meta) > 0 && json.Unmarshal(f.Meta, &previous) == nil && previous.Locked {
-		m.Locked, m.TMDB = true, previous.TMDB // manual matches survive re-enrichment
+	var choice *store.Match
+	if f.Dir || f.Kind == "video" {
+		var err error
+		choice, err = p.store.Match(ctx, f)
+		if err != nil {
+			return store.Result{}, err
+		}
+		if f.Dir && choice != nil {
+			owner, err := p.store.MatchOwner(ctx, f)
+			if err != nil {
+				return store.Result{}, err
+			}
+			if owner.ID != f.ID {
+				choice = nil
+			} // inherited directory locks are derived from their members
+		}
 	}
+	m := &Meta{Match: choice, Locked: choice != nil}
 	var failures []string
 	for _, e := range p.enrichers {
 		if !e.Match(&f) {
@@ -293,7 +317,7 @@ func (p *Pipeline) Enrich(ctx context.Context, f store.File) (store.Result, erro
 			failures = append(failures, err.Error())
 		}
 	}
-	result := store.Result{ID: f.ID, Kind: f.Kind, Version: p.Version, Err: strings.Join(failures, "; ")}
+	result := store.Result{ID: f.ID, Revision: f.Revision, Kind: f.Kind, Version: p.Version, Err: strings.Join(failures, "; ")}
 	if !m.empty() {
 		result.Meta, _ = json.Marshal(m)
 		if m.Title != "" && m.Title != f.Name {
@@ -309,5 +333,7 @@ func (p *Pipeline) Rematch(ctx context.Context, f store.File) error {
 	if err != nil {
 		return err
 	}
-	return p.store.SaveResults(ctx, []store.Result{result})
+	err = p.store.SaveResults(ctx, []store.Result{result})
+	p.Wake()
+	return err
 }
