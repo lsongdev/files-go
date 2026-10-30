@@ -117,7 +117,7 @@ type Pipeline struct {
 // configuration tag (e.g. whether TMDB is enabled), so changing either
 // re-enriches everything in the background.
 func NewPipeline(ctx context.Context, st *store.Store, tag string, enrichers ...Enricher) (*Pipeline, error) {
-	version, err := st.Version(ctx, "v8:"+tag)
+	version, err := st.Version(ctx, "v9:"+tag)
 	if err != nil {
 		return nil, err
 	}

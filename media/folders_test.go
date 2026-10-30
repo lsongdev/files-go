@@ -72,9 +72,8 @@ func TestFoldersAggregateWithoutOnlineLookups(t *testing.T) {
 			if m.Kind != "" || m.Match != nil {
 				t.Fatalf("mixed folder became a movie: %+v", m)
 			}
-			first, _ := st.ByPath(ctx, "r", "Mix/a.mkv")
-			if m.Poster != fmt.Sprintf("file:%d", first.ID) {
-				t.Fatalf("mixed folder representative artwork: %+v", m)
+			if m.Poster != "" {
+				t.Fatalf("a collection of different works borrowed a member's cover: %+v", m)
 			}
 		case "Album":
 			if m.Kind != "album" || m.Title != "Album" || m.Artist != "Various Artists" || m.Duration != 120 || m.Tracks != 2 || m.Info["Track"] != "" {

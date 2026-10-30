@@ -20,7 +20,9 @@ type member struct {
 
 // Enrich only reads the index and local artwork references. Identity, title,
 // synopsis and album tags come from completed file results, never an online
-// directory lookup. Stable child order makes representative artwork repeatable.
+// directory lookup. A folder shows a member's artwork only when it is that
+// work (a movie, show, season or album): one cover cannot stand for a
+// collection of different works. Local poster/folder images always apply.
 //
 // Movies and albums need every member to agree, so a collection never takes
 // the identity of whichever file finished first. A show only needs its
@@ -43,7 +45,6 @@ func (d folders) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	members := 0
 	allDiscs := true
 	files, showFiles, extraFiles := 0, 0, 0
-	representative := ""
 	for _, child := range children {
 		var cm Meta
 		if len(child.Meta) > 0 {
@@ -52,9 +53,6 @@ func (d folders) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 			}
 		}
 		entry := member{child, cm}
-		if representative == "" && (child.Kind == "video" && !isExtra(child.Name) || child.Kind == "audio" || child.Dir && cm.Files > 0) {
-			representative = memberArtwork(entry)
-		}
 		showMember := child.Dir && cm.Series != nil && (cm.Kind == "season" || cm.Kind == "show" || cm.Kind == "episode")
 		if child.Kind == "video" && !isExtra(child.Name) || child.Kind == "audio" || showMember {
 			members++
@@ -126,9 +124,6 @@ func (d folders) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 		m.Match = choice // keep a persistent choice visible even while files are pending/missing
 	}
 	m.Locked = m.Match != nil && ((choice != nil && *choice == *m.Match) || (members > 0 && lockedMembers))
-	if m.Poster == "" {
-		m.Poster = representative
-	}
 	m.Files = files
 	return d.artwork(ctx, f.ID, m)
 }
@@ -246,13 +241,15 @@ func (d folders) album(m *Meta, tracks, albums []member, allDiscs bool) {
 		} else {
 			m.Tracks++
 		}
-		if m.Poster == "" {
-			m.Poster = memberArtwork(entry)
-		}
 	}
 	if !consistent {
-		m.Albums = len(albums)
+		m.Albums = len(albums) // an artist or compilation folder: no single cover
 		return
+	}
+	for _, entry := range entries {
+		if m.Poster = memberArtwork(entry); m.Poster != "" {
+			break
+		}
 	}
 	m.Kind, m.Title, m.Album, m.Artist, m.AlbumArtist, m.Year = "album", name, name, artist, artist, year
 }
