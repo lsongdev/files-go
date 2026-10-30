@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/lsongdev/files-go/config"
@@ -140,5 +141,90 @@ func TestAlbumAggregationIncludesEveryTrack(t *testing.T) {
 	}
 	if m.Kind != "album" || m.Tracks != 513 || m.Duration != 513 {
 		t.Fatalf("truncated album: %+v", m)
+	}
+}
+
+// Layouts from a real TV library: specials without episode numbers, a
+// soundtrack folder, per-episode release folders with promo clips, and season
+// names that are not plain "Season N".
+func TestShowFoldersTolerateExtras(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	videos := []string{
+		"TV/Show/S01/Show.S01E01.mkv", "TV/Show/S01/Show.S01E02.mkv", "TV/Show/S01/Show.S01.Prequel.mp4",
+		"TV/Show/S02/Show.S02E01.1080p/Show.S02E01.1080p.mkv", "TV/Show/S02/Show.S02E01.1080p/RARBG.mp4",
+		"TV/Show/S02/Show.S02E02.1080p/Show.S02E02.1080p.mkv",
+		"TV/Show/生活大爆炸 第十季BT全/Show.S10E01.mp4",
+		"TV/Show/Show.The.Movie.2009.mkv",
+		"TV/Show/Mixed/Show.S03E01.mkv", "TV/Show/Mixed/Other.S01E01.mkv",
+		"Downloads/Show.S01E05.mkv", "Downloads/holiday.mp4", "Downloads/party.mp4",
+	}
+	for _, name := range append(videos, "TV/Show/mp3/theme.mp3") {
+		p := filepath.Join(root, name)
+		os.MkdirAll(filepath.Dir(p), 0755)
+		os.WriteFile(p, []byte("x"), 0600)
+	}
+	st, err := store.Open(filepath.Join(t.TempDir(), "files.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfgRoot := config.Root{ID: "r", Path: root, Types: map[string]string{"TV": "tv"}}
+	scanner := store.NewScanner(st, []config.Root{cfgRoot}, nil, Classify)
+	if err := scanner.Scan(ctx, "r", false); err != nil {
+		t.Fatal(err)
+	}
+	library := &Library{Store: st, Open: scanner.Open, Hint: func(f store.File) (string, string) { return cfgRoot.TypeOf(f.Path) }}
+	pipeline, _ := NewPipeline(ctx, st, "shows", library.Folders())
+	show := &Series{Title: "Show", Year: 2015, Poster: "tmdb:/show.jpg"}
+	other := &Series{Title: "Other"}
+	for _, name := range videos {
+		f, _ := st.ByPath(ctx, "r", name)
+		n := ParseName(f.Name)
+		m := Meta{Kind: "video"}
+		if n.Episode > 0 {
+			m = Meta{Kind: "episode", Season: n.Season, Episode: n.Episode, Title: fmt.Sprintf("Episode %d", n.Episode), Series: show,
+				Match: &store.Match{Provider: "tmdb", Type: "tv", ID: "1"}}
+			if strings.HasPrefix(f.Name, "Other") {
+				m.Series, m.Match = other, &store.Match{Provider: "tmdb", Type: "tv", ID: "2"}
+			}
+		}
+		data, _ := json.Marshal(m)
+		if err := st.SaveResults(ctx, []store.Result{{ID: f.ID, Revision: f.Revision, Kind: f.Kind, Meta: data, Version: pipeline.Version}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	get := func(name string) Meta {
+		f, _ := st.ByPath(ctx, "r", name)
+		if err := pipeline.Rematch(ctx, f); err != nil {
+			t.Fatal(err)
+		}
+		f, _ = st.Get(ctx, f.ID)
+		var m Meta
+		json.Unmarshal(f.Meta, &m)
+		return m
+	}
+	if m := get("TV/Show/S01"); m.Kind != "season" || m.Season != 1 || m.Title != "Show" {
+		t.Errorf("season with an unnumbered special: %+v", m)
+	}
+	if m := get("TV/Show/S02/Show.S02E01.1080p"); m.Kind != "episode" || m.Season != 2 || m.Episode != 1 || m.Title != "Episode 1" {
+		t.Errorf("episode release folder with a promo clip: %+v", m)
+	}
+	get("TV/Show/S02/Show.S02E02.1080p")
+	if m := get("TV/Show/S02"); m.Kind != "season" || m.Season != 2 || m.Files != 3 {
+		t.Errorf("season of episode folders: %+v", m)
+	}
+	if m := get("TV/Show/生活大爆炸 第十季BT全"); m.Kind != "season" || m.Season != 10 {
+		t.Errorf("Chinese season name: %+v", m)
+	}
+	if m := get("TV/Show/Mixed"); m.Kind != "" || m.Match != nil {
+		t.Errorf("two different shows are not one: %+v", m)
+	}
+	get("TV/Show/mp3")
+	if m := get("TV/Show"); m.Kind != "show" || m.Title != "Show" || m.Match == nil || m.Match.ID != "1" || m.Poster != "tmdb:/show.jpg" {
+		t.Errorf("show with specials, a movie, a soundtrack and a mixed folder: %+v", m)
+	}
+	if m := get("Downloads"); m.Kind != "" {
+		t.Errorf("one episode among other videos outside a TV library: %+v", m)
 	}
 }

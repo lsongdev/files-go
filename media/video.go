@@ -265,6 +265,8 @@ func (e evidence) fit(it Item) float64 {
 	switch {
 	case e.Duration > 0 && it.Runtime > 0:
 		switch diff := abs(int(e.Duration/60) - it.Runtime); {
+		case diff <= 3:
+			return .2
 		case diff <= 10:
 			return .15
 		case diff > 30:
@@ -282,8 +284,9 @@ func (e evidence) fit(it Item) float64 {
 	return 0
 }
 
-// popularity breaks ties between equally named titles, at most 0.1.
-func popularity(p float64) float64 { return min(.1, math.Log10(1+p)/20) }
+// popularity breaks ties between equally named titles, at most 0.15: a
+// well-known film over an obscure namesake with the same year and runtime.
+func popularity(p float64) float64 { return min(.15, math.Log10(1+p)/10) }
 
 // find resolves a TMDB item: a locked or known id is fetched directly,
 // otherwise the best search result scoring at least 0.8 on title, year,
@@ -313,13 +316,21 @@ func (l *Library) find(ctx context.Context, m *Meta, kind, title string, year in
 	if title == "" {
 		return nil, nil
 	}
-	candidates, err := l.rank(ctx, kind, title, year, ev)
-	if err == nil && year > 0 && (len(candidates) == 0 || candidates[0].score < .8) {
-		// The year in names and NFOs is often off; try again without it.
-		candidates, err = l.rank(ctx, kind, title, 0, ev)
-	}
-	if err != nil {
-		return nil, transient(err)
+	var candidates []candidate
+	for _, query := range queryVariants(title) {
+		var err error
+		candidates, err = l.rank(ctx, kind, query, year, false, ev)
+		if err == nil && year > 0 && (len(candidates) == 0 || candidates[0].score < .8) {
+			// The year in names and NFOs is often off; search without it.
+			// An agreeing year still counts, so remakes do not tie.
+			candidates, err = l.rank(ctx, kind, query, year, true, ev)
+		}
+		if err != nil {
+			return nil, transient(err)
+		}
+		if len(candidates) > 0 && candidates[0].score >= .8 {
+			break
+		}
 	}
 	if len(candidates) == 0 || candidates[0].score < .8 {
 		return nil, nil
@@ -335,36 +346,65 @@ type candidate struct {
 	score float64
 }
 
-// rank searches TMDB and orders the results by score, best first.
-func (l *Library) rank(ctx context.Context, kind, title string, year int, ev evidence) ([]candidate, error) {
-	items, err := l.TMDB.Search(ctx, kind, title, year)
+// rank searches TMDB and orders the results by score, best first. Details
+// carry runtime, episode counts and alternative titles; they are fetched for
+// the best scored candidates and for TMDB's own leading results, which may
+// have matched an alternative title the search results do not list.
+// With anyYear the search ignores the year and only an agreeing year counts.
+func (l *Library) rank(ctx context.Context, kind, title string, year int, anyYear bool, ev evidence) ([]candidate, error) {
+	searchYear := year
+	if anyYear {
+		searchYear = 0
+	}
+	items, err := l.TMDB.Search(ctx, kind, title, searchYear)
 	if err != nil {
 		return nil, err
 	}
+	score := func(it Item) float64 {
+		s := matchScore(title, 0, append([]string{it.Title, it.Original}, it.Aliases...), 0)
+		// Alternative titles include loose regional translations shared by
+		// unrelated works, so they confirm a candidate rather than equal it.
+		s = max(s, matchScore(title, 0, it.Alternates, 0)-.1)
+		if y := yearScore(year, it.Year); anyYear {
+			s += max(0, y)
+		} else {
+			s += y
+		}
+		return s + popularity(it.Popularity)
+	}
 	var candidates []candidate
 	for _, it := range items {
-		score := matchScore(title, year, append([]string{it.Title, it.Original}, it.Aliases...), it.Year) + popularity(it.Popularity)
-		if score >= .55 { // partial title matches may still win on evidence
-			candidates = append(candidates, candidate{it, score})
+		if s := score(it); s >= .55 || it.lead { // partial title matches may still win on evidence
+			candidates = append(candidates, candidate{it, s})
 		}
 	}
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
-	// Details carry runtime and episode counts; fetch them for the leading
-	// candidates when there is evidence to compare, else only for the best.
 	n := 1
 	if !ev.empty() {
 		n = 4
 	}
-	top := candidates[:min(n, len(candidates))]
-	for i := range top {
-		details, err := l.TMDB.Details(ctx, kind, top[i].item.ID)
+	var ranked []candidate
+	for i, c := range candidates {
+		if i >= n && !c.item.lead {
+			if c.score >= .55 {
+				ranked = append(ranked, c) // still a runner-up for ambiguity
+			}
+			continue
+		}
+		details, err := l.TMDB.Details(ctx, kind, c.item.ID)
+		if tmdb.IsNotFound(err) {
+			continue // removed from the catalog since it was indexed for search
+		}
 		if err != nil {
 			return nil, err
 		}
-		top[i].item, top[i].score = details, top[i].score+ev.fit(details)
+		details.Aliases = append(details.Aliases, c.item.Aliases...)
+		if s := score(details); s >= .55 {
+			ranked = append(ranked, candidate{details, s + ev.fit(details)})
+		}
 	}
-	sort.SliceStable(top, func(i, j int) bool { return top[i].score > top[j].score })
-	return candidates, nil
+	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+	return ranked, nil
 }
 
 // showEvidence counts the episode files below a show folder.

@@ -23,7 +23,7 @@ func (l *Library) resolveShow(ctx context.Context, m *Meta, title string, year i
 		return nil, "", nil
 	}
 	input, _ := json.Marshal([]any{title, year, ev, m.Match, m.Locked, l.TMDB.client.Language()})
-	key := fmt.Sprintf("show:v1:%x", sha256.Sum256(input))
+	key := fmt.Sprintf("show:v2:%x", sha256.Sum256(input))
 	l.mu.Lock()
 	if l.shows == nil {
 		l.shows = make(map[string]*showFlight)

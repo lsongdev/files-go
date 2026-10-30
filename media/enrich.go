@@ -117,7 +117,7 @@ type Pipeline struct {
 // configuration tag (e.g. whether TMDB is enabled), so changing either
 // re-enriches everything in the background.
 func NewPipeline(ctx context.Context, st *store.Store, tag string, enrichers ...Enricher) (*Pipeline, error) {
-	version, err := st.Version(ctx, "v6:"+tag)
+	version, err := st.Version(ctx, "v7:"+tag)
 	if err != nil {
 		return nil, err
 	}
@@ -282,8 +282,12 @@ func (p *Pipeline) save(ctx context.Context, results <-chan store.Result) {
 	}
 }
 
-// Enrich runs all matching enrichers for one file.
+// Enrich runs all matching enrichers for one file. Empty files, e.g. cover
+// placeholders a scraper never filled, have nothing to read.
 func (p *Pipeline) Enrich(ctx context.Context, f store.File) (store.Result, error) {
+	if !f.Dir && f.Size == 0 {
+		return store.Result{ID: f.ID, Revision: f.Revision, Kind: f.Kind, Version: p.Version}, nil
+	}
 	var choice *store.Match
 	if f.Dir || f.Kind == "video" {
 		var err error

@@ -71,6 +71,8 @@ export function createPlayer(container, item, onStatus) {
     if (media.error && !fallback()) onStatus?.('这个文件在当前浏览器里无法播放');
   });
   listen('playing', () => { starting = false; onStatus?.(''); });
+  // Autoplay may be blocked, so a loaded source also ends the start-up phase.
+  listen('canplay', () => { starting = false; });
   // Reset the MSE loader on a distant seek. With independent discontinuities,
   // hls.js can otherwise keep reloading an old fragment after a native seek.
   listen('seeking', () => {

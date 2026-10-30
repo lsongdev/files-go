@@ -63,10 +63,13 @@ upload, rename or delete operations.
   workers. Shared show matching avoids searching separately for every episode.
   Manual matches survive re-enrichment, restarts and schema migration.
 - **Identification** scores TMDB candidates on title (exact, partial or
-  near), year, popularity and local evidence: the main video's duration
-  against the movie runtime, and episode files, highest episode and season
-  against the show's totals. NFO ids are trusted unless the files contradict
-  them. Close calls, contradictions and misses are listed for review.
+  near, including TMDB's alternative titles such as romanizations), year,
+  popularity and local evidence: the main video's duration against the movie
+  runtime, and episode files, highest episode and season against the show's
+  totals. TMDB's own leading results are verified against their details even
+  when no listed title matches. A search without the year still rewards an
+  agreeing year. NFO ids are trusted unless the files contradict them. Close
+  calls, contradictions and misses are listed for review.
 
 ```
 config/   configuration

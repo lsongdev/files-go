@@ -1,6 +1,9 @@
 package media
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseName(t *testing.T) {
 	tests := []struct {
@@ -23,7 +26,8 @@ func TestParseName(t *testing.T) {
 		{"DC.League.of.Super-Pets.2022.mkv", "DC League of Super-Pets", 2022, 0, 0, "", ""},
 		{"The.Legend.of.1900.1998.1080p.mkv", "The Legend of 1900", 1998, 0, 0, "1080p", ""},
 		{"Rage.2016-720p.mp4", "Rage", 2016, 0, 0, "720p", ""},
-		{"One.Flew.Over.the.Cuckoo's.Nest-1975-1976.mkv", "One Flew Over the Cuckoo's Nest-1975", 1976, 0, 0, "", ""},
+		{"One.Flew.Over.the.Cuckoo's.Nest-1975-1976.mkv", "One Flew Over the Cuckoo's Nest", 1975, 0, 0, "", ""},
+		{"Peppa.Pig.S07E01E02E03E04E05.1080p.NICK.WEB-DL.AAC2.0.x264-BTN.mp4", "Peppa Pig", 0, 7, 1, "1080p", "WEB-DL"},
 		{"Miss.Hong.Kong.Pageant.2015.HD720P.X264.AAC.Cantonese.mp4", "Miss Hong Kong Pageant", 2015, 0, 0, "", ""},
 	}
 	for _, tt := range tests {
@@ -35,9 +39,15 @@ func TestParseName(t *testing.T) {
 }
 
 func TestSeasonAndEpisodeNumbers(t *testing.T) {
-	for name, want := range map[string]int{"Season 2": 2, "S03": 3, "第4季": 4, "season_10": 10} {
+	for name, want := range map[string]int{"Season 2": 2, "S03": 3, "第4季": 4, "season_10": 10,
+		"生活大爆炸 第十季BT全": 10, "第二十三季": 23, "Show.S03.1080p.BluRay": 3, "Show Season 4 [1080p]": 4} {
 		if got, ok := SeasonNumber(name); !ok || got != want {
 			t.Errorf("SeasonNumber(%q) = %d, %v", name, got, ok)
+		}
+	}
+	for _, name := range []string{"Sherlock S1-S4", "Show S01 & S02", "Season 1-4", "Better.Call.Saul.S02E06.1080p", "Mr. Robot", "Fear the Walking Dead"} {
+		if n, ok := SeasonNumber(name); ok {
+			t.Errorf("SeasonNumber(%q) = %d, want none", name, n)
 		}
 	}
 	if _, ok := SeasonNumber("Specials and Extras"); ok {
@@ -78,6 +88,25 @@ func TestMatchScore(t *testing.T) {
 	}
 	if s := matchScore("Alien", 0, []string{"Aliens"}, 0); s != .6 {
 		t.Errorf("contained title = %v", s)
+	}
+	for want, titles := range map[string][]string{
+		"Walking Dead":          {"The Walking Dead"},
+		"Love Death and Robots": {"Love, Death & Robots"},
+		"Kuiba II":              {"Kuiba 2"},
+		"Paranormal Activity 1": {"Paranormal Activity"},
+	} {
+		if s := matchScore(want, 0, titles, 0); s != .8 {
+			t.Errorf("matchScore(%q, %q) = %v", want, titles, s)
+		}
+	}
+	if s := matchScore("Dragon", 0, []string{"Dragonheart 3: The Sorcerer's Curse"}, 0); s >= .55 {
+		t.Errorf("a short title inside a long one = %v", s)
+	}
+	if got := queryVariants("DespicableMe II"); strings.Join(got, "|") != "DespicableMe II|Despicable Me II|Despicable Me 2" {
+		t.Errorf("queryVariants = %q", got)
+	}
+	if got := queryVariants("Mad Detective (Sun taam"); got[1] != "Mad Detective" {
+		t.Errorf("queryVariants = %q", got)
 	}
 	if s := matchScore("Dune", 2021, []string{"Dune"}, 1984); s >= .8 {
 		t.Errorf("wrong year accepted: %v", s)

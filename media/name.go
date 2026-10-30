@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Name is what a release-style filename says about a movie or episode.
@@ -19,7 +20,8 @@ type Name struct {
 }
 
 var (
-	episodePattern = regexp.MustCompile(`(?i)(?:\bS(\d{1,2})[ ._-]*E(\d{1,3})\b|\b(\d{1,2})x(\d{1,3})\b)`)
+	// Multi-episode files ("S07E01E02E03") are named after their first episode.
+	episodePattern = regexp.MustCompile(`(?i)(?:\bS(\d{1,2})[ ._-]*E(\d{1,3})(?:[ ._-]*E\d{1,3})*\b|\b(\d{1,2})x(\d{1,3})\b)`)
 	yearPattern    = regexp.MustCompile(`(?:^|[\s(\[\-])((?:19|20)\d{2})`)
 	bracketPattern = regexp.MustCompile(`\[[^\]]*\]|【[^】]*】`)
 	spacePattern   = regexp.MustCompile(`\s+`)
@@ -27,7 +29,11 @@ var (
 	resolutionTag  = regexp.MustCompile(`(?i)\b(2160p|1080p|1080i|720p|576p|480p|4k)\b`)
 	sourceTag      = regexp.MustCompile(`(?i)\b(blu-?ray|bdrip|web-?dl|webrip|hdtv|dvdrip|remux|uhd)\b`)
 	codecTag       = regexp.MustCompile(`(?i)\b(x26[45]|h\.?26[45]|hevc|av1)\b`)
-	seasonDir      = regexp.MustCompile(`(?i)^(?:s|season)[ ._-]*(\d{1,2})$|^第\s*(\d{1,2})\s*季$`)
+	yearRange      = regexp.MustCompile(`(?:^|[\s(\[-])((?:19|20)\d{2})\s*-\s*$`)
+	seasonDir      = regexp.MustCompile(`(?i)^(?:s|season)[ ._-]*(\d{1,2})$`)
+	seasonTag      = regexp.MustCompile(`(?i)(?:^|[ ._\[(-])(?:s|season)[ ._-]?(\d{1,2})([ ._\])-]|$)`)
+	seasonRange    = regexp.MustCompile(`^[ ._]*[-~&]`)
+	chineseSeason  = regexp.MustCompile(`第\s*([0-9]{1,2}|[一二三四五六七八九十]{1,3})\s*季`)
 	episodeOnly    = regexp.MustCompile(`(?i)(?:^|[ ._-])(?:E|EP)[ ._-]?(\d{1,4})(?:$|[ ._-])|^0*(\d{1,4})$|第\s*(\d{1,4})\s*集`)
 	ordinalPrefix  = regexp.MustCompile(`^\d{1,3}\s+([\p{Han}])`)
 	versionSuffix  = regexp.MustCompile(`(?i)\s+(?:(?:U\s+)?DC|HR|HD|(?:\d+(?:st|nd|rd|th)\s+)?Anniversary(?:\s+Special\s+Edition)?|Ultimate\s+Edition|Special\s+Edition)$`)
@@ -69,6 +75,11 @@ func ParseName(filename string) Name {
 		m := years[len(years)-1]
 		n.Year, _ = strconv.Atoi(s[m[2]:m[3]])
 		s = s[:m[2]]
+		// A range such as "Nest-1975-1976" starts with the release year.
+		if r := yearRange.FindStringSubmatchIndex(s); r != nil {
+			n.Year, _ = strconv.Atoi(s[r[2]:r[3]])
+			s = s[:r[2]]
+		}
 	}
 	if m := junkPattern.FindStringIndex(s); m != nil {
 		s = s[:m[0]]
@@ -85,14 +96,62 @@ func (n Name) LooksLikeRelease() bool {
 	return n.Title != "" && n.Year > 0 && (n.Resolution != "" || n.Source != "" || n.Codec != "")
 }
 
-// SeasonNumber parses folder names like "Season 2", "S02" or "第2季".
+// SeasonNumber parses folder names like "Season 2", "S02", "第2季",
+// "生活大爆炸 第十季BT全" or a season pack "Show.S03.1080p.BluRay". A range
+// such as "S01-S04" or two different seasons is a collection, not a season.
 func SeasonNumber(dir string) (int, bool) {
-	m := seasonDir.FindStringSubmatch(strings.TrimSpace(dir))
-	if m == nil {
+	dir = strings.TrimSpace(dir)
+	if m := seasonDir.FindStringSubmatch(dir); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return n, true
+	}
+	if m := chineseSeason.FindAllStringSubmatch(dir, -1); len(m) == 1 {
+		return chineseNumber(m[0][1])
+	}
+	season := 0
+	for _, m := range seasonTag.FindAllStringSubmatchIndex(dir, -1) {
+		n, _ := strconv.Atoi(dir[m[2]:m[3]])
+		if season != 0 && n != season || seasonRange.MatchString(dir[m[3]:]) {
+			return 0, false
+		}
+		season = n
+	}
+	return season, season > 0
+}
+
+// chineseNumber parses 1–99 in digits or Chinese numerals (十, 十二, 二十三).
+func chineseNumber(s string) (int, bool) {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n, n > 0
+	}
+	digits := map[rune]int{'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
+	r := []rune(s)
+	tens, i := 0, 0
+	for i < len(r) && r[i] != '十' {
+		i++
+	}
+	switch {
+	case i == len(r): // no 十: a single digit
+		if len(r) != 1 {
+			return 0, false
+		}
+		return digits[r[0]], digits[r[0]] > 0
+	case i == 0:
+		tens = 1
+	case i == 1 && digits[r[0]] > 0:
+		tens = digits[r[0]]
+	default:
 		return 0, false
 	}
-	n, _ := strconv.Atoi(m[1] + m[2])
-	return n, true
+	switch rest := r[i+1:]; len(rest) {
+	case 0:
+		return tens * 10, true
+	case 1:
+		if digits[rest[0]] > 0 {
+			return tens*10 + digits[rest[0]], true
+		}
+	}
+	return 0, false
 }
 
 // EpisodeNumber parses names that carry only an episode number, e.g.
@@ -132,34 +191,97 @@ func normalize(s string) string {
 	return nonWord.ReplaceAllString(accents.Replace(strings.ToLower(s)), "")
 }
 
+var (
+	romanNumerals = map[string]string{"ii": "2", "iii": "3", "iv": "4", "v": "5", "vi": "6", "vii": "7", "viii": "8", "ix": "9", "x": "10"}
+	articles      = map[string]bool{"the": true, "a": true, "an": true}
+	camelBoundary = regexp.MustCompile(`(\p{Ll})(\p{Lu})`)
+	romanToken    = regexp.MustCompile(`(?i)\b(?:ii|iii|iv|vi|vii|viii|ix|x)\b`)
+	trailingOne   = regexp.MustCompile(`(?i)\s+(?:1|i)$`)
+	parenthesized = regexp.MustCompile(`\s*\([^)]*\)?`)
+)
+
+// titleKey normalizes a title for catalog comparison beyond normalize: a
+// leading article, "&" or "+" for "and", Roman sequel numbers and a trailing
+// "1" do not distinguish titles ("Walking Dead", "Love, Death & Robots",
+// "Kuiba II", "Paranormal Activity 1").
+func titleKey(s string) string {
+	s = strings.NewReplacer("&", " and ", "+", " and ").Replace(accents.Replace(strings.ToLower(s)))
+	tokens := strings.FieldsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) })
+	if len(tokens) > 1 && articles[tokens[0]] {
+		tokens = tokens[1:]
+	}
+	for i, t := range tokens {
+		if n, ok := romanNumerals[t]; ok && i > 0 {
+			tokens[i] = n
+		}
+	}
+	if len(tokens) > 1 && tokens[len(tokens)-1] == "1" {
+		tokens = tokens[:len(tokens)-1]
+	}
+	return strings.Join(tokens, "")
+}
+
+// queryVariants are alternative search queries for a parsed title, tried in
+// order when the previous one finds nothing: without parenthesized parts
+// ("Mad Detective (Sun taam)"), camel-case words split apart, Roman sequel
+// numbers as digits, and without a trailing "1".
+func queryVariants(title string) []string {
+	variants := []string{title}
+	add := func(v string) {
+		if v = strings.TrimSpace(v); v != "" && v != variants[len(variants)-1] {
+			variants = append(variants, v)
+		}
+	}
+	plain := parenthesized.ReplaceAllString(title, "")
+	add(plain)
+	split := camelBoundary.ReplaceAllString(plain, "$1 $2")
+	add(split)
+	digits := romanToken.ReplaceAllStringFunc(split, func(t string) string { return romanNumerals[strings.ToLower(t)] })
+	add(digits)
+	add(trailingOne.ReplaceAllString(digits, ""))
+	return variants
+}
+
 // matchScore rates how well a candidate title/year fits the parsed name.
 // 0.8 is an exact normalized title match; the year adds or subtracts.
 func matchScore(title string, year int, titles []string, candidateYear int) float64 {
-	want, score := normalize(title), 0.0
+	want, score := titleKey(title), 0.0
 	if want == "" {
 		return 0
 	}
 	for _, t := range titles {
-		got := normalize(t)
+		got := titleKey(t)
 		switch {
 		case got == "":
 		case got == want:
 			score = max(score, .8)
-		case strings.Contains(got, want) || strings.Contains(want, got) || similarity(got, want) >= .85:
+		case strings.Contains(got, want) || strings.Contains(want, got):
+			// "Dragon" inside "Dragonheart 3" says little; "Alien" in "Aliens" more.
+			if float64(min(len(got), len(want)))/float64(max(len(got), len(want))) >= .5 {
+				score = max(score, .6)
+			} else {
+				score = max(score, .4)
+			}
+		case similarity(got, want) >= .85:
 			score = max(score, .6) // "In the Name of People" for "In the Name of the People"
 		}
 	}
-	if year > 0 && candidateYear > 0 {
-		switch d := abs(year - candidateYear); {
-		case d == 0:
-			score += .2
-		case d == 1:
-			score += .1
-		default:
-			score -= .3
-		}
+	return score + yearScore(year, candidateYear)
+}
+
+// yearScore rewards an agreeing year and penalizes a different one.
+func yearScore(year, candidateYear int) float64 {
+	if year == 0 || candidateYear == 0 {
+		return 0
 	}
-	return score
+	switch d := abs(year - candidateYear); {
+	case d == 0:
+		return .2
+	case d == 1:
+		return .1
+	default:
+		return -.3
+	}
 }
 
 // similarity is the Dice coefficient of the character bigrams of a and b.

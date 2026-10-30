@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/fsnotify/fsnotify v1.8.0
 	github.com/glebarez/go-sqlite v1.22.0
-	github.com/lsongdev/tmdb-go v0.1.0
+	github.com/lsongdev/tmdb-go v0.2.0
 	github.com/richardlehane/mscfb v1.0.4
 	github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd
 	golang.org/x/image v0.20.0
