@@ -154,8 +154,12 @@ A configured marker must exist and remain readable, including during forced
 scans. A changed identity is reported as `mount_changed`; force accepts a new
 identity only after checking the marker. Without a marker, an unexpectedly empty
 root is retained even on the same device.
-This does not add a filesystem event subscription to the page; reopen or refresh a listing to see the
-updated index. The scan interval starts after each periodic scan completes.
+Open pages follow the index live through server-sent events (`/api/events`):
+a folder reloads when a change names it, and the sidebar status opens a live
+activity page with scan state, files being identified and recent results.
+Events are coalesced once a second and are only hints; pages re-read data through
+the API, and fall back to polling folder versions while the stream is down.
+The scan interval starts after each periodic scan completes.
 
 Go 1.25+ is required to build. Source files are opened through `os.Root`;
 external tools receive inherited seekable descriptors on Linux/macOS rather
@@ -176,7 +180,9 @@ small SD/USB system disk is never used.
 ```text
 GET    /api/roots                    configured roots and scan state
 POST   /api/roots/{root}/scan        rescan a root
-GET    /api/status                   counts, scan and enrichment progress
+GET    /api/status                   counts, scan and enrichment progress, running files
+GET    /api/events                   server-sent events: status, changes, activity
+GET    /api/activity                 recent activity (newest first) and status
 GET    /api/search?q=&root=&kind=
 GET    /api/issues?type=review|error      matches to confirm / failed files
 GET    /api/files/{id}               file with metadata and ancestors

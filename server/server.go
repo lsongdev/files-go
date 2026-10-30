@@ -37,6 +37,7 @@ type Server struct {
 	hls      *hls.Manager
 	vaapi    string // render device when hardware transcoding works
 
+	events        *hub
 	statsMu       sync.Mutex
 	stats         store.Stats
 	statsAt       time.Time
@@ -51,10 +52,15 @@ func New(ctx context.Context, cfg *config.Config, st *store.Store, scanner *stor
 		cancel()
 		return nil, err
 	}
-	return &Server{cancel: cancel, ctx: ctx, cfg: cfg, store: st, scanner: scanner, pipeline: pipeline, tmdb: client, tpdb: tpdb, subtitleSlots: make(chan struct{}, 2),
+	s := &Server{cancel: cancel, ctx: ctx, cfg: cfg, store: st, scanner: scanner, pipeline: pipeline, tmdb: client, tpdb: tpdb, subtitleSlots: make(chan struct{}, 2),
 		thumbs: NewThumbs(ctx, cfg, st, scanner, client),
 		hls:    streams,
-		vaapi:  detectVAAPI(cfg.FFmpeg, cfg.HWAccel, cfg.HWDevice)}, nil
+		vaapi:  detectVAAPI(cfg.FFmpeg, cfg.HWAccel, cfg.HWDevice),
+		events: newHub()}
+	st.OnChange(s.events.change)
+	pipeline.OnOutcome(s.events.outcome)
+	go s.runEvents()
+	return s, nil
 }
 
 // Handler serves the API and wraps everything (including web) in auth.
@@ -63,6 +69,8 @@ func (s *Server) Handler(web http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/roots", s.roots)
 	mux.HandleFunc("POST /api/roots/{root}/scan", s.scan)
 	mux.HandleFunc("GET /api/status", s.status)
+	mux.HandleFunc("GET /api/events", s.eventStream)
+	mux.HandleFunc("GET /api/activity", s.activity)
 	mux.HandleFunc("GET /api/search", s.search)
 	mux.HandleFunc("GET /api/issues", s.issues)
 	mux.HandleFunc("GET /api/files/{id}", s.file)
@@ -190,17 +198,11 @@ func (s *Server) scan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
-	s.statsMu.Lock()
-	defer s.statsMu.Unlock()
-	if time.Since(s.statsAt) > 5*time.Second {
-		stats, err := s.store.Stats(r.Context(), s.pipeline.Version)
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		s.stats, s.statsAt = stats, time.Now()
+	if err := s.freshStats(r.Context(), 5*time.Second); err != nil {
+		s.fail(w, err)
+		return
 	}
-	writeJSON(w, map[string]any{"roots": s.scanner.Status(), "stats": s.stats})
+	writeJSON(w, s.statusView())
 }
 
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {

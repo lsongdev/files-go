@@ -248,18 +248,50 @@ function MatchDialog({ item, onClose, onDone }) {
   </div>`;
 }
 
-function Status({ status }) {
+function Status({ status, active, onOpen }) {
   if (!status) return null;
   const scanning = status.roots.filter((r) => r.state === 'scanning');
   const offline = status.roots.filter((r) => r.state === 'offline' || r.state === 'error' || r.state === 'mount_changed');
   const { files, dirs, pending, failed } = status.stats;
-  return html`<div class="status">
+  return html`<button class=${`status ${active ? 'active' : ''}`} title="实时活动" onClick=${onOpen}>
     <div>${files.toLocaleString()} 个文件 · ${dirs.toLocaleString()} 个文件夹</div>
     ${scanning.map((r) => html`<div class="busy">正在扫描 ${r.name} · ${r.scanned.toLocaleString()}</div>`)}
     ${pending > 0 && html`<div class="busy">正在识别 · 剩余 ${pending.toLocaleString()}</div>`}
     ${failed > 0 && html`<div class="muted">${failed.toLocaleString()} 个文件识别失败</div>`}
     ${offline.map((r) => html`<div class="warn">${r.name}：${r.state === 'offline' ? '离线' : r.state === 'mount_changed' ? '挂载发生变化' : r.error}</div>`)}
-  </div>`;
+  </button>`;
+}
+
+const ROOT_STATE = { idle: '空闲', scanning: '正在扫描', offline: '离线', mount_changed: '挂载发生变化', error: '错误' };
+const ACTIVITY = { scan: '扫描', identified: '已识别', processed: '已处理', review: '待确认', failed: '失败', retry: '稍后重试' };
+const clock = (ms) => new Date(ms).toLocaleTimeString('zh-CN', { hour12: false });
+
+// Live view of scanning and identification, fed by server-sent events.
+function ActivityPage({ status, feed, roots, onOpen }) {
+  if (!status) return html`<p class="empty">加载中…</p>`;
+  const rootName = (id) => roots.find((r) => r.id === id)?.name || id;
+  const where = (root, path) => [rootName(root), path].filter(Boolean).join(' / ');
+  const { files, dirs, pending, review, failed } = status.stats;
+  const counters = [['文件', files], ['文件夹', dirs], ['待识别', pending], ['待确认', review], ['失败', failed]];
+  return html`<section class="activity">
+    <h2>实时活动</h2>
+    <div class="counters">${counters.map(([label, n]) => html`<div><strong>${(n || 0).toLocaleString()}</strong><span>${label}</span></div>`)}</div>
+    <h3>媒体库</h3>
+    <ul class="rows">${status.roots.map((r) => html`<li>
+      <button onClick=${() => onOpen(r.fileId)}>${r.name}</button>
+      <span class=${`state ${r.state}`}>${ROOT_STATE[r.state] || r.state}${r.state === 'scanning' ? ` · ${r.scanned.toLocaleString()}` : ''}</span>
+      <small>${r.error || r.watchError || (r.lastScan ? `上次扫描 ${new Date(r.lastScan).toLocaleString('zh-CN', { hour12: false })}` : '')}</small>
+    </li>`)}</ul>
+    <h3>正在处理</h3>
+    ${status.running?.length ? html`<ul class="rows">${status.running.map((f) => html`<li><button onClick=${() => onOpen(f.id)}>${where(f.root, f.path)}</button></li>`)}</ul>`
+      : html`<p class="hint">${pending > 0 ? '等待中' : '空闲'}</p>`}
+    <h3>最近活动</h3>
+    ${feed.length ? html`<ul class="rows feed">${feed.map((a) => html`<li key=${a.id}>
+      <time>${clock(a.time)}</time><span class=${`tag ${a.type}`}>${ACTIVITY[a.type] || a.type}</span>
+      ${a.fileId ? html`<button onClick=${() => onOpen(a.fileId)}>${where(a.root, a.path)}</button>` : html`<span>${where(a.root, a.path)}</span>`}
+      <small>${a.text}</small>
+    </li>`)}</ul>` : html`<p class="hint">暂无活动</p>`}
+  </section>`;
 }
 
 function App() {
@@ -274,6 +306,9 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [matching, setMatching] = useState(false);
+  const [activity, setActivity] = useState(false); // the live activity page is open
+  const [feed, setFeed] = useState([]);
+  const [changed, setChanged] = useState(null); // {force}: re-check what is shown
   const [nav, setNav] = useState(false);
   const [view, setView] = useState(() => localStorage.getItem('view') || 'grid');
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
@@ -344,15 +379,38 @@ function App() {
   }, [nav]);
 
   const loadStatus = useCallback(() => api('/api/status').then(setStatus).catch(() => {}), []);
+  // Server-sent events push status, changed folders and activity. Events are
+  // hints: what is shown is re-read through the API. Polling every 5s and
+  // comparing folder versions takes over while the stream is down.
+  const live = useRef(false);
   useEffect(() => {
     api('/api/roots').then(setRoots).catch((e) => setError(e.message));
     loadStatus();
-    const timer = setInterval(loadStatus, 5000);
-    return () => clearInterval(timer);
+    const timer = setInterval(() => {
+      if (!live.current) loadStatus().then(() => setChanged({ force: false }));
+    }, 5000);
+    let source;
+    if (typeof EventSource === 'function') {
+      source = new EventSource('/api/events');
+      source.onopen = () => { live.current = true; setChanged({ force: false }); }; // catch up after a reconnect
+      source.onerror = () => { live.current = false; };
+      source.addEventListener('status', (e) => setStatus(JSON.parse(e.data)));
+      source.addEventListener('changes', (e) => {
+        const { dirs = [], files = [], resync } = JSON.parse(e.data);
+        const id = displayed.current.current?.id;
+        if (resync || (id && (dirs.includes(id) || files.includes(id)))) setChanged({ force: true });
+      });
+      source.addEventListener('activity', (e) => {
+        const { items } = JSON.parse(e.data);
+        setFeed((list) => [...items, ...list].slice(0, 300));
+      });
+    }
+    return () => { clearInterval(timer); source?.close(); };
   }, []);
 
   const openPage = useCallback(async (target, push = true) => {
     remember();
+    setActivity(false);
     const url = target.type ? `/issues/${target.type}` : route(target.id, target.q);
     const n = ++seq.current;
     const state = push ? {} : (history.state || {});
@@ -407,6 +465,12 @@ function App() {
     if (q.trim()) return openPage({ q }, push);
   }, [openPage]);
   const issues = useCallback((type, push = true) => openPage({ type }, push), [openPage]);
+  const openActivity = useCallback((push = true) => {
+    remember();
+    if (push) history.pushState({ activity: true }, '', '/activity');
+    setActivity(true); setNav(false); setError('');
+    api('/api/activity').then((data) => { setFeed(data.items); setStatus(data.status); }).catch((e) => setError(e.message));
+  }, []);
 
   const loadMore = useCallback(async () => {
     if (!current || !more || loading) return;
@@ -432,11 +496,12 @@ function App() {
     const params = new URLSearchParams(location.search);
     const match = location.pathname.match(/^\/f\/(\d+)/);
     const issue = location.pathname.match(/^\/issues\/(review|error)/);
-    if (location.pathname === '/search' && params.get('q')) { setQuery(params.get('q')); search(params.get('q'), push); }
+    if (location.pathname === '/activity') openActivity(false);
+    else if (location.pathname === '/search' && params.get('q')) { setQuery(params.get('q')); search(params.get('q'), push); }
     else if (issue) issues(issue[1], push);
     else if (match) load(match[1], push);
     else if (roots[0]) load(roots[0].fileId, false);
-  }, [roots, load, search, issues]);
+  }, [roots, load, search, issues, openActivity]);
   useEffect(() => { if (roots.length) navigate(false); }, [roots]);
   useEffect(() => {
     const onPop = () => navigate(false);
@@ -444,19 +509,18 @@ function App() {
     return () => removeEventListener('popstate', onPop);
   }, [navigate]);
 
-  // Refresh the open folder when its index entry changes. The server bumps a
-  // folder's version when files are added, removed or renamed (also by the
-  // filesystem watcher) and when a member's identification changes, so each
-  // status tick costs one row unless something actually changed.
-  const forceReload = useRef(false);
+  // Re-read the open folder or file when it changed: pushed changes name it,
+  // and without the stream its version is compared on each status poll. The
+  // server bumps a folder's version when entries are added, removed or
+  // renamed and when a member's identification changes.
   useEffect(() => {
-    if (!current?.dir || searching || loading) return;
+    if (!changed || !current || searching || loading || activity) return;
     const n = seq.current;
     const count = items.length;
     (async () => {
       const detail = await api(`/api/files/${current.id}`);
-      if (n !== seq.current || !forceReload.current && detail.file.version === current.version) return;
-      forceReload.current = false;
+      if (n !== seq.current || !changed.force && detail.file.version === current.version) return;
+      if (!current.dir) { setCurrent(detail.file); return; }
       const children = [];
       let more;
       do {
@@ -469,7 +533,7 @@ function App() {
       setCurrent(detail.file); setAncestors(detail.ancestors);
       setItems(children); setMore(more);
     })().catch(() => {});
-  }, [status]);
+  }, [changed]);
 
   const refresh = async () => {
     try {
@@ -479,10 +543,10 @@ function App() {
   };
 
   const matched = (file) => {
-    // Shared file jobs may finish between status polls. Always perform a final
-    // directory reload after an explicit match, even if its version is current.
-    if (file.dir) forceReload.current = true;
+    // Shared file jobs may finish after the match returns. Always perform a
+    // final directory reload after an explicit match.
     setMatching(false); setCurrent(file); loadStatus();
+    if (file.dir) setChanged({ force: true });
   };
 
   const activeRoot = ancestors[0]?.root || current?.root;
@@ -496,7 +560,7 @@ function App() {
           return count > 0 && html`<button class=${searching === label ? 'active' : ''} onClick=${() => issues(type)}><${Icon} name=${type === 'review' ? 'search' : 'close'}/>${label}<span class="count">${count.toLocaleString()}</span></button>`;
         })}
       </nav>`}
-      <${Status} status=${status}/>
+      <${Status} status=${status} active=${activity} onOpen=${() => openActivity()}/>
     </aside>
     ${nav && html`<div class="scrim" onClick=${() => setNav(false)}></div>`}
     <main>
@@ -508,6 +572,7 @@ function App() {
         <button class="icon-button" title="切换视图" onClick=${() => setView(view === 'grid' ? 'list' : 'grid')}><${Icon} name=${view === 'grid' ? 'list' : 'grid'}/></button>
         <button class="icon-button" title="切换主题" onClick=${() => setTheme(theme === 'dark' ? 'light' : 'dark')}><${Icon} name=${theme === 'dark' ? 'sun' : 'moon'}/></button>
       </header>
+      ${activity ? html`${error && html`<p class="error">${error}</p>`}<${ActivityPage} status=${status} feed=${feed} roots=${roots} onOpen=${load}/>` : html`
       <div class="crumbs">${searching ? html`<span>${Object.values(ISSUES).includes(searching) ? searching : `搜索 “${searching}”`} · ${items.length} 个结果</span>` : [...ancestors, current].filter(Boolean).map((f, i, all) => html`
         ${i > 0 && html`<span class="sep">/</span>`}<button disabled=${i === all.length - 1} onClick=${() => load(f.id)}>${f.parent ? f.name : (roots.find((r) => r.id === f.root)?.name || f.name)}</button>`)}</div>
       ${error && html`<p class="error">${error}</p>`}
@@ -516,7 +581,7 @@ function App() {
       ${current?.dir && !searching && !current.meta?.kind && !current.meta?.locked && html`<div class="toolbar"><span>${current.size} 项</span><button class="ghost small" onClick=${refresh}><${Icon} name="refresh" size=${14}/>重新扫描</button></div>`}
       ${(current?.dir || searching) && html`<${Listing} items=${items} view=${view} onOpen=${load}/>`}
       ${(current?.dir || searching) && !loading && !items.length && html`<p class="empty">${searching ? '没有找到匹配的文件' : '这个文件夹是空的'}</p>`}
-      <div ref=${sentinel} class="sentinel">${loading && '加载中…'}</div>
+      <div ref=${sentinel} class="sentinel">${loading && '加载中…'}</div>`}
     </main>
     ${matching && current && html`<${MatchDialog} item=${current} onClose=${() => setMatching(false)} onDone=${matched}/>`}
   </div>`;
