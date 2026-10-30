@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lsongdev/files-go/store"
@@ -110,7 +112,51 @@ type Pipeline struct {
 	wake      chan struct{}
 
 	mu       sync.Mutex
-	inflight map[int64]bool // sent to a worker and not yet saved
+	inflight map[int64]bool       // sent to a worker and not yet saved
+	running  map[int64]store.File // being enriched by a worker right now
+	outcome  atomic.Pointer[func(Outcome)]
+}
+
+// Outcome is one file a worker finished, for activity feeds.
+type Outcome struct {
+	File   store.File
+	Kind   string // semantic kind, e.g. movie or episode
+	Title  string
+	Review string // ambiguous, unmatched, conflict: needs a look
+	Err    string // enrichment failure kept on the file
+	Retry  bool   // transient failure; the file is retried later
+}
+
+// OnOutcome registers the listener for finished files. It is called on the
+// worker's goroutine, so it must not block.
+func (p *Pipeline) OnOutcome(fn func(Outcome)) { p.outcome.Store(&fn) }
+
+// Running returns the files workers are enriching right now.
+func (p *Pipeline) Running() []store.File {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	files := make([]store.File, 0, len(p.running))
+	for _, f := range p.running {
+		files = append(files, f)
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].ID < files[j].ID })
+	return files
+}
+
+func (p *Pipeline) report(f store.File, r store.Result, err error) {
+	fn := p.outcome.Load()
+	if fn == nil {
+		return
+	}
+	o := Outcome{File: f, Err: r.Err}
+	if err != nil {
+		o.Err, o.Retry = err.Error(), true
+	} else if len(r.Meta) > 0 {
+		var m struct{ Kind, Title, Review string }
+		_ = json.Unmarshal(r.Meta, &m)
+		o.Kind, o.Title, o.Review = m.Kind, m.Title, m.Review
+	}
+	(*fn)(o)
 }
 
 // NewPipeline gets its Version from the store for the code version plus a
@@ -122,7 +168,7 @@ func NewPipeline(ctx context.Context, st *store.Store, tag string, enrichers ...
 		return nil, err
 	}
 	return &Pipeline{Version: version, store: st, enrichers: enrichers,
-		hot: make(chan int64, 512), wake: make(chan struct{}, 1), inflight: map[int64]bool{}}, nil
+		hot: make(chan int64, 512), wake: make(chan struct{}, 1), inflight: map[int64]bool{}, running: map[int64]store.File{}}, nil
 }
 
 // Prioritize moves files a user is looking at to the front of the queue.
@@ -157,7 +203,16 @@ func (p *Pipeline) Run(ctx context.Context, workers int) {
 		go func() {
 			defer wg.Done()
 			for f := range jobs {
+				p.mu.Lock()
+				p.running[f.ID] = f
+				p.mu.Unlock()
 				result, err := p.Enrich(ctx, f)
+				p.mu.Lock()
+				delete(p.running, f.ID)
+				p.mu.Unlock()
+				if ctx.Err() == nil {
+					p.report(f, result, err)
+				}
 				if err != nil { // transient: leave it pending and back off
 					if ctx.Err() == nil {
 						if saveErr := p.store.Retry(ctx, f, err); saveErr != nil {

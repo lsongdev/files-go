@@ -449,6 +449,17 @@ func (s *Scanner) sync(ctx context.Context, rootFS *source.Root, root config.Roo
 			current[i].ID = id
 		}
 	}
+	if len(changed) > 0 || len(removed) > 0 {
+		c := Change{Dirs: []int64{dir.ID}, Files: []int64{dir.ID}, Root: root.ID, Path: dir.Path, Removed: len(removed)}
+		for _, f := range changed {
+			if _, existed := existing[f.Name]; existed {
+				c.Updated++
+			} else {
+				c.Added++
+			}
+		}
+		s.store.changed(c)
+	}
 	return current, nil
 }
 

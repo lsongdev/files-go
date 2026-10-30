@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/glebarez/go-sqlite"
@@ -93,7 +94,10 @@ type File struct {
 	Revision   int64           `json:"-"`
 }
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db       *sql.DB
+	listener atomic.Pointer[changeListener]
+}
 
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", "file:"+path+"?_txlock=immediate&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(10000)")
@@ -327,6 +331,7 @@ func (s *Store) SaveResults(ctx context.Context, results []Result) error {
 	}
 	defer tx.Rollback()
 	stale := false
+	var change Change
 	for _, r := range results {
 		var parent int64
 		var before, kind, title, failure string
@@ -356,15 +361,20 @@ func (s *Store) SaveResults(ctx context.Context, results []Result) error {
 			stale = true
 			continue
 		}
-		if parent != 0 && (before != string(r.Meta) || kind != r.Kind || title != r.Title || failure != r.Err) {
-			if _, err := tx.ExecContext(ctx, `UPDATE files SET meta_ver=0,revision=revision+1,retry_count=0,retry_after=0,meta_err=NULL WHERE id=?`, parent); err != nil {
-				return err
+		if before != string(r.Meta) || kind != r.Kind || title != r.Title || failure != r.Err {
+			change.Files = append(change.Files, r.ID)
+			if parent != 0 {
+				change.Dirs = append(change.Dirs, parent)
+				if _, err := tx.ExecContext(ctx, `UPDATE files SET meta_ver=0,revision=revision+1,retry_count=0,retry_after=0,meta_err=NULL WHERE id=?`, parent); err != nil {
+					return err
+				}
 			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	s.changed(change)
 	if stale {
 		return ErrStale
 	}
