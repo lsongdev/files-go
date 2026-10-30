@@ -439,17 +439,19 @@ function App() {
     return () => removeEventListener('popstate', onPop);
   }, [navigate]);
 
-  // Refresh the open folder while enrichment is still filling it in.
-  const pending = status?.stats.pending || 0;
-  const previousPending = useRef(0);
+  // Refresh the open folder when its index entry changes. The server bumps a
+  // folder's version when files are added, removed or renamed (also by the
+  // filesystem watcher) and when a member's identification changes, so each
+  // status tick costs one row unless something actually changed.
+  const forceReload = useRef(false);
   useEffect(() => {
     if (!current?.dir || searching || loading) return;
-    const wasPending = previousPending.current;
-    previousPending.current = pending;
-    if (!pending && !wasPending) return;
     const n = seq.current;
     const count = items.length;
     (async () => {
+      const detail = await api(`/api/files/${current.id}`);
+      if (n !== seq.current || !forceReload.current && detail.file.version === current.version) return;
+      forceReload.current = false;
       const children = [];
       let more;
       do {
@@ -458,25 +460,23 @@ function App() {
         children.push(...data.items); more = data.more;
         if (!data.items.length) break;
       } while (more && children.length < count);
-      const detail = await api(`/api/files/${current.id}`);
-      if (n !== seq.current || displayed.current.items.length !== count) return;
       restore.current = position();
       setCurrent(detail.file); setAncestors(detail.ancestors);
       setItems(children); setMore(more);
     })().catch(() => {});
-  }, [pending, status]);
+  }, [status]);
 
   const refresh = async () => {
     try {
       const updated = await api(`/api/files/${current.id}/refresh`, { method: 'POST' });
-      if (current.dir) { previousPending.current = 1; load(current.id, false); } else setCurrent(updated);
+      if (current.dir) load(current.id, false); else setCurrent(updated);
     } catch (e) { setError(e.message); }
   };
 
   const matched = (file) => {
     // Shared file jobs may finish between status polls. Always perform a final
-    // directory reload after an explicit match, even if pending stayed at zero.
-    if (file.dir) previousPending.current = 1;
+    // directory reload after an explicit match, even if its version is current.
+    if (file.dir) forceReload.current = true;
     setMatching(false); setCurrent(file); loadStatus();
   };
 
