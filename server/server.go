@@ -250,14 +250,7 @@ func (s *Server) children(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "not a directory")
 		return
 	}
-	// Browsing is served from the index; one stat detects whether this
-	// level changed on disk since it was indexed.
-	if s.scanner.Stale(dir) {
-		if err := s.scanner.SyncDir(r.Context(), dir); err != nil {
-			log.Printf("sync %s/%s: %v", dir.Root, dir.Path, err)
-		}
-		s.pipeline.Wake()
-	}
+	// Browsing reads only the index; the background scanner handles disk changes.
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 1000 {

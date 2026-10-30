@@ -87,17 +87,7 @@ func main() {
 		log.Fatal(err)
 	}
 	go pipeline.Run(ctx, cfg.Workers)
-	go func() {
-		for {
-			scanner.ScanAll(ctx)
-			pipeline.Wake()
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(cfg.ScanInterval):
-			}
-		}
-	}()
+	go scanner.Run(ctx, cfg.ScanInterval, pipeline.Wake)
 
 	api, err := server.New(ctx, cfg, st, scanner, pipeline, client)
 	if err != nil {

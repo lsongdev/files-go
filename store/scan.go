@@ -25,14 +25,15 @@ var ErrOffline = errors.New("root is offline")
 type Classify func(name string, size int64) string
 
 type RootStatus struct {
-	ID       string    `json:"id"`
-	Name     string    `json:"name"`
-	Type     string    `json:"type,omitempty"`
-	FileID   int64     `json:"fileId"`
-	State    string    `json:"state"` // idle, scanning, offline, error
-	Scanned  int64     `json:"scanned"`
-	Error    string    `json:"error,omitempty"`
-	LastScan time.Time `json:"lastScan,omitzero"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Type       string    `json:"type,omitempty"`
+	FileID     int64     `json:"fileId"`
+	State      string    `json:"state"` // idle, scanning, offline, error
+	Scanned    int64     `json:"scanned"`
+	Error      string    `json:"error,omitempty"`
+	WatchError string    `json:"watchError,omitempty"`
+	LastScan   time.Time `json:"lastScan,omitzero"`
 }
 
 type Scanner struct {
@@ -41,8 +42,10 @@ type Scanner struct {
 	exclude  []string
 	classify Classify
 
-	mu     sync.Mutex
-	status map[string]*RootStatus
+	scanMu   sync.Mutex   // serialize reconciliation, including manual requests
+	watchDir func(string) // installed by Run; protected by mu
+	mu       sync.Mutex
+	status   map[string]*RootStatus
 }
 
 func NewScanner(store *Store, roots []config.Root, exclude []string, classify Classify) *Scanner {
@@ -90,13 +93,35 @@ func (s *Scanner) update(id string, fn func(*RootStatus)) {
 // Init ensures every root has its directory row so it can be browsed
 // before the first scan completes.
 func (s *Scanner) Init(ctx context.Context) error {
-	ids := make([]any, 0, len(s.roots))
+	configured := make(map[string]bool, len(s.roots))
 	for _, root := range s.roots {
-		ids = append(ids, root.ID)
+		configured[root.ID] = true
 	}
-	// Forget roots that were removed from the configuration.
-	if _, err := s.store.db.ExecContext(ctx, `DELETE FROM files WHERE root NOT IN (SELECT value FROM json_each(?))`, jsonArray(ids)); err != nil {
+	// Read root IDs from the covering (root,path) index. A NOT IN DELETE
+	// otherwise walks every file row, including large metadata, on each startup.
+	rows, err := s.store.db.QueryContext(ctx, `SELECT DISTINCT root FROM files`)
+	if err != nil {
 		return err
+	}
+	var removed []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		if !configured[id] {
+			removed = append(removed, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range removed {
+		if _, err := s.store.db.ExecContext(ctx, `DELETE FROM files WHERE root=?`, id); err != nil {
+			return err
+		}
 	}
 	for _, root := range s.roots {
 		f, err := s.ensureRoot(ctx, root)
@@ -155,6 +180,8 @@ func (s *Scanner) Scan(ctx context.Context, rootID string, force bool) (err erro
 			}
 		})
 	}()
+	s.scanMu.Lock()
+	defer s.scanMu.Unlock()
 	top, err := s.ensureRoot(ctx, root)
 	if err != nil {
 		return err
@@ -183,25 +210,45 @@ func (s *Scanner) Scan(ctx context.Context, rootID string, force bool) (err erro
 	return nil
 }
 
-// SyncDir reconciles one directory level, e.g. when it is browsed and its
-// modification time differs from the index.
+// SyncDir explicitly reconciles one directory and discovers any new subtrees.
 func (s *Scanner) SyncDir(ctx context.Context, dir File) error {
+	s.scanMu.Lock()
+	defer s.scanMu.Unlock()
 	root, ok := s.Root(dir.Root)
 	if !ok {
 		return fmt.Errorf("unknown root %q", dir.Root)
 	}
-	_, err := s.sync(ctx, root, dir, false)
-	return err
+	// Reload because another scan may have updated this directory already.
+	fresh, err := s.store.Get(ctx, dir.ID)
+	if err != nil {
+		return err
+	}
+	return s.syncNew(ctx, root, fresh)
 }
 
-// Stale reports whether a directory changed on disk since it was indexed.
-func (s *Scanner) Stale(dir File) bool {
-	abs, err := s.Abs(dir)
+// syncNew scans this level and recursively discovers new or changed subdirectories.
+func (s *Scanner) syncNew(ctx context.Context, root config.Root, dir File) error {
+	old, err := s.store.query(ctx, `SELECT `+columns+` FROM files WHERE parent=? AND dir=1`, dir.ID)
 	if err != nil {
-		return false
+		return err
 	}
-	info, err := os.Stat(abs)
-	return err == nil && info.ModTime().UnixMilli() != dir.MTime
+	known := make(map[string]File, len(old))
+	for _, f := range old {
+		known[f.Path] = f
+	}
+	children, err := s.sync(ctx, root, dir, false)
+	if err != nil {
+		return err
+	}
+	for _, child := range children {
+		previous := known[child.Path]
+		if child.Dir && (previous.ID != child.ID || previous.MTime != child.MTime) {
+			if err := s.syncNew(ctx, root, child); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Scanner) excluded(name string) bool {
@@ -233,6 +280,12 @@ func (s *Scanner) sync(ctx context.Context, root config.Root, dir File, force bo
 		}
 		return nil, err
 	}
+	s.mu.Lock()
+	watch := s.watchDir
+	s.mu.Unlock()
+	if watch != nil {
+		watch(abs)
+	} // register before listing to cover concurrent changes
 	entries, err := os.ReadDir(abs)
 	if err != nil {
 		return nil, err

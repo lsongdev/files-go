@@ -3,6 +3,7 @@ module github.com/lsongdev/files-go
 go 1.22.4
 
 require (
+	github.com/fsnotify/fsnotify v1.8.0
 	github.com/glebarez/go-sqlite v1.22.0
 	github.com/lsongdev/tmdb-go v0.1.0
 	github.com/richardlehane/mscfb v1.0.4

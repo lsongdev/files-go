@@ -1,4 +1,4 @@
-import { html, render, useCallback, useEffect, useRef, useState } from 'https://unpkg.com/htm@3.1.1/preact/standalone.module.js';
+import { html, render, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'https://unpkg.com/htm@3.1.1/preact/standalone.module.js';
 
 // Absolute URLs keep fetch working when the page was opened as http://user:pass@host/.
 const request = (url, options) => fetch(new URL(url, location.origin), options);
@@ -75,7 +75,7 @@ const ISSUES = { review: '待确认', error: '识别失败' };
 const REVIEW_REASON = {
   ambiguous: '有同名作品，自动匹配不一定正确，请确认。',
   conflict: 'NFO 里的 TMDB 编号与本地文件不符（例如集数对不上），已重新匹配，请确认。',
-  unmatched: '没有找到可信的匹配，可以手动匹配 TMDB。',
+  unmatched: '没有找到可信的匹配，可以手动匹配。',
 };
 
 function Thumb({ item, size = 18 }) {
@@ -88,13 +88,13 @@ function Thumb({ item, size = 18 }) {
 function Listing({ items, view, onOpen }) {
   if (view === 'grid') {
     return html`<div class="grid">${items.map((item) => html`
-      <button class=${`card ${posterKind(item) ? 'poster' : ''} ${item.kind ? `kind-${item.meta?.kind === 'movie' ? 'movie' : item.kind}` : ''}`} key=${item.id} onClick=${() => onOpen(item.id)} title=${item.name}>
+      <button class=${`card ${posterKind(item) ? 'poster' : ''} ${item.kind ? `kind-${item.meta?.kind === 'movie' ? 'movie' : item.kind}` : ''}`} key=${item.id} data-entry-id=${item.id} onClick=${() => onOpen(item.id)} title=${item.name}>
         <span class="art"><${Thumb} item=${item} size=${36}/>${item.play && html`<i class="badge"><${Icon} name="play" size=${12}/></i>`}</span>
         <strong>${title(item)}</strong><small>${subtitle(item)}</small>
       </button>`)}</div>`;
   }
   return html`<div class="rows">${items.map((item) => html`
-    <button class="row" key=${item.id} onClick=${() => onOpen(item.id)} title=${item.name}>
+    <button class="row" key=${item.id} data-entry-id=${item.id} onClick=${() => onOpen(item.id)} title=${item.name}>
       <span class="art"><${Thumb} item=${item}/></span>
       <span class="name"><strong>${title(item)}</strong><small>${title(item) !== item.name ? item.name : subtitle(item)}</small></span>
       <span class="meta">${title(item) !== item.name ? subtitle(item) : ''}</span>
@@ -185,7 +185,7 @@ function Details({ item, onMatch, onRefresh, onConfirm }) {
           ${!item.dir && item.play && html`<button disabled=${playing} onClick=${() => setPlaying(true)}><${Icon} name="play"/>播放</button>`}
           ${!item.dir && html`<a class="button" href=${`/api/files/${item.id}/raw?download`}><${Icon} name="download"/>下载</a>`}
           ${!item.dir && !item.play && html`<a class="button ghost" href=${`/api/files/${item.id}/raw`} target="_blank"><${Icon} name="link"/>打开原文件</a>`}
-          ${canMatch && html`<button class="ghost" onClick=${onMatch}>匹配 TMDB</button>`}
+          ${canMatch && html`<button class="ghost" onClick=${onMatch}>手动匹配</button>`}
           <button class="ghost" onClick=${onRefresh}><${Icon} name="refresh"/>${item.dir ? '重新扫描' : '重新识别'}</button>
         </div>
       </div>
@@ -215,7 +215,7 @@ function MatchDialog({ item, onClose, onDone }) {
   };
   return html`<div class="overlay" onClick=${(e) => e.target === e.currentTarget && onClose()}>
     <div class="dialog">
-      <header><h2>匹配 TMDB</h2><button class="icon-button" onClick=${onClose}><${Icon} name="close"/></button></header>
+      <header><h2>手动匹配</h2><button class="icon-button" onClick=${onClose}><${Icon} name="close"/></button></header>
       <form onSubmit=${search}>
         <select value=${type} onChange=${(e) => setType(e.target.value)}><option value="movie">电影</option><option value="tv">剧集</option></select>
         <input value=${query} onInput=${(e) => setQuery(e.target.value)} placeholder="名称"/>
@@ -262,6 +262,60 @@ function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
   const sentinel = useRef(null);
   const seq = useRef(0);
+  const pages = useRef(new Map());
+  const active = useRef(null);
+  const nextActive = useRef(null);
+  const displayed = useRef(null);
+  const restore = useRef(null);
+  displayed.current = { current, ancestors, items, more, searching, loading };
+
+  const position = () => {
+    const top = document.querySelector('.top')?.getBoundingClientRect().bottom || 0;
+    const anchor = [...document.querySelectorAll('[data-entry-id]')]
+      .find((el) => el.getBoundingClientRect().bottom > top);
+    return { y: window.scrollY, anchor: anchor?.dataset.entryId, offset: anchor?.getBoundingClientRect().top };
+  };
+
+  const remember = () => {
+    if (!active.current) return;
+    const page = { ...active.current, ...displayed.current, position: position() };
+    pages.current.delete(page.key);
+    pages.current.set(page.key, page);
+    // Bound the retained lists; history keeps enough information to refetch evicted pages.
+    while (pages.current.size > 20) pages.current.delete(pages.current.keys().next().value);
+    if (history.state?.pageKey === page.key) {
+      history.replaceState({ ...history.state, position: page.position, count: page.items.length }, '');
+    }
+  };
+
+  useLayoutEffect(() => {
+    if (nextActive.current) { active.current = nextActive.current; nextActive.current = null; }
+    const saved = restore.current;
+    if (!saved) return;
+    restore.current = null;
+    const anchor = saved.anchor && document.querySelector(`[data-entry-id="${saved.anchor}"]`);
+    window.scrollTo({ top: anchor ? window.scrollY + anchor.getBoundingClientRect().top - saved.offset : saved.y, behavior: 'instant' });
+  });
+
+  useEffect(() => {
+    const previous = history.scrollRestoration;
+    history.scrollRestoration = 'manual';
+    let frame;
+    const save = () => {
+      frame = null;
+      if (!active.current || displayed.current.loading || history.state?.pageKey !== active.current.key) return;
+      history.replaceState({ ...history.state, position: position(), count: displayed.current.items.length }, '');
+    };
+    const onScroll = () => { if (frame == null) frame = requestAnimationFrame(save); };
+    addEventListener('scroll', onScroll, { passive: true });
+    addEventListener('pagehide', save);
+    return () => {
+      history.scrollRestoration = previous;
+      cancelAnimationFrame(frame);
+      removeEventListener('scroll', onScroll);
+      removeEventListener('pagehide', save);
+    };
+  }, []);
 
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem('theme', theme); }, [theme]);
   useEffect(() => { localStorage.setItem('view', view); }, [view]);
@@ -280,53 +334,73 @@ function App() {
     return () => clearInterval(timer);
   }, []);
 
-  const load = useCallback(async (id, push = true) => {
+  const openPage = useCallback(async (target, push = true) => {
+    remember();
+    const url = target.type ? `/issues/${target.type}` : route(target.id, target.q);
     const n = ++seq.current;
-    setLoading(true); setError(''); setSearching(''); setNav(false);
+    const state = push ? {} : (history.state || {});
+    const key = push ? `${Date.now()}-${Math.random().toString(36).slice(2)}` : (state.pageKey || `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    // A new visit to an ancestor also resumes its last browsing position.
+    const cached = push
+      ? [...pages.current.values()].reverse().find((page) => page.url === url)
+      : pages.current.get(key);
+    const saved = cached?.position || state.position || { y: 0 };
+    const count = Math.max(cached?.items.length || state.count || 0, 200);
+    const label = target.q || ISSUES[target.type] || '';
+    const install = (page, scroll) => {
+      nextActive.current = { key, url };
+      restore.current = scroll;
+      setCurrent(page.current); setAncestors(page.ancestors); setItems(page.items);
+      setMore(page.more); setSearching(label);
+    };
+    const entry = { ...target, pageKey: key, position: saved, count };
+    if (push) history.pushState(entry, '', url);
+    else history.replaceState({ ...state, ...entry }, '');
+    setLoading(true); setError(''); setNav(false);
+    if (cached) install(cached, saved);
     try {
-      const data = await api(`/api/files/${id}`);
-      const children = data.file.dir ? await api(`/api/files/${id}/children?limit=200`) : { items: [], more: false };
+      let page;
+      if (target.id) {
+        const data = await api(`/api/files/${target.id}`);
+        let children = { items: [], more: false };
+        if (data.file.dir) {
+          // The server caps each request at 1000; restore every previously loaded page.
+          do {
+            const batch = await api(`/api/files/${target.id}/children?limit=${Math.min(1000, count - children.items.length)}&offset=${children.items.length}`);
+            if (n !== seq.current) return;
+            children.items.push(...batch.items); children.more = batch.more;
+            if (!batch.items.length) break;
+          } while (children.more && children.items.length < count);
+        }
+        page = { current: data.file, ancestors: data.ancestors, ...children };
+      } else {
+        const endpoint = target.type ? `/api/issues?type=${target.type}&limit=1000` : `/api/search?q=${encodeURIComponent(target.q)}`;
+        const data = await api(endpoint);
+        page = { current: null, ancestors: [], items: data.items, more: false };
+      }
       if (n !== seq.current) return;
-      setCurrent(data.file); setAncestors(data.ancestors); setItems(children.items); setMore(children.more);
-      if (push) history.pushState({ id }, '', route(id));
-      scrollTo(0, 0);
+      // Preserve any scrolling done while the cached list was being refreshed.
+      install(page, cached ? position() : saved);
     } catch (e) { if (n === seq.current) setError(e.message); }
     if (n === seq.current) setLoading(false);
   }, []);
 
-  const search = useCallback(async (q, push = true) => {
-    if (!q.trim()) return;
-    const n = ++seq.current;
-    setLoading(true); setError(''); setSearching(q); setNav(false);
-    try {
-      const data = await api(`/api/search?q=${encodeURIComponent(q)}`);
-      if (n !== seq.current) return;
-      setCurrent(null); setAncestors([]); setItems(data.items); setMore(false);
-      if (push) history.pushState({ q }, '', route(null, q));
-    } catch (e) { if (n === seq.current) setError(e.message); }
-    if (n === seq.current) setLoading(false);
-  }, []);
-
-  const issues = useCallback(async (type, push = true) => {
-    const n = ++seq.current;
-    setLoading(true); setError(''); setSearching(ISSUES[type]); setNav(false);
-    try {
-      const data = await api(`/api/issues?type=${type}&limit=1000`);
-      if (n !== seq.current) return;
-      setCurrent(null); setAncestors([]); setItems(data.items); setMore(false);
-      if (push) history.pushState({ type }, '', `/issues/${type}`);
-    } catch (e) { if (n === seq.current) setError(e.message); }
-    if (n === seq.current) setLoading(false);
-  }, []);
+  const load = useCallback((id, push = true) => openPage({ id }, push), [openPage]);
+  const search = useCallback((q, push = true) => {
+    if (q.trim()) return openPage({ q }, push);
+  }, [openPage]);
+  const issues = useCallback((type, push = true) => openPage({ type }, push), [openPage]);
 
   const loadMore = useCallback(async () => {
     if (!current || !more || loading) return;
+    const n = seq.current;
     setLoading(true);
     try {
       const data = await api(`/api/files/${current.id}/children?limit=200&offset=${items.length}`);
+      if (n !== seq.current) return;
       setItems((list) => [...list, ...data.items]); setMore(data.more);
-    } catch (e) { setError(e.message); }
-    setLoading(false);
+    } catch (e) { if (n === seq.current) setError(e.message); }
+    if (n === seq.current) setLoading(false);
   }, [current, more, loading, items.length]);
 
   useEffect(() => {
@@ -356,8 +430,21 @@ function App() {
   // Refresh the open folder while enrichment is still filling it in.
   const pending = status?.stats.pending || 0;
   useEffect(() => {
-    if (!current?.dir || !pending || searching) return;
-    api(`/api/files/${current.id}/children?limit=${Math.max(items.length, 200)}`).then((data) => setItems(data.items)).catch(() => {});
+    if (!current?.dir || !pending || searching || loading) return;
+    const n = seq.current;
+    const count = items.length;
+    (async () => {
+      const children = [];
+      let more;
+      do {
+        const data = await api(`/api/files/${current.id}/children?limit=${Math.min(1000, Math.max(count, 200) - children.length)}&offset=${children.length}`);
+        if (n !== seq.current || displayed.current.items.length !== count) return;
+        children.push(...data.items); more = data.more;
+        if (!data.items.length) break;
+      } while (more && children.length < count);
+      restore.current = position();
+      setItems(children); setMore(more);
+    })().catch(() => {});
   }, [pending, status]);
 
   const refresh = async () => {
