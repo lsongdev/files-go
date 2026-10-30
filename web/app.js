@@ -199,12 +199,15 @@ function Details({ item, onMatch, onRefresh, onConfirm }) {
 
 function MatchDialog({ item, onClose, onDone }) {
   const m = item.meta || {};
-  const [query, setQuery] = useState(m.info?.Code || m.show || m.title || item.name.replace(/\.[^.]+$/, ''));
+  // Empty until the server suggests the names identification parsed, not the
+  // possibly wrong result; switching provider asks again.
+  const [query, setQuery] = useState('');
   const [provider, setProvider] = useState(m.match?.provider || (m.info?.Code ? 'theporndb' : 'tmdb'));
   const [type, setType] = useState(['episode', 'show', 'season'].includes(m.kind) || m.match?.type === 'tv' ? 'tv' : 'movie');
   const [results, setResults] = useState([]);
   const [scope, setScope] = useState(item);
   const searchVersion = useRef(0);
+  const edited = useRef(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const search = useCallback(async (event) => {
@@ -212,9 +215,11 @@ function MatchDialog({ item, onClose, onDone }) {
     const version = ++searchVersion.current;
     setBusy(true); setError('');
     try {
-      const data = await api(`/api/files/${item.id}/match?provider=${provider}&type=${provider === 'theporndb' ? 'jav' : type}&q=${encodeURIComponent(query)}`);
+      const q = event || edited.current ? query : '';
+      const data = await api(`/api/files/${item.id}/match?provider=${provider}&type=${provider === 'theporndb' ? 'jav' : type}&q=${encodeURIComponent(q)}`);
       if (version !== searchVersion.current) return;
       setResults(data.items); setScope(data.scope || item);
+      if (!event && data.query) setQuery(data.query);
     } catch (e) { if (version === searchVersion.current) setError(e.message); }
     if (version === searchVersion.current) setBusy(false);
   }, [item.id, query, provider, type]);
@@ -230,7 +235,7 @@ function MatchDialog({ item, onClose, onDone }) {
       <form onSubmit=${search}>
         <select value=${provider} onChange=${(e) => setProvider(e.target.value)}><option value="tmdb">TMDB</option><option value="theporndb">ThePornDB</option></select>
         ${provider === 'tmdb' && html`<select value=${type} onChange=${(e) => setType(e.target.value)}><option value="movie">电影</option><option value="tv">剧集</option></select>`}
-        <input value=${query} onInput=${(e) => setQuery(e.target.value)} placeholder="名称"/>
+        <input value=${query} onInput=${(e) => { edited.current = true; setQuery(e.target.value); }} placeholder="名称"/>
         <button disabled=${busy}>搜索</button>
       </form>
       ${error && html`<p class="error">${error}</p>`}

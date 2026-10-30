@@ -379,19 +379,24 @@ func (s *Server) candidates(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	query, provider, kind := q.Get("q"), q.Get("provider"), q.Get("type")
 	m := meta(f)
-	if query == "" {
-		query = first(m.Info["Code"], m.Show, m.Title, media.ParseName(f.Name).Title)
-	}
+	root, _ := s.scanner.Root(f.Root)
+	hint, base := root.TypeOf(f.Path)
 	if provider == "" {
 		provider = "tmdb"
-		root, _ := s.scanner.Root(f.Root)
-		hint, _ := root.TypeOf(f.Path)
 		if hint == "jav" {
 			provider = "theporndb"
 		}
 		if m.Match != nil {
 			provider = m.Match.Provider
 		}
+	}
+	if query == "" {
+		ancestors, err := s.store.Ancestors(r.Context(), f.ID)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		query = media.Query(f, ancestors, hint, base, provider)
 	}
 	items := []Candidate{}
 	switch provider {
@@ -453,7 +458,7 @@ func (s *Server) candidates(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"items": items, "scope": map[string]any{"id": scope.ID, "name": scope.Name, "dir": scope.Dir}})
+	writeJSON(w, map[string]any{"items": items, "query": query, "scope": map[string]any{"id": scope.ID, "name": scope.Name, "dir": scope.Dir}})
 }
 
 // match persists a shared work's manual choice before scheduling enrichment.

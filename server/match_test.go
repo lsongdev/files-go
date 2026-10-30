@@ -108,6 +108,12 @@ func TestProviderCandidatesAndSharedDirectoryMatch(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &candidates); w.Code != 200 || err != nil || len(candidates.Items) != 1 || candidates.Items[0].Match.Provider != "theporndb" {
 		t.Fatalf("candidates: %d %s", w.Code, w.Body)
 	}
+	// Without a query, the search starts from the code parsed from the name.
+	part, _ := st.ByPath(ctx, "r", "CAWD-549/CAWD-549-C.mkv")
+	var suggested struct{ Query string }
+	if w := request("GET", part.ID, "?provider=theporndb", ""); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &suggested) != nil || suggested.Query != "CAWD-549" {
+		t.Fatalf("default query: %d %s", w.Code, w.Body)
+	}
 	if w := request("PUT", folder.ID, "", `{"tmdb":"movie/1"}`); w.Code != 400 {
 		t.Fatalf("legacy body accepted: %d", w.Code)
 	}
