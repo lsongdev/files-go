@@ -11,8 +11,11 @@ import (
 )
 
 type Config struct {
-	Listen       string        `yaml:"listen"`
-	Data         string        `yaml:"data"`
+	Listen string `yaml:"listen"`
+	// Data is the -d directory holding config.yaml. Everything the program
+	// writes (index, caches, temporary files) stays inside it.
+	Data         string        `yaml:"-"`
+	LegacyData   string        `yaml:"data"` // no longer configurable
 	Workers      int           `yaml:"workers"`
 	ScanInterval time.Duration `yaml:"scan_interval"`
 	Exclude      []string      `yaml:"exclude"`
@@ -67,7 +70,9 @@ func (r Root) TypeOf(path string) (hint, base string) {
 
 var DefaultExclude = []string{".*", "node_modules", "__pycache__", "@eaDir", "#recycle", "$RECYCLE.BIN", "System Volume Information", "Thumbs.db", "desktop.ini"}
 
-func Load(path string) (*Config, error) {
+// Load reads dir/config.yaml; dir is also the data directory.
+func Load(dir string) (*Config, error) {
+	path := filepath.Join(dir, "config.yaml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -79,8 +84,9 @@ func Load(path string) (*Config, error) {
 	if cfg.Listen == "" {
 		cfg.Listen = ":8088"
 	}
-	if cfg.Data == "" {
-		cfg.Data = filepath.Dir(path)
+	cfg.Data = dir
+	if cfg.LegacyData != "" && filepath.Clean(cfg.LegacyData) != filepath.Clean(dir) {
+		return nil, fmt.Errorf("%s: data: %s is no longer supported; all data is written to the -d directory %s", path, cfg.LegacyData, dir)
 	}
 	if cfg.Workers <= 0 {
 		cfg.Workers = 2

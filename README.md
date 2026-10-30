@@ -85,7 +85,6 @@ web/      Preact UI (embedded)
 
 ```yaml
 listen: ":8088"
-data: /data/files-go          # database, thumbnails, subtitles and HLS cache
 workers: 4                    # concurrent enrichment jobs
 scan_interval: 6h
 hwaccel: auto                 # auto | vaapi | none; checked with a test encode at startup
@@ -131,8 +130,12 @@ survive restarts (32 MiB/1024 entries); fragment caches remain temporary and the
 directory is exclusively locked. Thumbnail/subtitle generation has bounded
 concurrency and input/output budgets; see [the audit status](docs/improvements.md).
 
-Run with `files-go -d dir` to load `dir/config.yaml` (default: `~/.filesgo/config.yaml`).
-If `data` is omitted, the configuration directory also stores the database and caches.
+Run with `files-go -d dir` to load `dir/config.yaml` (default: `~/.filesgo`).
+Everything the program writes stays in that directory: the database, thumbnail,
+subtitle and HLS caches, and temporary files. `TMPDIR` and `XDG_CACHE_HOME` are
+pointed at `dir/tmp` and `dir/cache/xdg` for SQLite and the external tools, and
+`dir/tmp` is cleared at startup. The former `data:` setting is rejected unless it
+names the same directory.
 File changes are indexed in the background using filesystem notifications.
 Events for the same directory are merged until it has been quiet for two seconds;
 new or moved-in directory trees are discovered and watched recursively. Browsing
@@ -158,8 +161,9 @@ and audio; `pdfinfo` / `pdftoppm` (poppler) are optional for PDFs.
 
 See [`deploy/`](deploy) for a systemd unit that additionally enforces
 read-only access to the media volume; it joins the `render` group for VAAPI.
-Create `/data/files-go` and `/data/files-go/tmp` owned by the service user;
-the service writes its index, caches and temporary files on this data volume.
+Create `/data/files-go` owned by the service user and put the binary and
+`config.yaml` there; the service writes nothing outside that directory, so a
+small SD/USB system disk is never used.
 
 ## API
 

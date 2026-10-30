@@ -31,13 +31,13 @@ func main() {
 
 func run() error {
 	home, _ := os.UserHomeDir()
-	configDir := flag.String("d", filepath.Join(home, ".filesgo"), "directory containing config.yaml")
+	dir := flag.String("d", filepath.Join(home, ".filesgo"), "data directory: config.yaml, index, caches and temporary files")
 	flag.Parse()
-	cfg, err := config.Load(filepath.Join(*configDir, "config.yaml"))
+	cfg, err := config.Load(*dir)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(cfg.Data, 0o755); err != nil {
+	if err := confine(cfg.Data); err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -127,6 +127,29 @@ func run() error {
 	<-shutdownDone
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
+	}
+	return nil
+}
+
+// confine points temporary files and per-user caches of this process and the
+// tools it runs (SQLite, ffmpeg, poppler, fontconfig, Mesa) into the data
+// directory, so nothing is written to the system disk or the home directory.
+// Leftover temporary files from a previous run are removed.
+func confine(data string) error {
+	tmp := filepath.Join(data, "tmp")
+	if err := os.RemoveAll(tmp); err != nil {
+		return err
+	}
+	xdg := filepath.Join(data, "cache", "xdg")
+	for _, d := range []string{tmp, xdg} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return err
+		}
+	}
+	for key, value := range map[string]string{"TMPDIR": tmp, "XDG_CACHE_HOME": xdg} {
+		if err := os.Setenv(key, value); err != nil {
+			return err
+		}
 	}
 	return nil
 }
