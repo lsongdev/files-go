@@ -1,4 +1,4 @@
-import { html, render, useCallback, useEffect, useLayoutEffect, useRef, useState } from './vendor/htm-preact-3.1.1.mjs';
+import { html, render, useCallback, useEffect, useLayoutEffect, useRef, useState } from './node_modules/@lsongdev/scripts/react/react.js';
 
 // Absolute URLs keep fetch working when the page was opened as http://user:pass@host/.
 const request = (url, options) => fetch(new URL(url, location.origin), options);
@@ -156,6 +156,14 @@ function Preview({ item, playing }) {
   return null;
 }
 
+// Artwork belongs to the entire detail page, including its navigation.
+function PageBackdrop({ item }) {
+  const [failed, setFailed] = useState(false);
+  const src = `/api/files/${item.id}/backdrop?v=${item.version || item.mtime}-${item.meta?.artworkVersion || ''}`;
+  useEffect(() => setFailed(false), [src]);
+  return failed ? null : html`<div class="page-backdrop" aria-hidden="true"><img src=${src} alt="" onError=${() => setFailed(true)}/></div>`;
+}
+
 function Details({ item, onMatch, onRefresh, onConfirm }) {
   const [playing, setPlaying] = useState(false);
   const m = item.meta || {};
@@ -173,7 +181,6 @@ function Details({ item, onMatch, onRefresh, onConfirm }) {
   ].filter(Boolean);
   const canMatch = ['video', 'movie', 'episode', 'show', 'season'].includes(m.kind) || item.kind === 'video' || m.locked;
   return html`<section class="details">
-    ${m.backdrop && html`<div class="backdrop" style=${{ backgroundImage: `url(/api/files/${item.id}/backdrop?v=${item.version || item.mtime}-${m.artworkVersion || ''})` }}></div>`}
     <div class="hero">
       ${(item.thumb || !item.dir) && html`<div class=${`cover ${m.kind === 'album' ? 'album' : posterKind(item) ? 'poster' : ''}`}><${Thumb} item=${item} size=${48}/></div>`}
       <div class="heading">
@@ -266,6 +273,40 @@ const ROOT_STATE = { idle: '空闲', scanning: '正在扫描', offline: '离线'
 const ACTIVITY = { scan: '扫描', identified: '已识别', processed: '已处理', review: '待确认', failed: '失败', retry: '稍后重试' };
 const clock = (ms) => new Date(ms).toLocaleTimeString('zh-CN', { hour12: false });
 
+function LibraryRow({ root, onOpen }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+  useEffect(() => { setSubmitted(false); }, [root.state, root.lastScan]);
+  const scanning = root.state === 'scanning';
+  const date = root.lastScan && new Date(root.lastScan);
+  const lastScan = date && date.valueOf() > 0 ? date.toLocaleString('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  }) : '尚未扫描';
+  const scan = async () => {
+    if (busy || scanning) return;
+    setBusy(true); setError(''); setSubmitted(false);
+    try {
+      await api(`/api/roots/${encodeURIComponent(root.id)}/scan`, { method: 'POST' });
+      setSubmitted(true);
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  };
+  return html`<tr>
+    <td class="library-name" data-label="媒体库名称"><button disabled=${!root.fileId} onClick=${() => onOpen(root.fileId)}>${root.name}</button></td>
+    <td data-label="状态"><span class=${`state ${root.state}`}>${ROOT_STATE[root.state] || root.state}</span>
+      ${scanning && html`<small>已扫描 ${root.scanned.toLocaleString()} 项</small>`}
+      ${(root.error || root.watchError) && html`<small class="error">${root.error || root.watchError}</small>`}
+    </td>
+    <td class="library-time" data-label="最后扫描时间">${date && date.valueOf() > 0 ? html`<time datetime=${root.lastScan}>${lastScan}</time>` : lastScan}</td>
+    <td class="library-action" data-label="操作"><button class="ghost small" disabled=${busy || scanning} onClick=${scan} aria-label=${`扫描媒体库 ${root.name}`}>
+      <${Icon} name="refresh" size=${14}/>${scanning ? '扫描中' : busy ? '提交中…' : '扫描'}
+    </button>
+      ${(error || submitted) && html`<small class=${`library-feedback ${error ? 'error' : ''}`} role="status">${error || '扫描请求已提交'}</small>`}
+    </td>
+  </tr>`;
+}
+
 // Live view of scanning and identification, fed by server-sent events.
 function ActivityPage({ status, feed, roots, onOpen }) {
   if (!status) return html`<p class="empty">加载中…</p>`;
@@ -277,11 +318,10 @@ function ActivityPage({ status, feed, roots, onOpen }) {
     <h2>实时活动</h2>
     <div class="counters">${counters.map(([label, n]) => html`<div><strong>${(n || 0).toLocaleString()}</strong><span>${label}</span></div>`)}</div>
     <h3>媒体库</h3>
-    <ul class="rows">${status.roots.map((r) => html`<li>
-      <button onClick=${() => onOpen(r.fileId)}>${r.name}</button>
-      <span class=${`state ${r.state}`}>${ROOT_STATE[r.state] || r.state}${r.state === 'scanning' ? ` · ${r.scanned.toLocaleString()}` : ''}</span>
-      <small>${r.error || r.watchError || (r.lastScan ? `上次扫描 ${new Date(r.lastScan).toLocaleString('zh-CN', { hour12: false })}` : '')}</small>
-    </li>`)}</ul>
+    <div class="library-list"><table>
+      <thead><tr><th scope="col">媒体库名称</th><th scope="col">状态</th><th scope="col">最后扫描时间</th><th scope="col" class="library-action">操作</th></tr></thead>
+      <tbody>${status.roots.map((r) => html`<${LibraryRow} key=${r.id} root=${r} onOpen=${onOpen}/>` )}</tbody>
+    </table>${!status.roots.length && html`<p class="hint">尚未配置媒体库</p>`}</div>
     <h3>正在处理</h3>
     ${status.running?.length ? html`<ul class="rows">${status.running.map((f) => html`<li><button onClick=${() => onOpen(f.id)}>${where(f.root, f.path)}</button></li>`)}</ul>`
       : html`<p class="hint">${pending > 0 ? '等待中' : '空闲'}</p>`}
@@ -311,6 +351,8 @@ function App() {
   const [changed, setChanged] = useState(null); // {force}: re-check what is shown
   const [nav, setNav] = useState(false);
   const [view, setView] = useState(() => localStorage.getItem('view') || 'grid');
+  const [opening, setOpening] = useState(null);
+  const [scrolled, setScrolled] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'));
   const sentinel = useRef(null);
   const seq = useRef(0);
@@ -319,7 +361,7 @@ function App() {
   const nextActive = useRef(null);
   const displayed = useRef(null);
   const restore = useRef(null);
-  displayed.current = { current, ancestors, items, more, searching, loading };
+  displayed.current = { current, ancestors, items, more, searching, loading, opening, roots };
 
   const position = () => {
     const top = document.querySelector('.top')?.getBoundingClientRect().bottom || 0;
@@ -329,7 +371,7 @@ function App() {
   };
 
   const remember = () => {
-    if (!active.current) return;
+    if (!active.current || displayed.current.opening?.blank) return;
     const page = { ...active.current, ...displayed.current, position: position() };
     pages.current.delete(page.key);
     pages.current.set(page.key, page);
@@ -355,6 +397,7 @@ function App() {
     let frame;
     const save = () => {
       frame = null;
+      setScrolled(window.scrollY > 8);
       if (!active.current || displayed.current.loading || history.state?.pageKey !== active.current.key) return;
       history.replaceState({ ...history.state, position: position(), count: displayed.current.items.length }, '');
     };
@@ -432,11 +475,26 @@ function App() {
     if (push) history.pushState(entry, '', url);
     else history.replaceState({ ...state, ...entry }, '');
     setLoading(true); setError(''); setNav(false);
+    const previous = displayed.current;
+    const sameID = (f) => f && String(f.id) === String(target.id);
+    const root = previous.roots.find((r) => String(r.fileId) === String(target.id));
+    const preview = previous.items.find(sameID) || previous.ancestors.find(sameID)
+      || (sameID(previous.current) ? previous.current : null)
+      || (root ? { id: root.fileId, root: root.id, name: root.name, dir: true } : null);
+    let previewAncestors = [];
+    if (preview && previous.items.some(sameID) && previous.current?.dir) {
+      previewAncestors = [...previous.ancestors, previous.current];
+    } else if (preview && previous.ancestors.some(sameID)) {
+      previewAncestors = previous.ancestors.slice(0, previous.ancestors.findIndex(sameID));
+    }
+    setOpening({ target, blank: !cached, label: preview ? title(preview) : (label || '内容') });
     if (cached) install(cached, saved);
+    else install({ current: preview, ancestors: previewAncestors, items: [], more: false }, { y: 0 });
     try {
       let page;
       if (target.id) {
         const data = await api(`/api/files/${target.id}`);
+        if (n !== seq.current) return;
         let children = { items: [], more: false };
         if (data.file.dir) {
           // The server caps each request at 1000; restore every previously loaded page.
@@ -456,6 +514,7 @@ function App() {
       if (n !== seq.current) return;
       // Preserve any scrolling done while the cached list was being refreshed.
       install(page, cached ? position() : saved);
+      setOpening(null);
     } catch (e) { if (n === seq.current) setError(e.message); }
     if (n === seq.current) setLoading(false);
   }, []);
@@ -467,6 +526,7 @@ function App() {
   const issues = useCallback((type, push = true) => openPage({ type }, push), [openPage]);
   const openActivity = useCallback((push = true) => {
     remember();
+    ++seq.current; setOpening(null); setLoading(false);
     if (push) history.pushState({ activity: true }, '', '/activity');
     setActivity(true); setNav(false); setError('');
     api('/api/activity').then((data) => { setFeed(data.items); setStatus(data.status); }).catch((e) => setError(e.message));
@@ -550,6 +610,8 @@ function App() {
   };
 
   const activeRoot = ancestors[0]?.root || current?.root;
+  const hasBackdrop = !activity && !searching && !opening?.blank && current?.meta?.backdrop
+    && (!current.dir || current.meta.kind || current.meta.locked);
   return html`<div class=${`app ${nav ? 'nav-open' : ''}`}>
     <aside>
       <div class="brand">files</div>
@@ -563,8 +625,10 @@ function App() {
       <${Status} status=${status} active=${activity} onOpen=${() => openActivity()}/>
     </aside>
     ${nav && html`<div class="scrim" onClick=${() => setNav(false)}></div>`}
-    <main>
-      <header class="top">
+    <main class=${hasBackdrop ? 'has-backdrop' : ''}>
+      ${hasBackdrop && html`<${PageBackdrop} key=${current.id} item=${current}/>`}
+      ${opening && loading && html`<div class="navigation-progress" role="status" aria-label="正在加载页面"></div>`}
+      <header class=${`top ${scrolled ? 'scrolled' : ''}`}>
         <button class="icon-button menu" onClick=${() => setNav(!nav)}><${Icon} name="menu"/></button>
         <form class="search" onSubmit=${(e) => { e.preventDefault(); search(query); }}>
           <${Icon} name="search"/><input type="search" placeholder="搜索文件名、片名、书名…" value=${query} onInput=${(e) => setQuery(e.target.value)}/>
@@ -575,13 +639,17 @@ function App() {
       ${activity ? html`${error && html`<p class="error">${error}</p>`}<${ActivityPage} status=${status} feed=${feed} roots=${roots} onOpen=${load}/>` : html`
       <div class="crumbs">${searching ? html`<span>${Object.values(ISSUES).includes(searching) ? searching : `搜索 “${searching}”`} · ${items.length} 个结果</span>` : [...ancestors, current].filter(Boolean).map((f, i, all) => html`
         ${i > 0 && html`<span class="sep">/</span>`}<button disabled=${i === all.length - 1} onClick=${() => load(f.id)}>${f.parent ? f.name : (roots.find((r) => r.id === f.root)?.name || f.name)}</button>`)}</div>
-      ${error && html`<p class="error">${error}</p>`}
+      ${error && !opening?.blank && html`<p class="error">${error}</p>`}
+      ${opening?.blank ? html`<section class="page-loading" aria-busy=${loading}>
+        ${loading ? html`<span class="loading-spinner" aria-hidden="true"></span><p role="status">正在打开 ${opening.label}…</p>`
+          : html`<p class="error" role="alert">无法打开 ${opening.label}：${error}</p><button class="ghost small" onClick=${() => openPage(opening.target, false)}>重试</button>`}
+      </section>` : html`
       ${current && !searching && (!current.dir || current.meta?.kind || current.meta?.locked) && html`<${Details} key=${current.id} item=${current} onMatch=${() => setMatching(true)} onRefresh=${refresh}
         onConfirm=${() => api(`/api/files/${current.id}/match`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ match: current.meta.match }) }).then(matched).catch((e) => setError(e.message))}/>`}
       ${current?.dir && !searching && !current.meta?.kind && !current.meta?.locked && html`<div class="toolbar"><span>${current.size} 项</span><button class="ghost small" onClick=${refresh}><${Icon} name="refresh" size=${14}/>重新扫描</button></div>`}
       ${(current?.dir || searching) && html`<${Listing} items=${items} view=${view} onOpen=${load}/>`}
       ${(current?.dir || searching) && !loading && !items.length && html`<p class="empty">${searching ? '没有找到匹配的文件' : '这个文件夹是空的'}</p>`}
-      <div ref=${sentinel} class="sentinel">${loading && '加载中…'}</div>`}
+      <div ref=${sentinel} class="sentinel">${loading && '加载中…'}</div>`}`}
     </main>
     ${matching && current && html`<${MatchDialog} item=${current} onClose=${() => setMatching(false)} onDone=${matched}/>`}
   </div>`;

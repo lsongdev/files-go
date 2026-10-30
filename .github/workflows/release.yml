@@ -14,13 +14,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install static browser modules
+        run: npm ci --prefix web
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
       - name: Test
-        run: go test ./...
+        run: make test
       - name: Build release targets
         run: make build
       - name: Set current date

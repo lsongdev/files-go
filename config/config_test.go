@@ -27,3 +27,30 @@ func TestDataIsTheConfigDirectory(t *testing.T) {
 		t.Fatalf("a different data directory must be rejected: %v", err)
 	}
 }
+
+func TestWorkerDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"omitted", "", 5},
+		{"zero", "workers: 0\n", 5},
+		{"negative", "workers: -1\n", 5},
+		{"explicit", "workers: 3\n", 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Workers != tc.want {
+				t.Fatalf("workers = %d, want %d", cfg.Workers, tc.want)
+			}
+		})
+	}
+}

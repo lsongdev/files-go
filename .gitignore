@@ -11,3 +11,6 @@
 
 # Local secrets referenced by config.yaml
 /.tmdb-token
+
+# Installed npm dependencies
+node_modules/

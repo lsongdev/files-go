@@ -1,9 +1,4 @@
 {
-  "htm-preact-3.1.1.mjs": {
-    "url": "https://unpkg.com/htm@3.1.1/preact/standalone.module.js",
-    "sha256": "7e06cf4b150d94d93aba6430b0953b9bc59d8f70aab3fcb099d8ea20f1989d88",
-    "modifications": "Removed sourceMappingURL and added this notice; runtime code unchanged."
-  },
   "hls-1.6.13.mjs": {
     "url": "https://unpkg.com/hls.js@1.6.13/dist/hls.mjs",
     "sha256": "a70af1b55a921dc2a7409f6221f878078e4ad660535a58ab52689043ca165e4b",

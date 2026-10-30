@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const assert = require('node:assert/strict');
 const slots = []; let cursor = 0, dirty = false, layouts = [];
 let entries = [{url: '/', state: null}], index = 0, y = 0, anchor = null;
-let fetches = [], deferred = null;
+let fetches = [], deferred = null, nextError = null;
 const ctx = {
  console, URL, URLSearchParams, Date, Math,
  location: {origin:'http://test', pathname:'/', search:''},
@@ -19,6 +19,7 @@ const ctx = {
  fetch:async url=>{
    fetches.push(url.pathname+url.search);
    if(deferred){const wait=deferred;deferred=null;await wait;}
+   if(nextError){const error=nextError;nextError=null;throw error;}
    let data;
    if(url.pathname.endsWith('/children')){
      const offset=+(url.searchParams.get('offset')||0), limit=+url.searchParams.get('limit');
@@ -30,7 +31,7 @@ const ctx = {
  }
 };
 let src = fs.readFileSync(require('node:path').join(__dirname, 'app.js'),'utf8').replace(/^import .*\n/, '').replaceAll('import.meta.url', "'http://test/app.js'");
-src=src.replace('  const activeRoot =', '  globalThis.controls = {load, search, issues, loadMore, navigate, current, items, loading};\n  const activeRoot =');
+src=src.replace('  const activeRoot =', '  globalThis.controls = {load, search, issues, loadMore, navigate, current, items, loading, opening, error};\n  const activeRoot =');
 vm.createContext(ctx); vm.runInContext(src,ctx);
 function draw(){cursor=0;layouts=[];dirty=false;vm.runInContext('App()',ctx);layouts.forEach(fn=>fn());}
 async function action(fn){const promise=fn();draw();await promise;draw();}
@@ -59,5 +60,21 @@ async function flush(){for(let i=0;i<20;i++)await new Promise(r=>setImmediate(r)
  assert(fetches.some(url=>url.includes('offset=1000')),'server limit handled in batches');
  // A load-more response from the previous folder must not append into a new page.
  let release;deferred=new Promise(r=>release=r);const old=ctx.controls.loadMore();draw();await action(()=>ctx.controls.load(2));release();await old;draw();assert.equal(ctx.controls.current.id,2);assert.equal(ctx.controls.items.length,10);
- console.log('PASS: back/forward, ancestor, anchor, search/issues, 1400-item cache eviction, stale pagination');
+ // Opening a slow, uncached page replaces the previous list immediately.
+ let finish; deferred=new Promise(r=>finish=r);
+ const opening=ctx.controls.load(90);draw();
+ assert.equal(ctx.controls.opening.blank,true);
+ assert.equal(ctx.controls.items.length,0,'old list is removed before the response');
+ assert.equal(ctx.controls.current,null,'old folder is not left on screen');
+ assert.equal(ctx.controls.loading,true);assert.equal(y,0,'loading feedback starts in view');
+ finish();await opening;draw();assert.equal(ctx.controls.current.id,90);assert.equal(ctx.controls.opening,null);
+ // Failed opens retain their target for retry, without caching an incomplete page.
+ nextError=new Error('offline');await action(()=>ctx.controls.load(91));
+ assert.equal(ctx.controls.error,'offline');assert.equal(ctx.controls.opening.target.id,91);assert.equal(ctx.controls.loading,false);
+ await action(()=>ctx.controls.load(91,false));assert.equal(ctx.controls.current.id,91);assert.equal(ctx.controls.opening,null);
+ // An obsolete detail response must not fetch children or replace a newer page.
+ let unblock;deferred=new Promise(r=>unblock=r);const obsolete=ctx.controls.load(92);draw();
+ await action(()=>ctx.controls.load(93));fetches=[];unblock();await obsolete;draw();
+ assert.equal(ctx.controls.current.id,93);assert(!fetches.some(url=>url.includes('/92/children')));
+ console.log('PASS: back/forward, ancestor, anchor, search/issues, 1400-item cache eviction, stale pagination, instant loading, retry, stale detail');
 })().catch(e=>{console.error(e);process.exitCode=1});
