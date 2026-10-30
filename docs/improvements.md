@@ -117,3 +117,10 @@ go test ./store -run '^$' -bench BenchmarkSearch -benchtime=3x -count=1
 4. 本地 SSD／机械盘／网络挂载的首次播放、时间轴读取量和 seek 分位数。
 
 后续实验应记录数据集、机器、参数与实际结果，不预先声称已达到性能目标。
+
+
+## 实机部署补充：大响应缓存的启动清理
+
+在一次实机部署的约 9.4 GiB 数据库、75,318 条 ThePornDB 缓存上，首次升级暴露了启动清理慢的问题。旧清理语句按 key 查询后读取 at；由于 at 位于大响应 BLOB 后面，即使记录全都新鲜，也会遍历大量溢出页。已增加覆盖索引 `cache_expiry(at,key)`，先从索引筛出过期 key，再删除对应记录。索引是增量 DDL，不改变 schema 版本或清空缓存；首次建索引仍有一次性的扫描成本。
+
+本机 100 条、每条 1 MiB 的新鲜缓存，三次采样平均：旧实现 15.91 ms／次，索引实现 0.572 ms／次（约 28 倍）；对应命令为 `go test ./store -run TestCachePrune -bench BenchmarkCachePruneFreshLargeResponses -benchtime=3x -count=1`。回归验证只清理指定前缀中的过期记录，不删除其他前缀或新鲜缓存。

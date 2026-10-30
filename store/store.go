@@ -62,6 +62,7 @@ CREATE TABLE overrides (root TEXT NOT NULL, path TEXT NOT NULL, choice TEXT NOT 
 // triggers and indexes are (re)created on every open so fixes apply
 // without a rebuild.
 const triggers = `
+CREATE INDEX IF NOT EXISTS cache_expiry ON cache(at,key);
 CREATE INDEX IF NOT EXISTS files_review ON files(json_extract(meta, '$.review')) WHERE json_extract(meta, '$.review') IS NOT NULL;
 CREATE INDEX IF NOT EXISTS files_error ON files(meta_err) WHERE meta_err IS NOT NULL;
 DROP TRIGGER IF EXISTS files_au;
@@ -408,8 +409,12 @@ func (s *Store) CacheGet(ctx context.Context, key string, maxAge time.Duration) 
 
 // CachePrune deletes cache entries under prefix that are older than maxAge.
 func (s *Store) CachePrune(ctx context.Context, prefix string, maxAge time.Duration) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM cache WHERE key >= ? AND key < ? AND at < ?`,
-		prefix, prefix+"\xff", time.Now().Add(-maxAge).Unix())
+	// Filter expiry through a covering index. at follows the potentially huge
+	// response BLOB in the table record; looking it up by key scans overflow
+	// pages even when every response is fresh.
+	_, err := s.db.ExecContext(ctx, `DELETE FROM cache WHERE key IN (
+	 SELECT key FROM cache INDEXED BY cache_expiry WHERE at<? AND key>=? AND key<?)`,
+		time.Now().Add(-maxAge).Unix(), prefix, prefix+"\xff")
 	return err
 }
 
