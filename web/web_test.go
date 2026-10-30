@@ -49,6 +49,8 @@ func TestStaticScriptsPackage(t *testing.T) {
 		"node_modules/@lsongdev/scripts/react/preact.js",
 		"node_modules/@lsongdev/scripts/react/preact-hooks.js",
 		"node_modules/@lsongdev/scripts/react/htm.js",
+		"node_modules/@lsongdev/scripts/react/components/dialog.js",
+		"node_modules/@lsongdev/scripts/dom/dialog.js",
 	}
 	for _, name := range paths {
 		t.Run(name, func(t *testing.T) {
@@ -71,5 +73,20 @@ func TestStaticScriptsPackage(t *testing.T) {
 				t.Fatal("relative dependency paths must revalidate after redeploy")
 			}
 		})
+	}
+}
+
+func TestStaticComponentStylesheets(t *testing.T) {
+	for _, name := range []string{"dialog.css", "base.css", "color.css"} {
+		path := "node_modules/@lsongdev/stylesheets/" + name
+		data, err := files.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		Handler().ServeHTTP(w, httptest.NewRequest("GET", "/"+path, nil))
+		if w.Code != 200 || !strings.Contains(w.Header().Get("Content-Type"), "text/css") || w.Body.String() != string(data) {
+			t.Fatalf("stylesheet unavailable or modified: %s", path)
+		}
 	}
 }

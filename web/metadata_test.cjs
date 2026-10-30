@@ -6,7 +6,7 @@ let state = [], cursor = 0, requests = [], hold;
 const ctx = {
   URL, URLSearchParams, console,
   location: { origin: 'http://test' },
-  document: { getElementById: () => ({}) }, render: () => {}, html: () => null,
+  document: { getElementById: () => ({}) }, render: () => {}, Dialog: () => null, html: () => null,
   useEffect: () => {}, useCallback: (f) => f,
   useState: (init) => {
     const i = cursor++;
@@ -26,9 +26,9 @@ const ctx = {
   },
 };
 let source = fs.readFileSync(require('node:path').join(__dirname, 'app.js'), 'utf8')
-  .replace(/^import .*\n/, '').replaceAll('import.meta.url', "'http://test/app.js'");
-source = source.replace('  return html`<div class="overlay"',
-  '  globalThis.matchControls = { search, choose, results, scope };\n  return html`<div class="overlay"');
+  .replace(/^import .*\n/gm, '').replaceAll('import.meta.url', "'http://test/app.js'");
+source = source.replace('  return html`<${Dialog}',
+  '  globalThis.matchControls = { search, choose, results, scope };\n  return html`<${Dialog}');
 vm.createContext(ctx); vm.runInContext(source, ctx);
 ctx.item = { id: 1, name: 'video.mkv', meta: { kind: 'movie', info: { Code: 'CAWD-549' } } };
 const draw = () => { cursor = 0; vm.runInContext('MatchDialog({item, onDone: value => globalThis.chosen = value})', ctx); };

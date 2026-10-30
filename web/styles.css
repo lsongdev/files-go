@@ -2,8 +2,15 @@
   --bg: #0b0d12; --panel: #12151d; --raised: #181c26; --hover: #1f2430; --line: #262c39;
   --text: #eef1f7; --muted: #8b95a8; --accent: #5b93ff; --warn: #f0b65a; --error: #ff7a84;
   --sidebar: 15rem;
+  /* Shared component tokens follow the application's active theme. */
+  --color-text: var(--text); --color-text-muted: var(--muted);
+  --color-surface: var(--panel); --color-surface-subtle: var(--hover);
+  --color-border: var(--line); --color-primary: var(--accent);
+  --color-primary-hover: color-mix(in srgb, var(--accent) 85%, white);
+  --color-focus: var(--accent);
+  --font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   color-scheme: dark;
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--font-family);
   font-size: 14px;
 }
 :root[data-theme="light"] {
@@ -119,13 +126,15 @@ img.full { display: block; max-width: 100%; max-height: 80vh; margin: 0 auto; bo
 iframe.pdf { width: 100%; height: 80vh; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 pre.text { max-height: 70vh; overflow: auto; padding: 1rem 1.2rem; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); font-size: .85rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.overlay { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(0,0,0,.55); padding: 1rem; }
-.dialog { width: min(40rem, 100%); max-height: 85vh; display: flex; flex-direction: column; gap: .8rem; padding: 1.2rem; border-radius: 14px; background: var(--raised); border: 1px solid var(--line); }
-.dialog header { display: flex; justify-content: space-between; align-items: center; }
-.dialog h2 { margin: 0; font-size: 1.1rem; }
-.dialog form { display: flex; gap: .5rem; }
-.dialog input, .dialog select { padding: .5rem .7rem; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
-.dialog input { flex: 1; min-width: 0; }
+/* Map the shared dialog's semantic tokens to the application theme. */
+.match-dialog { --color-text: var(--text); --color-surface: var(--raised); --color-border: var(--line); }
+.match-dialog[open] { display: flex; flex-direction: column; }
+.match-dialog .dialog-header, .match-dialog .dialog-footer { flex: none; }
+.match-dialog .dialog-body { display: flex; flex-direction: column; gap: .8rem; min-height: 0; }
+.match-dialog .dialog-body > .hint, .match-dialog .dialog-body > .error { margin: 0; flex: none; }
+.match-dialog form { display: flex; flex-wrap: wrap; gap: .5rem; flex: none; }
+.match-dialog input, .match-dialog select { padding: .5rem .7rem; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.match-dialog input { flex: 1; min-width: 0; }
 .candidates { overflow-y: auto; display: flex; flex-direction: column; gap: .3rem; }
 .candidates button { display: flex; gap: .8rem; align-items: flex-start; padding: .5rem; border-radius: 10px; background: none; color: var(--text); font-weight: 400; }
 .candidates button:hover { background: var(--hover); }

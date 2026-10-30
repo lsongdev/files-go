@@ -14,7 +14,9 @@ import (
 
 //go:embed index.html app.js player.js styles.css vendor/*
 //go:embed node_modules/@lsongdev/scripts/react/react.js node_modules/@lsongdev/scripts/react/preact.js node_modules/@lsongdev/scripts/react/preact-hooks.js node_modules/@lsongdev/scripts/react/htm.js
+//go:embed node_modules/@lsongdev/scripts/react/components/dialog.js node_modules/@lsongdev/scripts/dom/dialog.js
 //go:embed node_modules/@lsongdev/scripts/LICENSE node_modules/@lsongdev/scripts/THIRD_PARTY_NOTICES.md
+//go:embed node_modules/@lsongdev/stylesheets/dialog.css node_modules/@lsongdev/stylesheets/base.css node_modules/@lsongdev/stylesheets/color.css
 var files embed.FS
 
 var started = time.Now()
@@ -27,6 +29,11 @@ var version = func() string {
 		"node_modules/@lsongdev/scripts/react/preact.js",
 		"node_modules/@lsongdev/scripts/react/preact-hooks.js",
 		"node_modules/@lsongdev/scripts/react/htm.js",
+		"node_modules/@lsongdev/scripts/react/components/dialog.js",
+		"node_modules/@lsongdev/scripts/dom/dialog.js",
+		"node_modules/@lsongdev/stylesheets/dialog.css",
+		"node_modules/@lsongdev/stylesheets/base.css",
+		"node_modules/@lsongdev/stylesheets/color.css",
 	} {
 		data, _ := files.ReadFile(name)
 		h.Write(data)
