@@ -37,7 +37,7 @@ func TestFoldersAggregateWithoutOnlineLookups(t *testing.T) {
 		http.Error(w, "unexpected", 500)
 	}))
 	defer api.Close()
-	library := &Library{Store: st, Path: scanner.Abs, Hint: func(store.File) (string, string) { return "auto", "" }, TMDB: newTMDB(tmdb.Options{Key: "k", BaseURL: api.URL})}
+	library := &Library{Store: st, Open: scanner.Open, Hint: func(store.File) (string, string) { return "auto", "" }, TMDB: newTMDB(tmdb.Options{Key: "k", BaseURL: api.URL})}
 	pipeline, _ := NewPipeline(ctx, st, "folders", library.Folders())
 	seed := func(name string, m Meta) {
 		f, _ := st.ByPath(ctx, "r", name)

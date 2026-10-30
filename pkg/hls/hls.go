@@ -11,8 +11,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lsongdev/files-go/pkg/source"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -34,6 +36,7 @@ type Config struct {
 	JobTimeout      time.Duration // default 2 min, including waiting for a slot
 	MaxBytes        int64         // default 512 MiB of completed fragments
 	MaxConcurrent   int           // default 2 probe/ffmpeg processes
+	MaxSegments     int           // default 32768 timeline segments per source
 	MaxSessions     int           // default 128 independent playback tokens
 }
 
@@ -42,10 +45,12 @@ type Config struct {
 // CopyVideo requires OutputArgs to copy v:0; it enables keyframe-aligned cuts.
 // Hardware and codec policy belong to the caller, outside this package.
 type Source struct {
-	Path       string
+	File       source.File
 	CopyVideo  bool
 	InputArgs  []string
 	OutputArgs []string
+	size       int64
+	mtime      time.Time
 }
 
 type Playback struct {
@@ -80,20 +85,22 @@ type job struct {
 }
 
 type Manager struct {
-	cfg    Config
-	dir    string
-	ctx    context.Context
-	cancel context.CancelFunc
-	closed chan struct{}
-	slots  chan struct{}
-	wg     sync.WaitGroup
-	mu     sync.Mutex
-	stop   bool
-	bytes  int64
-	media  map[string]*stream
-	plays  map[string]*playback
-	cache  map[string]*cached
-	jobs   map[string]*job
+	lease      *os.File
+	cfg        Config
+	dir        string
+	ctx        context.Context
+	cancel     context.CancelFunc
+	closed     chan struct{}
+	slots      chan struct{}
+	wg         sync.WaitGroup
+	timelineMu sync.Mutex
+	mu         sync.Mutex
+	stop       bool
+	bytes      int64
+	media      map[string]*stream
+	plays      map[string]*playback
+	cache      map[string]*cached
+	jobs       map[string]*job
 }
 
 func New(ctx context.Context, cfg Config) (*Manager, error) {
@@ -121,6 +128,9 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 	if cfg.MaxConcurrent <= 0 {
 		cfg.MaxConcurrent = 2
 	}
+	if cfg.MaxSegments <= 0 {
+		cfg.MaxSegments = 32768
+	}
 	if cfg.MaxSessions <= 0 {
 		cfg.MaxSessions = 128
 	}
@@ -135,14 +145,33 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 	if err := os.MkdirAll(cfg.CacheDir, 0o700); err != nil {
 		return nil, err
 	}
+	lease, err := source.Lock(filepath.Join(cfg.CacheDir, "manager.lock"))
+	if err != nil {
+		return nil, fmt.Errorf("HLS cache directory is in use: %w", err)
+	}
+	entries, err := os.ReadDir(cfg.CacheDir)
+	if err != nil {
+		lease.Close()
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), "hls-") {
+			if err := os.RemoveAll(filepath.Join(cfg.CacheDir, entry.Name())); err != nil {
+				lease.Close()
+				return nil, err
+			}
+		}
+	}
 	dir, err := os.MkdirTemp(cfg.CacheDir, "hls-")
 	if err != nil {
+		lease.Close()
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	m := &Manager{cfg: cfg, dir: dir, ctx: ctx, cancel: cancel, closed: make(chan struct{}),
+	m := &Manager{lease: lease, cfg: cfg, dir: dir, ctx: ctx, cancel: cancel, closed: make(chan struct{}),
 		slots: make(chan struct{}, cfg.MaxConcurrent), media: make(map[string]*stream),
 		plays: make(map[string]*playback), cache: make(map[string]*cached), jobs: make(map[string]*job)}
+	m.pruneTimelines()
 	go m.maintain()
 	return m, nil
 }
@@ -154,20 +183,16 @@ func (m *Manager) Open(ctx context.Context, src Source) (Playback, error) {
 	if err := ctx.Err(); err != nil {
 		return Playback{}, err
 	}
-	path, err := filepath.Abs(src.Path)
-	if err != nil {
-		return Playback{}, err
+	if src.File.Open == nil || src.File.Key == "" {
+		return Playback{}, fmt.Errorf("source requires a key and opener")
 	}
-	src.Path = path
 	src.InputArgs = append([]string(nil), src.InputArgs...)
 	src.OutputArgs = append([]string(nil), src.OutputArgs...)
-	info, err := os.Stat(src.Path)
+	info, err := src.File.Stat(ctx)
 	if err != nil {
 		return Playback{}, err
 	}
-	if !info.Mode().IsRegular() {
-		return Playback{}, fmt.Errorf("media source is not a regular file")
-	}
+	src.size, src.mtime = info.Size(), info.ModTime()
 	encoded, _ := json.Marshal(struct {
 		Source         Source
 		Size, Modified int64
@@ -180,6 +205,20 @@ func (m *Manager) Open(ctx context.Context, src Source) (Playback, error) {
 		prepared.last = time.Now()
 	}
 	m.mu.Unlock()
+	if prepared == nil {
+		if segments, ok := m.loadTimeline(src); ok {
+			if err := unchanged(ctx, src.File, src.size, src.mtime); err != nil {
+				return Playback{}, err
+			}
+			m.mu.Lock()
+			prepared = m.media[id]
+			if prepared == nil {
+				prepared = &stream{source: src, segments: segments, size: src.size, mtime: src.mtime, last: time.Now()}
+				m.media[id] = prepared
+			}
+			m.mu.Unlock()
+		}
+	}
 	// A second viewer of an already-probed rendition needs no process slot.
 	if prepared == nil {
 		err = m.do(ctx, "probe:"+id, func(ctx context.Context) error {
@@ -189,11 +228,11 @@ func (m *Manager) Open(ctx context.Context, src Source) (Playback, error) {
 			if ready {
 				return nil
 			}
-			segments, err := m.timeline(ctx, src)
+			segments, err := m.preparedTimeline(ctx, src)
 			if err != nil {
 				return err
 			}
-			if err := unchanged(src.Path, info.Size(), info.ModTime()); err != nil {
+			if err := unchanged(ctx, src.File, info.Size(), info.ModTime()); err != nil {
 				return err
 			}
 			m.mu.Lock()
@@ -227,6 +266,7 @@ func (m *Manager) Open(ctx context.Context, src Source) (Playback, error) {
 	}
 	token := hex.EncodeToString(key)
 	m.plays[token] = &playback{stream: s, last: time.Now()}
+	m.trimTimelines()
 	last := s.segments[len(s.segments)-1]
 	return Playback{Key: token, Duration: last.start + last.duration}, nil
 }
@@ -293,7 +333,7 @@ func (m *Manager) Segment(ctx context.Context, key string, index int, init bool)
 			if ready {
 				return nil
 			}
-			if err := unchanged(s.source.Path, s.size, s.mtime); err != nil {
+			if err := unchanged(ctx, s.source.File, s.size, s.mtime); err != nil {
 				return err
 			}
 			dir, err := os.MkdirTemp(m.dir, "fragment-")
@@ -309,7 +349,7 @@ func (m *Manager) Segment(ctx context.Context, key string, index int, init bool)
 			if err := m.render(ctx, s.source, s.segments[index], dir); err != nil {
 				return err
 			}
-			if err := unchanged(s.source.Path, s.size, s.mtime); err != nil {
+			if err := unchanged(ctx, s.source.File, s.size, s.mtime); err != nil {
 				return err
 			}
 			files, err := os.ReadDir(dir)
@@ -488,6 +528,7 @@ func (m *Manager) maintain() {
 	tick := time.NewTicker(min(30*time.Second, m.cfg.IdleTimeout))
 	defer tick.Stop()
 	defer close(m.closed)
+	defer m.lease.Close()
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -523,8 +564,8 @@ func (m *Manager) maintain() {
 	}
 }
 
-func unchanged(path string, size int64, modified time.Time) error {
-	info, err := os.Stat(path)
+func unchanged(ctx context.Context, file source.File, size int64, modified time.Time) error {
+	info, err := file.Stat(ctx)
 	if err != nil {
 		return err
 	}
@@ -532,4 +573,43 @@ func unchanged(path string, size int64, modified time.Time) error {
 		return ErrSourceChanged
 	}
 	return nil
+}
+
+func (src Source) open(ctx context.Context) (*os.File, error) {
+	f, err := src.File.Open(ctx)
+	if err != nil {
+		return nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if info.Size() != src.size || !info.ModTime().Equal(src.mtime) {
+		f.Close()
+		return nil, ErrSourceChanged
+	}
+	return f, nil
+}
+
+// Keep unused in-memory timelines bounded as viewers open different files.
+// Active playback tokens already have their own MaxSessions bound.
+func (m *Manager) trimTimelines() {
+	used := map[*stream]bool{}
+	for _, p := range m.plays {
+		used[p.stream] = true
+	}
+	for len(m.media) > m.cfg.MaxSessions {
+		oldest := ""
+		var at time.Time
+		for id, s := range m.media {
+			if !used[s] && (oldest == "" || s.last.Before(at)) {
+				oldest, at = id, s.last
+			}
+		}
+		if oldest == "" {
+			break
+		}
+		delete(m.media, oldest)
+	}
 }

@@ -1,49 +1,75 @@
 package media
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/lsongdev/files-go/pkg/ffmpeg"
+	"github.com/lsongdev/files-go/pkg/source"
 	"github.com/lsongdev/files-go/store"
 )
 
-// Resolver maps an indexed file to its absolute path.
-type Resolver func(store.File) (string, error)
+// Opener returns a rooted regular file. Callers own and close the handle.
+type Opener func(context.Context, store.File) (*os.File, error)
 
 // Probe reads container, stream and tag information with ffprobe.
 type Probe struct {
-	Bin  string
-	Path Resolver
+	Bin   string
+	Open  Opener
+	Store *store.Store
 }
 
 func (p *Probe) Match(f *store.File) bool { return f.Kind == "video" || f.Kind == "audio" }
 
 func (p *Probe) Enrich(ctx context.Context, f *store.File, m *Meta) error {
-	name, err := p.Path(*f)
+	input, err := p.Open(ctx, *f)
 	if err != nil {
 		return err
 	}
-	if ext := Ext(f.Name); (ext == "ts" || ext == "mts") && !transportStream(name) {
+	defer input.Close()
+	if ext := Ext(f.Name); (ext == "ts" || ext == "mts") && !transportStream(input) {
 		f.Kind = "code" // TypeScript, not MPEG-TS
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, p.Bin, "-v", "error", "-show_format", "-show_streams", "-of", "json", name)
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("ffprobe: %v: %s", err, firstLine(stderr.String()))
+	info, err := input.Stat()
+	if err != nil {
+		return err
 	}
-	return parseProbe(stdout.Bytes(), f, m)
+	key := fmt.Sprintf("probe:v2:%d", f.ID)
+	var cached struct {
+		Size, Modified int64
+		Bin            string
+		Data           json.RawMessage
+	}
+	if p.Store != nil {
+		if b, ok := p.Store.CacheGet(ctx, key, 30*24*time.Hour); ok && json.Unmarshal(b, &cached) == nil && cached.Size == info.Size() && cached.Modified == info.ModTime().UnixNano() && cached.Bin == p.Bin {
+			return parseProbe(cached.Data, f, m)
+		}
+	}
+	cmd := ffmpeg.Command(ctx, p.Bin, input, "-v", "error", "-show_format", "-show_streams", "-of", "json", source.Input)
+	data, err := source.Output(cmd, 4<<20)
+	if err != nil {
+		return err
+	}
+	if err := parseProbe(data, f, m); err != nil {
+		return err
+	}
+	if p.Store != nil {
+		cached.Size, cached.Modified, cached.Bin, cached.Data = info.Size(), info.ModTime().UnixNano(), p.Bin, data
+		b, _ := json.Marshal(cached)
+		if err := p.Store.CachePut(ctx, key, b); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type probeOutput struct {
@@ -132,12 +158,8 @@ func parseProbe(data []byte, f *store.File, m *Meta) error {
 
 // transportStream checks for the 0x47 sync byte of 188-byte TS packets or
 // 192-byte AVCHD/BDAV packets.
-func transportStream(name string) bool {
-	file, err := os.Open(name)
-	if err != nil {
-		return false
-	}
-	defer file.Close()
+func transportStream(file *os.File) bool {
+	defer file.Seek(0, 0)
 	buf := make([]byte, 192*3)
 	if _, err := io.ReadFull(file, buf); err != nil {
 		return false

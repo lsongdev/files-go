@@ -69,7 +69,7 @@ func TestProviderCandidatesAndSharedDirectoryMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	hint := func(store.File) (string, string) { return "jav", "" }
-	library := &media.Library{Store: st, Path: scanner.Abs, Hint: hint}
+	library := &media.Library{Store: st, Open: scanner.Open, Hint: hint}
 	pipeline, _ := media.NewPipeline(ctx, st, "matches", playableFixture{}, library.Videos(), library.Folders(), &media.JAV{Client: tpdb, Store: st, Hint: hint})
 	done := make(chan struct{})
 	go func() { pipeline.Run(ctx, 3); close(done) }()
@@ -94,7 +94,7 @@ func TestProviderCandidatesAndSharedDirectoryMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer api.hls.Close()
+	defer api.Close()
 	handler := api.Handler(http.NotFoundHandler())
 	folder, _ := st.ByPath(ctx, "r", "CAWD-549")
 	request := func(method string, id int64, suffix, body string) *httptest.ResponseRecorder {

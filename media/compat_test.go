@@ -20,7 +20,7 @@ func TestLegacyExecutableDetection(t *testing.T) {
 		t.Fatal(err)
 	}
 	var m Meta
-	if err := portable(p, &m); err != nil {
+	if err := portable(openFixture(t, p), &m); err != nil {
 		t.Fatal(err)
 	}
 	if m.Info["Format"] != "DOS MZ" {
@@ -28,7 +28,7 @@ func TestLegacyExecutableDetection(t *testing.T) {
 	}
 	binary.LittleEndian.PutUint16(h[4:], 20)
 	os.WriteFile(p, h, 0600)
-	if err := portable(p, &Meta{}); err == nil {
+	if err := portable(openFixture(t, p), &Meta{}); err == nil {
 		t.Fatal("truncated DOS file accepted")
 	}
 }
@@ -47,7 +47,7 @@ func TestArchiveContainerDetection(t *testing.T) {
 	}
 	w.Close()
 	f.Close()
-	a := Archive{Path: func(store.File) (string, error) { return p, nil }}
+	a := Archive{Open: func(context.Context, store.File) (*os.File, error) { return os.Open(p) }}
 	var m Meta
 	if err = a.Enrich(context.Background(), &store.File{}, &m); err != nil {
 		t.Fatal(err)
@@ -59,4 +59,14 @@ func TestArchiveContainerDetection(t *testing.T) {
 	if err = a.Enrich(context.Background(), &store.File{}, &Meta{}); err == nil {
 		t.Fatal("HTML accepted as an archive")
 	}
+}
+
+func openFixture(t *testing.T, name string) *os.File {
+	t.Helper()
+	f, e := os.Open(name)
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
 }

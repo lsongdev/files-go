@@ -5,10 +5,13 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"github.com/lsongdev/files-go/pkg/ffmpeg"
+	"github.com/lsongdev/files-go/pkg/source"
+	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -41,7 +44,7 @@ func (s *Server) tracks(ctx context.Context, f store.File) ([]Track, error) {
 			tracks = append(tracks, Track{ID: "s" + strconv.Itoa(sub.Index), Label: label, Lang: sub.Lang, Default: sub.Default})
 		}
 	}
-	siblings, err := s.store.Children(ctx, f.Parent, 0, 2000)
+	siblings, err := s.store.Children(ctx, f.Parent, 0, -1)
 	if err != nil {
 		return nil, err
 	}
@@ -128,42 +131,69 @@ func (s *Server) subtitle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	name, err := s.scanner.Abs(src)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	sum := sha1.Sum([]byte(fmt.Sprintf("%s\x00%s\x00%d\x00%d\x00%s", src.Root, src.Path, src.MTime, src.Size, id)))
+	sum := sha1.Sum([]byte(fmt.Sprintf("v2:%s\x00%s\x00%d\x00%d\x00%s", src.Root, src.Path, src.MTimeNS, src.Size, id)))
 	key := hex.EncodeToString(sum[:])
 	cached := filepath.Join(s.cfg.Data, "cache", "subtitles", key[:2], key+".vtt")
 	if _, err := os.Stat(cached); err != nil {
-		if index, ok := strings.CutPrefix(id, "s"); ok {
-			args = []string{"-i", name, "-map", "0:s:" + index}
-		} else {
-			// Chinese .srt/.ass files are often GBK rather than UTF-8.
-			data, err := os.ReadFile(name)
+		err = s.subtitleJobs.do(r.Context(), s.ctx, key, 5*time.Minute, func(ctx context.Context) error {
+			if _, err := os.Stat(cached); err == nil {
+				return nil
+			}
+			release, err := slot(ctx, s.subtitleSlots)
 			if err != nil {
+				return err
+			}
+			defer release()
+			input, err := s.scanner.Open(ctx, src)
+			if err != nil {
+				return err
+			}
+			defer input.Close()
+			args = []string{}
+			if index, ok := strings.CutPrefix(id, "s"); ok {
+				args = []string{"-i", source.Input, "-map", "0:s:" + index}
+			} else {
+				info, err := input.Stat()
+				if err != nil {
+					return err
+				}
+				if info.Size() > 16<<20 {
+					return source.ErrLimit
+				}
+				prefix, err := io.ReadAll(io.LimitReader(input, 64<<10))
+				if err != nil {
+					return err
+				}
+				prefix = completePrefix(prefix)
+				if !utf8.Valid(prefix) && !bytes.HasPrefix(prefix, []byte{0xff, 0xfe}) && !bytes.HasPrefix(prefix, []byte{0xfe, 0xff}) {
+					args = append(args, "-sub_charenc", "GB18030")
+				}
+				args = append(args, "-i", source.Input)
+			}
+			return source.Atomic(cached, func(w io.Writer) error {
+				cmd := ffmpeg.Command(ctx, s.cfg.FFmpeg, input, append(append([]string{"-v", "error", "-nostdin"}, args...), "-f", "webvtt", "pipe:1")...)
+				stderr := &source.Buffer{Limit: 8192}
+				output := &source.Writer{W: w, Remaining: 64 << 20}
+				cmd.Stdout = output
+				cmd.Stderr = stderr
+				err := cmd.Run()
+				if output.Exceeded {
+					return source.ErrLimit
+				}
+				if err != nil {
+					return fmt.Errorf("convert subtitle: %w: %s", err, stderr.String())
+				}
+				return nil
+			})
+		})
+		if err != nil {
+			if errors.Is(err, source.ErrLimit) {
+				writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+			} else if errors.Is(err, errBusy) {
+				writeError(w, 429, err.Error())
+			} else {
 				s.fail(w, err)
-				return
 			}
-			if !utf8.Valid(data) && !bytes.HasPrefix(data, []byte{0xff, 0xfe}) && !bytes.HasPrefix(data, []byte{0xfe, 0xff}) {
-				args = append(args, "-sub_charenc", "GB18030")
-			}
-			args = append(args, "-i", name)
-		}
-		// Embedded tracks need a pass over the whole file; keep going if
-		// the client gives up so the next request hits the cache.
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Minute)
-		defer cancel()
-		var out, stderr bytes.Buffer
-		cmd := exec.CommandContext(ctx, s.cfg.FFmpeg, append(append([]string{"-v", "error", "-nostdin"}, args...), "-f", "webvtt", "pipe:1")...)
-		cmd.Stdout, cmd.Stderr = &out, &stderr
-		if err := cmd.Run(); err != nil {
-			s.fail(w, fmt.Errorf("convert subtitle: %v: %s", err, strings.TrimSpace(stderr.String())))
-			return
-		}
-		if err := writeFile(cached, out.Bytes()); err != nil {
-			s.fail(w, err)
 			return
 		}
 	}
@@ -185,3 +215,28 @@ var languages = map[string]string{
 }
 
 func languageName(code string) string { return languages[strings.ToLower(code)] }
+
+// Ignore only a genuinely incomplete UTF-8 tail, not invalid bytes in the prefix.
+func completePrefix(b []byte) []byte {
+	if len(b) == 0 {
+		return b
+	}
+	start := len(b) - 1
+	for start > 0 && len(b)-start < utf8.UTFMax && !utf8.RuneStart(b[start]) {
+		start--
+	}
+	lead := b[start]
+	need := 1
+	switch {
+	case lead >= 0xc2 && lead <= 0xdf:
+		need = 2
+	case lead >= 0xe0 && lead <= 0xef:
+		need = 3
+	case lead >= 0xf0 && lead <= 0xf4:
+		need = 4
+	}
+	if need > len(b)-start && utf8.Valid(b[:start]) {
+		return b[:start]
+	}
+	return b
+}

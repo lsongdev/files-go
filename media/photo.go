@@ -10,7 +10,6 @@ import (
 	_ "image/png"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -19,12 +18,14 @@ import (
 	_ "golang.org/x/image/tiff"
 	_ "golang.org/x/image/webp"
 
+	"github.com/lsongdev/files-go/pkg/ffmpeg"
+	"github.com/lsongdev/files-go/pkg/source"
 	"github.com/lsongdev/files-go/store"
 )
 
 // Photo reads dimensions and EXIF (capture time, camera, lens, GPS).
 type Photo struct {
-	Path    Resolver
+	Open    Opener
 	FFprobe string
 }
 
@@ -37,19 +38,16 @@ func (Photo) Match(f *store.File) bool {
 }
 
 func (p Photo) Enrich(ctx context.Context, f *store.File, m *Meta) error {
-	name, err := p.Path(*f)
+	input, err := p.Open(ctx, *f)
 	if err != nil {
 		return err
 	}
-	file, err := os.Open(name)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
+	defer input.Close()
+	file := input
 	m.Kind = "photo"
 	cfg, format, err := image.DecodeConfig(file)
 	if err != nil {
-		return p.probeImage(ctx, name, m, err)
+		return p.probeImage(ctx, input, m, err)
 	}
 	m.Width, m.Height = cfg.Width, cfg.Height
 	m.Set("Format", strings.ToUpper(format))
@@ -83,14 +81,14 @@ func (p Photo) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	return nil
 }
 
-func (p Photo) probeImage(ctx context.Context, name string, m *Meta, original error) error {
+func (p Photo) probeImage(ctx context.Context, input *os.File, m *Meta, original error) error {
 	bin := p.FFprobe
 	if bin == "" {
 		bin = "ffprobe"
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,codec_name", "-of", "json", name).Output()
+	out, err := source.Output(ffmpeg.Command(ctx, bin, input, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,codec_name", "-of", "json", source.Input), 1<<20)
 	if err != nil {
 		return fmt.Errorf("decode image: %w; ffprobe: %v", original, err)
 	}

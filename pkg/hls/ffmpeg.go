@@ -3,8 +3,9 @@ package hls
 import (
 	"context"
 	"fmt"
+	"github.com/lsongdev/files-go/pkg/ffmpeg"
+	"github.com/lsongdev/files-go/pkg/source"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 )
@@ -15,7 +16,7 @@ func seconds(n float64) string { return strconv.FormatFloat(n, 'f', 6, 64) }
 // section. No adjacent fragments or background transcoding jobs are started.
 func (m *Manager) render(ctx context.Context, src Source, seg segment, dir string) error {
 	args := append([]string{"-v", "error", "-nostdin"}, src.InputArgs...)
-	args = append(args, "-ss", seconds(seg.start), "-i", src.Path, "-t", seconds(seg.duration))
+	args = append(args, "-ss", seconds(seg.start), "-i", source.Input, "-t", seconds(seg.duration))
 	args = append(args, src.OutputArgs...)
 	if src.CopyVideo {
 		// Drop packets beyond this GOP without -frames:v: that option ends
@@ -26,7 +27,12 @@ func (m *Manager) render(ctx context.Context, src Source, seg segment, dir strin
 	args = append(args, "-strict", "-2", "-f", "hls", "-hls_time", seconds(seg.duration+60),
 		"-hls_playlist_type", "vod", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4",
 		"-hls_segment_filename", filepath.Join(dir, "segment-%d.m4s"), filepath.Join(dir, "index.m3u8"))
-	cmd := exec.CommandContext(ctx, m.cfg.FFmpeg, args...)
+	input, err := src.open(ctx)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	cmd := ffmpeg.Command(ctx, m.cfg.FFmpeg, input, args...)
 	var stderr limitedBuffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

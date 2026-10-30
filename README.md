@@ -47,12 +47,13 @@ upload, rename or delete operations.
 - **The table is the queue.** `meta_ver` is the enrichment version a row was
   processed with. Rows below the current version are pending, so changed
   files, new enrichers or configuration changes (TMDB on/off, root types)
-  re-enrich automatically, and nothing is lost on restart.
+  re-enrich automatically. Per-file retries, delays and errors survive restart;
+  provider failures cool down independently and successful probes are cached.
 - **Scanning** reconciles one directory at a time against the index and only
-  writes what changed. A missing root, or one that turned empty and now sits
-  on another filesystem than before, is treated as an unmounted disk and
-  leaves the index untouched (`POST /api/roots/{root}/scan?force=1` confirms
-  a root that is really empty). Filesystem events trigger background incremental
+  writes what changed. Missing roots leave the index untouched. Changes to
+  device/optional marker stop reads and scanning; an unexpectedly empty root
+  without a marker requires `POST /api/roots/{root}/scan?force=1` to accept the
+  current mount/empty view. Filesystem events trigger background incremental
   scans; periodic full scans reconcile missed events. Browsing reads only the index.
 - **Enrichers** share one interface (`Match`, `Enrich`) and run in order on
   the same metadata, so the movie lookup can build on ffprobe's result.
@@ -98,6 +99,7 @@ tmdb:
 roots:
   - name: Videos
     path: /data/Videos
+    # mount_marker: .disk-id   # optional existing file with a stable, disk-specific value
     types:                    # media hints for subfolders
       Movies: movies
       TV Shows: tv
@@ -120,6 +122,12 @@ shows, `S01` / `Season 1` folders are seasons, and files are episodes.
 Elsewhere, only release-style names (title, year and a quality tag) are
 looked up, and plain videos stay plain videos.
 
+The UI scripts are embedded locally with pinned versions and licenses. Metadata
+and remote artwork still need their configured online services. Timeline caches
+survive restarts (32 MiB/1024 entries); fragment caches remain temporary and their
+directory is exclusively locked. Thumbnail/subtitle generation has bounded
+concurrency and input/output budgets; see [the audit status](docs/improvements.md).
+
 Run with `files-go -d dir` to load `dir/config.yaml` (default: `~/.filesgo/config.yaml`).
 If `data` is omitted, the configuration directory also stores the database and caches.
 File changes are indexed in the background using filesystem notifications.
@@ -130,8 +138,17 @@ Startup scans, `scan_interval` scans, and recovery scans after watcher overflow
 reconcile missed changes. Watch registration failures are logged and exposed as
 `watchError` in root status; periodic scans remain active. Network mounts such as
 NFS/SMB may not deliver notifications and rely on periodic or manual scans.
-This does not add automatic page refresh; reopen or refresh a listing to see the
+A configured marker must exist and remain readable, including during forced
+scans. A changed identity is reported as `mount_changed`; force accepts a new
+identity only after checking the marker. Without a marker, an unexpectedly empty
+root is retained even on the same device.
+This does not add a filesystem event subscription to the page; reopen or refresh a listing to see the
 updated index. The scan interval starts after each periodic scan completes.
+
+Go 1.25+ is required to build. Source files are opened through `os.Root`;
+external tools receive inherited seekable descriptors on Linux/macOS rather
+than reopening media paths. Windows builds support rooted Go readers, but the
+external-tool descriptor input is not supported there.
 
 `ffmpeg` / `ffprobe` are needed for video
 and audio; `pdfinfo` / `pdftoppm` (poppler) are optional for PDFs.

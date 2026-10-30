@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,30 +24,37 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	home, _ := os.UserHomeDir()
 	configDir := flag.String("d", filepath.Join(home, ".filesgo"), "directory containing config.yaml")
 	flag.Parse()
 	cfg, err := config.Load(filepath.Join(*configDir, "config.yaml"))
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	if err := os.MkdirAll(cfg.Data, 0o755); err != nil {
-		log.Fatal(err)
+		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	st, err := store.Open(filepath.Join(cfg.Data, "files.db"))
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer st.Close()
 	scanner := store.NewScanner(st, cfg.Roots, cfg.Exclude, media.Classify)
 	if err := scanner.Init(ctx); err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	_ = st.CachePrune(ctx, "show:", 30*24*time.Hour)
+	_ = st.CachePrune(ctx, "probe:", 30*24*time.Hour)
 	var client *media.TMDB
 	if cfg.TMDB.Key != "" {
 		client = media.NewTMDB(cfg.TMDB.Key, cfg.TMDB.Language, st)
@@ -56,12 +64,12 @@ func main() {
 		_ = st.CachePrune(ctx, "theporndb:", 30*24*time.Hour)
 		tpdb, err = theporndb.New(theporndb.Options{Token: cfg.ThePornDB.Token, Cache: media.ThePornDBCache{Store: st}})
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 	}
 	pdfinfo, _ := exec.LookPath("pdfinfo")
-	resolve := scanner.Abs
-	library := &media.Library{Store: st, TMDB: client, Path: resolve, Hint: func(f store.File) (string, string) {
+	openSource := scanner.Open
+	library := &media.Library{Store: st, TMDB: client, Open: openSource, Hint: func(f store.File) (string, string) {
 		root, _ := scanner.Root(f.Root)
 		return root.TypeOf(f.Path)
 	}}
@@ -75,31 +83,36 @@ func main() {
 	}
 	tag := fmt.Sprintf("theporndb=%t tmdb=%t/%s pdf=%t hints=%v", tpdb != nil, client != nil, cfg.TMDB.Language, pdfinfo != "", hints)
 	pipeline, err := media.NewPipeline(ctx, st, tag,
-		&media.Probe{Bin: cfg.FFprobe, Path: resolve},
+		&media.Probe{Bin: cfg.FFprobe, Open: openSource, Store: st},
 		library.Videos(),
 		library.Folders(),
 		&media.JAV{Client: tpdb, Hint: library.Hint, Store: st},
-		media.Photo{Path: resolve, FFprobe: cfg.FFprobe},
-		media.Document{Path: resolve, PDFInfo: pdfinfo},
-		media.App{Path: resolve},
-		media.Archive{Path: resolve},
+		media.Photo{Open: openSource, FFprobe: cfg.FFprobe},
+		media.Document{Open: openSource, PDFInfo: pdfinfo},
+		media.App{Open: openSource},
+		media.Archive{Open: openSource},
 	)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	go pipeline.Run(ctx, cfg.Workers)
-	go scanner.Run(ctx, cfg.ScanInterval, pipeline.Wake)
 
 	api, err := server.New(ctx, cfg, st, scanner, pipeline, client, tpdb)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+	var background sync.WaitGroup
+	background.Add(2)
+	go func() { defer background.Done(); pipeline.Run(ctx, cfg.Workers) }()
+	go func() { defer background.Done(); scanner.Run(ctx, cfg.ScanInterval, pipeline.Wake) }()
+	defer func() { stop(); api.Close(); background.Wait() }()
 	srv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           api.Handler(web.Handler()),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -109,7 +122,11 @@ func main() {
 		log.Printf("warning: no auth.password configured, the server is open to anyone who can reach it")
 	}
 	log.Printf("listening on %s", cfg.Listen)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+	err = srv.ListenAndServe()
+	stop()
+	<-shutdownDone
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
 	}
+	return nil
 }

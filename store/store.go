@@ -20,7 +20,7 @@ var ErrNotFound = errors.New("not found")
 var ErrStale = errors.New("enrichment inputs changed")
 
 // Schema upgrades migrate user choices and never silently rebuild the database.
-const schemaVersion = 2
+const schemaVersion = 3
 
 const schema = `
 CREATE TABLE files (
@@ -32,6 +32,9 @@ CREATE TABLE files (
 	dir      INTEGER NOT NULL DEFAULT 0,
 	size     INTEGER NOT NULL DEFAULT 0,
 	mtime    INTEGER NOT NULL DEFAULT 0,
+	mtime_ns INTEGER NOT NULL DEFAULT 0,
+	retry_count INTEGER NOT NULL DEFAULT 0,
+	retry_after INTEGER NOT NULL DEFAULT 0,
 	kind     TEXT    NOT NULL DEFAULT '',
 	title    TEXT    NOT NULL DEFAULT '',
 	meta     TEXT,
@@ -70,20 +73,23 @@ END;
 `
 
 type File struct {
-	ID       int64           `json:"id"`
-	Root     string          `json:"root"`
-	Parent   int64           `json:"parent,omitempty"`
-	Path     string          `json:"-"`
-	Name     string          `json:"name"`
-	Dir      bool            `json:"dir"`
-	Size     int64           `json:"size"` // bytes, or child count for directories
-	MTime    int64           `json:"mtime"`
-	Kind     string          `json:"kind,omitempty"`
-	Title    string          `json:"-"`
-	Meta     json.RawMessage `json:"meta,omitempty"`
-	MetaVer  int             `json:"-"`
-	MetaErr  string          `json:"error,omitempty"`
-	Revision int64           `json:"-"`
+	ID         int64           `json:"id"`
+	Root       string          `json:"root"`
+	Parent     int64           `json:"parent,omitempty"`
+	Path       string          `json:"-"`
+	Name       string          `json:"name"`
+	Dir        bool            `json:"dir"`
+	Size       int64           `json:"size"` // bytes, or child count for directories
+	MTimeNS    int64           `json:"-"`
+	RetryCount int             `json:"retryCount,omitempty"`
+	RetryAfter int64           `json:"retryAfter,omitempty"`
+	MTime      int64           `json:"mtime"`
+	Kind       string          `json:"kind,omitempty"`
+	Title      string          `json:"-"`
+	Meta       json.RawMessage `json:"meta,omitempty"`
+	MetaVer    int             `json:"-"`
+	MetaErr    string          `json:"error,omitempty"`
+	Revision   int64           `json:"-"`
 }
 
 type Store struct{ db *sql.DB }
@@ -113,7 +119,7 @@ func Open(path string) (*Store, error) {
 }
 
 func migrate(db *sql.DB, version int) error {
-	if version != 0 && version != 1 {
+	if version < 0 || version > 2 {
 		return fmt.Errorf("unsupported schema version %d (expected at most %d)", version, schemaVersion)
 	}
 	tx, err := db.Begin()
@@ -132,7 +138,14 @@ func migrate(db *sql.DB, version int) error {
 			return err
 		}
 	}
-	if _, err := tx.Exec(schema); err != nil {
+	if version == 2 {
+		if _, err := tx.Exec(`ALTER TABLE files ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0;
+		 ALTER TABLE files ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0;
+		 ALTER TABLE files ADD COLUMN retry_after INTEGER NOT NULL DEFAULT 0;
+		 UPDATE files SET mtime_ns=mtime*1000000;`); err != nil {
+			return err
+		}
+	} else if _, err := tx.Exec(schema); err != nil {
 		return err
 	}
 	if version == 1 {
@@ -142,6 +155,7 @@ func migrate(db *sql.DB, version int) error {
 			SELECT root,path,json_object('provider','tmdb','type',substr(json_extract(meta,'$.tmdb'),1,instr(json_extract(meta,'$.tmdb'),'/')-1),
 				'id',substr(json_extract(meta,'$.tmdb'),instr(json_extract(meta,'$.tmdb'),'/')+1))
 			FROM files WHERE json_extract(meta,'$.locked')=1 AND json_extract(meta,'$.tmdb') IS NOT NULL;
+			UPDATE files SET mtime_ns=mtime*1000000;
 			DROP TABLE files_v1;`); err != nil {
 			return err
 		}
@@ -154,12 +168,12 @@ func migrate(db *sql.DB, version int) error {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-const columns = `id, root, COALESCE(parent, 0), path, name, dir, size, mtime, kind, title, COALESCE(meta, ''), meta_ver, COALESCE(meta_err, ''), revision`
+const columns = `id, root, COALESCE(parent, 0), path, name, dir, size, mtime, kind, title, COALESCE(meta, ''), meta_ver, COALESCE(meta_err, ''), revision,mtime_ns,retry_count,retry_after`
 
 func scanFile(row interface{ Scan(...any) error }) (File, error) {
 	var f File
 	var meta string
-	err := row.Scan(&f.ID, &f.Root, &f.Parent, &f.Path, &f.Name, &f.Dir, &f.Size, &f.MTime, &f.Kind, &f.Title, &meta, &f.MetaVer, &f.MetaErr, &f.Revision)
+	err := row.Scan(&f.ID, &f.Root, &f.Parent, &f.Path, &f.Name, &f.Dir, &f.Size, &f.MTime, &f.Kind, &f.Title, &meta, &f.MetaVer, &f.MetaErr, &f.Revision, &f.MTimeNS, &f.RetryCount, &f.RetryAfter)
 	if errors.Is(err, sql.ErrNoRows) {
 		return f, ErrNotFound
 	}
@@ -283,12 +297,12 @@ type Cursor struct {
 // cursor. It is split in two queries so both seek in files_pending.
 func (s *Store) Pending(ctx context.Context, version int, after Cursor, limit int) ([]File, error) {
 	files, err := s.query(ctx, `SELECT `+columns+` FROM files INDEXED BY files_pending
-		WHERE meta_ver=? AND id>? ORDER BY id LIMIT ?`, after.MetaVer, after.ID, limit)
+		WHERE meta_ver=? AND id>? AND retry_after<=? ORDER BY id LIMIT ?`, after.MetaVer, after.ID, time.Now().UnixMilli(), limit)
 	if err != nil || len(files) == limit {
 		return files, err
 	}
 	more, err := s.query(ctx, `SELECT `+columns+` FROM files INDEXED BY files_pending
-		WHERE meta_ver>? AND meta_ver<? ORDER BY meta_ver, id LIMIT ?`, after.MetaVer, version, limit-len(files))
+		WHERE meta_ver>? AND meta_ver<? AND retry_after<=? ORDER BY meta_ver, id LIMIT ?`, after.MetaVer, version, time.Now().UnixMilli(), limit-len(files))
 	return append(files, more...), err
 }
 
@@ -328,7 +342,7 @@ func (s *Store) SaveResults(ctx context.Context, results []Result) error {
 		if r.Meta != nil {
 			data = string(r.Meta)
 		}
-		updated, err := tx.ExecContext(ctx, `UPDATE files SET kind=?,title=?,meta=?,meta_ver=?,meta_err=NULLIF(?,'') WHERE id=? AND revision=?`,
+		updated, err := tx.ExecContext(ctx, `UPDATE files SET kind=?,title=?,meta=?,meta_ver=?,meta_err=NULLIF(?,''),retry_count=0,retry_after=0 WHERE id=? AND revision=?`,
 			r.Kind, r.Title, data, r.Version, r.Err, r.ID, r.Revision)
 		if err != nil {
 			return err
@@ -342,7 +356,7 @@ func (s *Store) SaveResults(ctx context.Context, results []Result) error {
 			continue
 		}
 		if parent != 0 && (before != string(r.Meta) || kind != r.Kind || title != r.Title || failure != r.Err) {
-			if _, err := tx.ExecContext(ctx, `UPDATE files SET meta_ver=0,revision=revision+1 WHERE id=?`, parent); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE files SET meta_ver=0,revision=revision+1,retry_count=0,retry_after=0,meta_err=NULL WHERE id=?`, parent); err != nil {
 				return err
 			}
 		}
@@ -359,7 +373,7 @@ func (s *Store) SaveResults(ctx context.Context, results []Result) error {
 // Invalidate marks a row pending and prevents an already-running worker from
 // publishing a result based on the old inputs.
 func (s *Store) Invalidate(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE files SET meta_ver=0,revision=revision+1 WHERE id=?`, id)
+	_, err := s.db.ExecContext(ctx, `UPDATE files SET meta_ver=0,revision=revision+1,retry_count=0,retry_after=0,meta_err=NULL WHERE id=?`, id)
 	return err
 }
 

@@ -6,14 +6,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 
 	"github.com/lsongdev/files-go/store"
 )
 
 // Archive summarizes ZIP archives: entry count and uncompressed size.
-type Archive struct{ Path Resolver }
+type Archive struct{ Open Opener }
 
 func (Archive) Match(f *store.File) bool {
 	ext := Ext(f.Name)
@@ -21,12 +20,13 @@ func (Archive) Match(f *store.File) bool {
 }
 
 func (a Archive) Enrich(ctx context.Context, f *store.File, m *Meta) error {
-	name, err := a.Path(*f)
+	input, err := a.Open(ctx, *f)
 	if err != nil {
 		return err
 	}
+	defer input.Close()
 	m.Kind = "archive"
-	err = withZip(name, func(z *zip.Reader) error {
+	err = withZip(input, func(z *zip.Reader) error {
 		var files int
 		var size uint64
 		for _, entry := range z.File {
@@ -42,12 +42,8 @@ func (a Archive) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	if err == nil {
 		return nil
 	}
-	source, openErr := os.Open(name)
-	if openErr != nil {
-		return openErr
-	}
-	defer source.Close()
-	r := tar.NewReader(source)
+	input.Seek(0, 0)
+	r := tar.NewReader(input)
 	files := 0
 	var size int64
 	headers := 0

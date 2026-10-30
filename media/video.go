@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"path"
 	"regexp"
 	"sort"
@@ -24,7 +23,7 @@ import (
 type Library struct {
 	Store *store.Store
 	TMDB  *TMDB // nil disables online lookups
-	Path  Resolver
+	Open  Opener
 	Hint  func(store.File) (hint, base string)
 	mu    sync.Mutex
 	shows map[string]*showFlight
@@ -52,7 +51,7 @@ func (v videos) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	m.Set("Release", strings.Join(nonEmpty(n.Resolution, n.Source, n.Codec), " · "))
 	if !m.Locked {
 		if sidecar, err := v.Store.ChildByName(ctx, f.Parent, strings.TrimSuffix(f.Name, path.Ext(f.Name))+".nfo"); err == nil {
-			if err := (folders{v.Library}).readNFO(sidecar, m); err != nil {
+			if err := (folders{v.Library}).readNFO(ctx, sidecar, m); err != nil {
 				return err
 			}
 			// Keep the filename as the independent search fallback if the
@@ -63,7 +62,7 @@ func (v videos) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	// themselves never resolve catalog identities.
 	if !m.Locked && !strings.HasPrefix(m.providerID("tmdb"), "tv/") && hint != "tv" {
 		if nfo, err := v.Store.ChildByName(ctx, f.Parent, "movie.nfo"); err == nil && m.Match == nil {
-			if err := (folders{v.Library}).readNFO(nfo, m); err != nil {
+			if err := (folders{v.Library}).readNFO(ctx, nfo, m); err != nil {
 				return err
 			}
 		}
@@ -138,7 +137,7 @@ func (v videos) episode(ctx context.Context, f *store.File, m *Meta, n Name, hin
 	if show != nil {
 		if !work.Locked {
 			if nfo, e := v.Store.ChildByName(ctx, show.ID, "tvshow.nfo"); e == nil {
-				if err := (folders{v.Library}).readNFO(nfo, work); err != nil {
+				if err := (folders{v.Library}).readNFO(ctx, nfo, work); err != nil {
 					return err
 				}
 				title, year = first(work.Title, title), max(work.Year, year)
@@ -206,12 +205,8 @@ var (
 	backdropNames = []string{"fanart.jpg", "backdrop.jpg", "background.jpg", "fanart.png", "backdrop.png"}
 )
 
-func (d folders) readNFO(nfo store.File, m *Meta) error {
-	name, err := d.Path(nfo)
-	if err != nil {
-		return err
-	}
-	file, err := os.Open(name)
+func (d folders) readNFO(ctx context.Context, nfo store.File, m *Meta) error {
+	file, err := d.Open(ctx, nfo)
 	if err != nil {
 		return err
 	}

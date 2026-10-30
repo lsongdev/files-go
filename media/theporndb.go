@@ -19,6 +19,7 @@ type JAV struct {
 	Client *theporndb.Client
 	Hint   func(store.File) (string, string)
 	Store  *store.Store
+	gate   breaker
 }
 
 var javCodePattern = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])([a-z]{2,10})[-_ ]?([0-9]{2,6})(?:[^0-9]|$)`)
@@ -32,7 +33,7 @@ func javCode(name string) string {
 	return fmt.Sprintf("%s-%03d", strings.ToUpper(m[1]), n)
 }
 func (j *JAV) Match(f *store.File) bool { return !f.Dir && f.Kind == "video" }
-func (j *JAV) Enrich(ctx context.Context, f *store.File, m *Meta) error {
+func (j *JAV) Enrich(ctx context.Context, f *store.File, m *Meta) (err error) {
 	if f.Dir || isExtra(f.Name) || (m.Match != nil && m.Match.Provider != "theporndb") {
 		return nil
 	}
@@ -55,6 +56,10 @@ func (j *JAV) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	if j.Client == nil {
 		return nil
 	}
+	if err = j.gate.before(ctx); err != nil {
+		return err
+	}
+	defer func() { j.gate.after(err) }()
 	var scene *theporndb.SceneResource
 	if m.Locked && m.Match != nil {
 		detail, err := j.Client.GetJAV(ctx, m.Match.ID, nil)

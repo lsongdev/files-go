@@ -7,16 +7,9 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
-	"time"
 
 	"github.com/lsongdev/files-go/store"
 )
-
-type retryState struct {
-	attempts int
-	revision int64
-	after    time.Time
-}
 
 // Series carries show-level information separately from episode titles,
 // summaries and stills, so directories can aggregate without catalog lookups.

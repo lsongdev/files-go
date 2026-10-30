@@ -9,6 +9,8 @@ import (
 
 	"github.com/lsongdev/files-go/media"
 	"github.com/lsongdev/files-go/pkg/hls"
+	"github.com/lsongdev/files-go/pkg/source"
+	"os"
 )
 
 // play publishes a complete timeline without producing any media fragments.
@@ -22,18 +24,13 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "not a media file")
 		return
 	}
-	path, err := s.scanner.Abs(f)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
 	m := meta(f)
 	if f.Kind == "video" && m.Video == "" || f.Kind == "audio" && m.Audio == "" {
 		bin := s.cfg.FFprobe
 		if bin == "" {
 			bin = "ffprobe"
 		}
-		probe := media.Probe{Bin: bin, Path: s.scanner.Abs}
+		probe := media.Probe{Bin: bin, Open: s.scanner.Open, Store: s.store}
 		if err := probe.Enrich(r.Context(), &f, &m); err != nil {
 			s.fail(w, err)
 			return
@@ -42,7 +39,8 @@ func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 	force := r.URL.Query().Get("transcode") == "1"
 	in, out := s.ffmpegArgs(f, m, force)
 	copyVideo := f.Kind == "video" && !force && (m.Video == "h264" || m.Video == "hevc" || m.Video == "vp9" || m.Video == "av1")
-	play, err := s.hls.Open(r.Context(), hls.Source{Path: path, CopyVideo: copyVideo, InputArgs: in, OutputArgs: out})
+	root, _ := s.scanner.Root(f.Root)
+	play, err := s.hls.Open(r.Context(), hls.Source{File: source.File{Key: root.Path + ":" + f.Path, Open: func(ctx context.Context) (*os.File, error) { return s.scanner.Open(ctx, f) }}, CopyVideo: copyVideo, InputArgs: in, OutputArgs: out})
 	if err != nil {
 		s.hlsError(w, err)
 		return

@@ -1,7 +1,7 @@
 // Native audio/video controls, with lazy HLS support where needed. The server
 // supplies the complete VOD timeline, so duration and seeking belong to the
 // actual media element rather than a JavaScript timeline wrapper.
-const HLS_JS = 'https://unpkg.com/hls.js@1.6.13/dist/hls.mjs';
+const HLS_JS = new URL('./vendor/hls-1.6.13.mjs', import.meta.url).href;
 const MODES = ['direct', 'stream', 'transcode'];
 const CODEC_TYPES = { h264: 'avc1.640028', hevc: 'hvc1.1.6.L120.90', vp8: 'vp8', vp9: 'vp09.00.40.08', av1: 'av01.0.08M.08' };
 const CONTAINER_TYPES = { mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm' };

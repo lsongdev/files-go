@@ -3,6 +3,7 @@ package hls
 import (
 	"context"
 	"errors"
+	filesource "github.com/lsongdev/files-go/pkg/source"
 	"io"
 	"os"
 	"os/exec"
@@ -55,7 +56,7 @@ func TestLazyVOD(t *testing.T) {
 			if copyVideo {
 				codec = "copy"
 			}
-			src := Source{Path: source, CopyVideo: copyVideo, OutputArgs: []string{"-map", "0:v:0", "-map", "0:a:0", "-c:v", codec, "-c:a", "aac"}}
+			src := Source{File: filesource.Local(source), CopyVideo: copyVideo, OutputArgs: []string{"-map", "0:v:0", "-map", "0:a:0", "-c:v", codec, "-c:a", "aac"}}
 			p, err := m.Open(context.Background(), src)
 			if err != nil {
 				t.Fatal(err)
@@ -218,7 +219,7 @@ func verifyFragment(t *testing.T, m *Manager, key string, index int, transcoded 
 
 func TestAudioVOD(t *testing.T) {
 	m := manager(t, Config{})
-	p, err := m.Open(context.Background(), Source{Path: fixture(t, true), OutputArgs: []string{"-map", "0:a:0", "-vn", "-c:a", "aac"}})
+	p, err := m.Open(context.Background(), Source{File: filesource.Local(fixture(t, true)), OutputArgs: []string{"-map", "0:a:0", "-vn", "-c:a", "aac"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +340,7 @@ func TestCopyPreservesFrames(t *testing.T) {
 		t.Fatalf("fixture: %v %s", err, out)
 	}
 	m := manager(t, Config{})
-	p, err := m.Open(context.Background(), Source{Path: path, CopyVideo: true, OutputArgs: []string{"-map", "0:v:0", "-an", "-c:v", "copy"}})
+	p, err := m.Open(context.Background(), Source{File: filesource.Local(path), CopyVideo: true, OutputArgs: []string{"-map", "0:v:0", "-an", "-c:v", "copy"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +403,7 @@ func TestDTSRemuxAudio(t *testing.T) {
 		t.Fatalf("DTS fixture: %v: %s", err, out)
 	}
 	m := manager(t, Config{})
-	p, err := m.Open(context.Background(), Source{Path: path, CopyVideo: true, OutputArgs: []string{"-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy", "-c:a", "aac"}})
+	p, err := m.Open(context.Background(), Source{File: filesource.Local(path), CopyVideo: true, OutputArgs: []string{"-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy", "-c:a", "aac"}})
 	if err != nil {
 		t.Fatal(err)
 	}
