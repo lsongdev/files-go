@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/lsongdev/files-go/store"
 )
@@ -127,4 +129,46 @@ func (p *Pipeline) parts(ctx context.Context, dir store.File) ([]member, error) 
 		}
 	}
 	return parts, nil
+}
+
+// Query is the search a manual match starts from. It follows the parsing
+// identification uses on names (release code, show folder, release title),
+// not the title identification settled on, which may be the mistake being
+// corrected. ancestors run from the root down to f's parent.
+func Query(f store.File, ancestors []store.File, hint, base, provider string) string {
+	parent := func() (store.File, bool) {
+		if len(ancestors) == 0 || ancestors[len(ancestors)-1].Path == "" {
+			return store.File{}, false
+		}
+		return ancestors[len(ancestors)-1], true
+	}
+	if provider == "theporndb" {
+		code := javCode(strings.TrimSuffix(f.Name, path.Ext(f.Name)))
+		if p, ok := parent(); code == "" && ok && !f.Dir {
+			code = javCode(p.Name)
+		}
+		if code != "" {
+			return code
+		}
+	}
+	if hint == "tv" { // the show folder names the show
+		for _, a := range append(append([]store.File{}, ancestors...), f) {
+			if a.Path != base && parentPath(a.Path) == base {
+				return ParseName(a.Name).Title
+			}
+		}
+	}
+	n := ParseName(f.Name)
+	if _, season := SeasonNumber(f.Name); f.Dir && season {
+		if p, ok := parent(); ok {
+			return ParseName(p.Name).Title
+		}
+	}
+	if p, ok := parent(); ok && !f.Dir && n.Year == 0 && genericMovieName.MatchString(n.Title) {
+		return ParseName(p.Name).Title
+	}
+	if n.Title == "" {
+		return strings.TrimSuffix(f.Name, path.Ext(f.Name))
+	}
+	return n.Title
 }

@@ -17,9 +17,11 @@ const ctx = {
   fetch: async (url, options = {}) => {
     requests.push({ url, options });
     if (hold) { const wait = hold; hold = null; await wait; }
-    const match = { provider: url.searchParams.get('provider'), type: url.searchParams.get('type'), id: url.searchParams.get('q') };
+    // Like the server, an empty query searches for the code parsed from the name.
+    const q = url.searchParams.get('q') || 'CAWD-549';
+    const match = { provider: url.searchParams.get('provider'), type: url.searchParams.get('type'), id: q };
     const data = options.method === 'DELETE' ? { id: 1, meta: {} } : options.method ? { id: 1, meta: { match: JSON.parse(options.body).match } }
-      : { items: [{ match, title: 'Result' }], scope: { id: 9, name: 'Shared work', dir: true } };
+      : { items: [{ match, title: 'Result' }], query: q, scope: { id: 9, name: 'Shared work', dir: true } };
     return { ok: true, json: async () => data };
   },
 };
@@ -37,6 +39,8 @@ const draw = () => { cursor = 0; vm.runInContext('MatchDialog({item, onDone: val
   assert.equal(requests[0].url.searchParams.get('provider'), 'theporndb');
   assert.equal(requests[0].url.searchParams.get('type'), 'jav');
   assert.equal(ctx.matchControls.scope.id, 9);
+  assert.equal(requests[0].url.searchParams.get('q'), '', 'the first search lets the server suggest the parsed name');
+  assert.equal(state[0], 'CAWD-549', 'the suggestion fills the search box');
   await ctx.matchControls.choose(ctx.matchControls.results[0].match);
   assert.deepEqual(JSON.parse(requests.at(-1).options.body), { match: { provider: 'theporndb', type: 'jav', id: 'CAWD-549' } });
   assert.equal(ctx.chosen.meta.match.provider, 'theporndb');
