@@ -15,7 +15,7 @@ const ctx = {
  history:{get state(){return entries[index].state}, scrollRestoration:'auto', replaceState:(state,_,url)=>{entries[index]={state,url:url||entries[index].url}},pushState:(state,_,url)=>{entries.splice(index+1); entries.push({state,url}); index++}},
  useState:(init)=>{const i=cursor++;if(!(i in slots))slots[i]=typeof init==='function'?init():init;return [slots[i],v=>{slots[i]=typeof v==='function'?v(slots[i]):v;dirty=true}]},
  useRef:(init)=>{const i=cursor++;return slots[i]|| (slots[i]={current:init})},
- useCallback:fn=>fn,useEffect:()=>{},useLayoutEffect:fn=>layouts.push(fn), html:()=>null,render:()=>{},
+ useCallback:fn=>fn,useEffect:()=>{},useLayoutEffect:fn=>layouts.push(fn), Dialog:()=>null,html:()=>null,render:()=>{},
  fetch:async url=>{
    fetches.push(url.pathname+url.search);
    if(deferred){const wait=deferred;deferred=null;await wait;}
@@ -30,7 +30,7 @@ const ctx = {
    return {ok:true,json:async()=>data};
  }
 };
-let src = fs.readFileSync(require('node:path').join(__dirname, 'app.js'),'utf8').replace(/^import .*\n/, '').replaceAll('import.meta.url', "'http://test/app.js'");
+let src = fs.readFileSync(require('node:path').join(__dirname, 'app.js'),'utf8').replace(/^import .*\n/gm, '').replaceAll('import.meta.url', "'http://test/app.js'");
 src=src.replace('  const activeRoot =', '  globalThis.controls = {load, search, issues, loadMore, navigate, current, items, loading, opening, error};\n  const activeRoot =');
 vm.createContext(ctx); vm.runInContext(src,ctx);
 function draw(){cursor=0;layouts=[];dirty=false;vm.runInContext('App()',ctx);layouts.forEach(fn=>fn());}

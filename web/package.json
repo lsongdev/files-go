@@ -5,6 +5,7 @@
     "test": "node app_test.cjs && node metadata_test.cjs"
   },
   "dependencies": {
-    "@lsongdev/scripts": "0.1.0-rc.6"
+    "@lsongdev/scripts": "0.1.0-rc.6",
+    "@lsongdev/stylesheets": "1.3.1"
   }
 }

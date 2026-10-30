@@ -1,4 +1,5 @@
 import { html, render, useCallback, useEffect, useLayoutEffect, useRef, useState } from './node_modules/@lsongdev/scripts/react/react.js';
+import { Dialog } from './node_modules/@lsongdev/scripts/react/components/dialog.js';
 
 // Absolute URLs keep fetch working when the page was opened as http://user:pass@host/.
 const request = (url, options) => fetch(new URL(url, location.origin), options);
@@ -235,14 +236,13 @@ function MatchDialog({ item, onClose, onDone }) {
     setBusy(true);
     try { onDone(await api(`/api/files/${item.id}/match`, { method: id ? 'PUT' : 'DELETE', headers: { 'Content-Type': 'application/json' }, body: id ? JSON.stringify({ match: id }) : undefined })); } catch (e) { setError(e.message); setBusy(false); }
   };
-  return html`<div class="overlay" onClick=${(e) => e.target === e.currentTarget && onClose()}>
-    <div class="dialog">
-      <header><h2>手动匹配</h2><button class="icon-button" onClick=${onClose}><${Icon} name="close"/></button></header>
+  return html`<${Dialog} open=${true} onClose=${onClose} title="手动匹配" closeLabel="关闭" className="match-dialog"
+    footer=${m.locked ? html`<button class="ghost" disabled=${busy} onClick=${() => choose('')}>解除锁定并自动识别</button>` : null}>
       ${(scope.dir || scope.id !== item.id) && html`<p class="hint">匹配将应用于「${scope.name}」中的同一作品文件。</p>`}
       <form onSubmit=${search}>
         <select value=${provider} onChange=${(e) => setProvider(e.target.value)}><option value="tmdb">TMDB</option><option value="theporndb">ThePornDB</option></select>
         ${provider === 'tmdb' && html`<select value=${type} onChange=${(e) => setType(e.target.value)}><option value="movie">电影</option><option value="tv">剧集</option></select>`}
-        <input value=${query} onInput=${(e) => { edited.current = true; setQuery(e.target.value); }} placeholder="名称"/>
+        <input autofocus value=${query} onInput=${(e) => { edited.current = true; setQuery(e.target.value); }} placeholder="名称"/>
         <button disabled=${busy}>搜索</button>
       </form>
       ${error && html`<p class="error">${error}</p>`}
@@ -250,9 +250,7 @@ function MatchDialog({ item, onClose, onDone }) {
         ${r.poster ? html`<img src=${r.poster} alt=""/>` : html`<span class="glyph"><${Icon} name="movies"/></span>`}
         <span><strong>${r.title} ${r.year ? `(${r.year})` : ''}</strong><small>${r.original !== r.title ? r.original : ''}</small><small class="clamp">${r.overview}</small></span>
       </button>`)}</div>
-      ${m.locked && html`<footer><button class="ghost" disabled=${busy} onClick=${() => choose('')}>解除锁定并自动识别</button></footer>`}
-    </div>
-  </div>`;
+  <//>`;
 }
 
 function Status({ status, active, onOpen }) {
