@@ -8,13 +8,13 @@ Wants=network-online.target
 User=files
 Group=files
 SupplementaryGroups=render
-ExecStart=/opt/files-go/files-go -d /data/files-go
-Environment=TMPDIR=/data/files-go/tmp
+ExecStart=/data/files-go/files-go -d /data/files-go
 Restart=on-failure
 Nice=5
 IOSchedulingClass=idle
-# The indexed volume is read-only for this service; only its data directory
-# (config "data") is writable. Create that directory before starting.
+# The indexed volume is read-only for this service; only its -d directory,
+# which holds the binary, config, index, caches and temporary files, is
+# writable. Create that directory before starting.
 ProtectSystem=strict
 ReadOnlyPaths=/data
 ReadWritePaths=/data/files-go
