@@ -7,7 +7,7 @@ then enriches files in the background by type, name and embedded metadata:
 | Files | Enrichment |
 | --- | --- |
 | Movies / TV | release-name parsing, folder layout, `movie.nfo` / `tvshow.nfo`, local `poster.jpg` / `fanart.jpg`, TMDB (cached) |
-| JAV | exact release-code identification through ThePornDB (cached) |
+| JAV | exact release-code identification through ThePornDB (cached), local JavBus `<code>.json` records |
 | Music folders | album tags, album artist, track count, total duration and artwork; CD/Disc folders aggregate into one album |
 | Video / audio | ffprobe: duration, resolution, codecs, tags, embedded cover |
 | Photos | dimensions and EXIF (time, camera, lens, exposure, GPS) |
@@ -58,7 +58,10 @@ upload, rename or delete operations.
 - **Enrichers** share one interface (`Match`, `Enrich`) and run in order on
   the same metadata, so the movie lookup can build on ffprobe's result.
   Files identify content through TMDB or ThePornDB. Folders only aggregate
-  file results and local artwork; they never query catalogs. Changed results
+  file results and local artwork; they never query catalogs. Only settled
+  identities rise to a folder: a file awaiting review keeps its guess, and is
+  listed for review once. A show's doubts are reviewed on its show folder.
+  Changed results
   invalidate their parent for aggregation, with revision checks rejecting stale
   workers. Shared show matching avoids searching separately for every episode.
   Manual matches survive re-enrichment, restarts and schema migration.
@@ -117,6 +120,9 @@ roots:
 
 `type: jav` enables ThePornDB identification by exact release code (filename or parent folder),
 with cached metadata and artwork. Similar codes are never accepted automatically.
+A JavBus scraper record next to the video (`<code>.json` or `<video>.json`)
+confirms the code, picks between catalog entries sharing a code by release
+date, adds director, label and series, and describes works ThePornDB lacks.
 
 `type` is a hint for identification. Under `movies`, videos are identified
 as films and dedicated folders aggregate their common work; under `tv`, the folders directly below are

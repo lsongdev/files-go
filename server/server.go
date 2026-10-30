@@ -477,7 +477,14 @@ func (s *Server) match(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, `expected {"match":{"provider":"tmdb|theporndb","type":"movie|tv|jav","id":"..."}}`)
 			return
 		}
-		if (!f.Dir && f.Kind != "video") || scope.Path == "" || (scope.Dir && meta(scope).Kind != "movie" && meta(scope).Kind != "show" && meta(scope).Kind != "season") {
+		shared := true
+		if scope.Dir {
+			if shared, err = s.pipeline.SharedWork(r.Context(), scope); err != nil {
+				s.fail(w, err)
+				return
+			}
+		}
+		if (!f.Dir && f.Kind != "video") || scope.Path == "" || !shared {
 			writeError(w, 400, "select a media file or an identified work directory")
 			return
 		}

@@ -26,6 +26,11 @@ type member struct {
 // the identity of whichever file finished first. A show only needs its
 // episodes and seasons to agree: unnumbered specials, promos and soundtrack
 // folders are extras of the show rather than a different work.
+//
+// Only settled identities rise to a folder: a file whose match awaits review
+// keeps that review to itself rather than lending its guess to the folder. In
+// a TV library the show folder is where the shared show decision is made, so
+// it carries the guess and the review; its seasons only follow.
 func (d folders) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	choice := m.Match
 	children, err := d.Store.Children(ctx, f.ID, 0, -1)
@@ -103,14 +108,14 @@ func (d folders) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 	extrasAllowed := hint == "tv" || showFiles > extraFiles
 	switch {
 	case len(shows) > 0 && (len(films)+len(tracks)+len(albums) == 0 && !unknown && !other || extrasAllowed):
-		if sameWork(shows) && shows[0].meta.Series != nil {
+		if sameWork(shows) && shows[0].meta.Series != nil && (hint == "tv" || settled(shows)) {
 			d.show(m, f, shows, hint == "tv" && parentPath(f.Path) == base)
 		}
 	case unknown || other:
 		// A pending/unsupported member must not silently turn a mixed
 		// collection into the identity of whichever file finished first.
 	case len(films) > 0 && len(shows)+len(tracks)+len(albums) == 0:
-		if sameWork(films) {
+		if sameWork(films) && settled(films) {
 			copyWork(m, films[0])
 			m.Kind = "movie"
 		}
@@ -137,7 +142,7 @@ func (d folders) show(m *Meta, f *store.File, shows []member, showFolder bool) {
 	if !showFolder && !isSeason && len(shows) == 1 && first.Kind == "episode" {
 		m.Kind, m.Match, m.Series = "episode", first.Match, first.Series
 		m.Title, m.Show, m.Season, m.Episode, m.Year = first.Title, first.Show, first.Season, first.Episode, first.Year
-		m.Summary, m.Rating, m.Genres, m.Duration, m.Review = first.Summary, first.Rating, first.Genres, first.Duration, first.Review
+		m.Summary, m.Rating, m.Genres, m.Duration = first.Summary, first.Rating, first.Genres, first.Duration
 		m.Poster, m.Backdrop = memberArtwork(shows[0]), first.Backdrop
 		return
 	}
@@ -145,11 +150,29 @@ func (d folders) show(m *Meta, f *store.File, shows []member, showFolder bool) {
 	m.Match = first.Match
 	m.Title, m.Original, m.Year, m.Summary = s.Title, s.Original, s.Year, s.Summary
 	m.Poster, m.Backdrop, m.Rating, m.Genres = s.Poster, s.Backdrop, s.Rating, s.Genres
-	m.Review, m.Series = s.Review, s
+	m.Series = s
+	if showFolder {
+		m.Review = s.Review // the one place a show's doubts are reviewed
+	}
 	m.Kind = "show"
 	if isSeason && !showFolder {
 		m.Kind, m.Season = "season", season
 	}
+}
+
+// settled reports whether every member's identity is decided: automatic
+// without doubts, or chosen manually. A show's doubts are kept on its series.
+func settled(entries []member) bool {
+	for _, e := range entries {
+		review := e.meta.Review
+		if e.meta.Series != nil {
+			review = e.meta.Series.Review
+		}
+		if review != "" && !e.meta.Locked {
+			return false
+		}
+	}
+	return true
 }
 
 func sameWork(entries []member) bool {
@@ -183,7 +206,6 @@ func copyWork(dst *Meta, entry member) {
 	dst.Title, dst.Original, dst.Year = src.Title, src.Original, src.Year
 	dst.Summary, dst.Rating, dst.Genres = src.Summary, src.Rating, src.Genres
 	dst.Poster, dst.Backdrop = memberArtwork(entry), src.Backdrop
-	dst.Review = src.Review
 	for _, key := range []string{"Code", "Studio", "Performers", "Runtime"} {
 		dst.Set(key, src.Info[key])
 	}
