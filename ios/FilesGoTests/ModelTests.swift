@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 @testable import FilesGo
 
@@ -28,6 +29,23 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(folder.title, "Plain")
         XCTAssertEqual(folder.subtitle, "12 items")
         XCTAssertFalse(folder.hasHero)
+    }
+
+    func testPhotoRootIsTheOneConfiguredForPhotos() throws {
+        let roots = try JSONDecoder().decode([RootStatus].self, from: Data(#"""
+        [{"id":"docs","name":"Docs","fileId":1,"state":"idle"},{"id":"pics","name":"Pics","type":"photos","fileId":2,"state":"idle"}]
+        """#.utf8))
+        XCTAssertEqual(RootStatus.photoRoot(in: roots)?.id, "pics")
+        XCTAssertNil(RootStatus.photoRoot(in: [roots[0]]))
+    }
+
+    func testLargePhotosAreDownsampledWithinTheLimit() throws {
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 800, height: 400), format: {
+            let format = UIGraphicsImageRendererFormat(); format.scale = 1; return format
+        }()).image { $0.fill(CGRect(x: 0, y: 0, width: 800, height: 400)) }
+        let photo = try XCTUnwrap(downsampled(try XCTUnwrap(image.jpegData(compressionQuality: 0.8)), maxPixels: 200))
+        XCTAssertEqual(photo.size, CGSize(width: 200, height: 100))
+        XCTAssertNil(downsampled(Data("not an image".utf8)))
     }
 
     func testServerAddressAcceptsBareHostAndPort() {

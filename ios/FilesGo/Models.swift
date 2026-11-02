@@ -14,6 +14,7 @@ struct FileItem: Decodable, Identifiable, Hashable {
     let version: Int64
     var thumb: Bool?
     var play: String?
+    var mtime: Int64?
 
     struct Meta: Decodable {
         var kind, title, original, show, artist, album, author, poster, backdrop, artworkVersion, summary, video, audio, container: String?
@@ -50,6 +51,8 @@ struct FileItem: Decodable, Identifiable, Hashable {
         default: return formatSize(size)
         }
     }
+
+    var modified: Date? { mtime.map { Date(timeIntervalSince1970: Double($0) / 1000) } }
 
     /// Width over height of the cover, as in the web client.
     var coverAspect: CGFloat {
@@ -105,6 +108,12 @@ struct RootStatus: Decodable, Identifiable, Hashable {
     let name: String
     let fileId: Int64
     let state: String
+    var type: String?
+
+    /// The root holding the photo library, if one is configured as such.
+    static func photoRoot(in roots: [RootStatus]) -> RootStatus? {
+        roots.first { $0.type == "photos" }
+    }
 }
 
 struct Page: Decodable {

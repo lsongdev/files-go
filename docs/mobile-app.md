@@ -17,7 +17,7 @@ iOS App 是 `files-go` 的另一个客户端，用来改善手机上的浏览和
 
 ## 2. 页面
 
-底部固定五个 Tab，切换时保留各自的导航栈和滚动位置。
+共六个 Tab，切换时保留各自的导航栈和滚动位置。iPhone 底部最多显示五项，音乐和图书由系统收进 More。
 
 | Tab | 数据来源 | 列表 | 打开条目 |
 | --- | --- | --- | --- |
@@ -26,6 +26,7 @@ iOS App 是 `files-go` 的另一个客户端，用来改善手机上的浏览和
 | 电视剧 | `/api/library?kind=show` | 海报网格 | 详情页 |
 | 音乐 | `/api/library?kind=album` | 封面网格 | 详情页，点击曲目后按当前列表顺序播放 |
 | 图书 | `/api/library?kind=book` | 封面网格 | 下载后用系统预览或分享打开 |
+| 照片 | `/api/library?kind=photo&root=...&sort=recent` | 三列方格，按 mtime 倒序 | 全屏查看：左右翻页、缩放、查看信息 |
 
 搜索复用 `/api/search`，从页面顶部进入，范围是全局。设置页放服务器地址和账号。
 
@@ -136,6 +137,7 @@ CREATE INDEX IF NOT EXISTS files_library ON files(
 - 自动模式的 Root 里，未识别的视频不进入电影 Tab。
 - `fb2`、`djvu`、`cbz`、`cbr` 目前没有 `meta.kind=book`，不进入图书 Tab。
 - 同一作品在不同 Root 各有一份时，显示为多个入口。
+- 照片 Tab 只列第一个 `type: photos` 的 Root（没有时列出全部图片），因为其他目录里的图片也会被标记为 `photo`。该目录下的视频不在此 Tab。缩略图首次生成较慢，之后走缓存。
 - 排序使用 SQLite 的 `NOCASE`，中文不按拼音排序。
 
 ## 7. 暂不做

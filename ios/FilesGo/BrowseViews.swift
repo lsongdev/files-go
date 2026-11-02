@@ -4,6 +4,8 @@ import SwiftUI
 struct RemoteImage: View {
     let url: URL?
     var icon = "photo"
+    /// For long grids: frees the bitmap off screen and reloads it through the URL cache.
+    var releasesOnDisappear = false
     @Environment(\.api) private var api
     @State private var image: UIImage?
 
@@ -21,6 +23,7 @@ struct RemoteImage: View {
             guard let url, let data = try? await api.data(url) else { return }
             image = UIImage(data: data)
         }
+        .onDisappear { if releasesOnDisappear { image = nil } }
     }
 }
 

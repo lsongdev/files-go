@@ -90,8 +90,8 @@ struct APIClient: Sendable {
         try await get("/api/files/\(id)/children", ["offset": String(offset), "limit": String(limit)])
     }
 
-    func library(kind: String, offset: Int, limit: Int) async throws -> Page {
-        try await get("/api/library", ["kind": kind, "offset": String(offset), "limit": String(limit)])
+    func library(kind: String, root: String? = nil, sort: String? = nil, offset: Int, limit: Int) async throws -> Page {
+        try await get("/api/library", ["kind": kind, "root": root, "sort": sort, "offset": String(offset), "limit": String(limit)])
     }
 
     func search(_ query: String) async throws -> Page {
@@ -102,6 +102,8 @@ struct APIClient: Sendable {
     func thumbURL(_ file: FileItem) -> URL {
         url("/api/files/\(file.id)/thumb", ["v": "\(file.version)-\(file.meta?.artworkVersion ?? "")-\(file.meta?.poster ?? "")"])
     }
+
+    func rawURL(_ file: FileItem) -> URL { url("/api/files/\(file.id)/raw") }
 
     func backdropURL(_ file: FileItem) -> URL {
         url("/api/files/\(file.id)/backdrop", ["v": "\(file.version)-\(file.meta?.artworkVersion ?? "")"])
