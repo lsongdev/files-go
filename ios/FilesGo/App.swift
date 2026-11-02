@@ -21,13 +21,40 @@ struct FilesGoApp: App {
 struct MainTabs: View {
     var body: some View {
         TabView {
-            Tab("Files", systemImage: "folder") { NavigationStack { RootsView().itemDestinations() } }
             Tab("Movies", systemImage: "film") { LibraryTab(title: "Movies", kind: "movie") }
             Tab("TV Shows", systemImage: "tv") { LibraryTab(title: "TV Shows", kind: "show") }
-            Tab("Photos", systemImage: "photo.on.rectangle") { PhotosTab() }
-            // iPhone shows at most five tabs, so these two go under More.
             Tab("Music", systemImage: "music.note") { LibraryTab(title: "Music", kind: "album") }
             Tab("Books", systemImage: "book") { LibraryTab(title: "Books", kind: "book") }
+            Tab("More", systemImage: "ellipsis") { MoreTab() }
+        }
+    }
+}
+
+/// Holds what the tab bar has no room for. It is an ordinary tab rather than
+/// the system's More, whose navigation bar would stack on top of a NavigationStack.
+struct MoreTab: View {
+    /// Links are values throughout: mixing them with destination-view links
+    /// in one stack shows the pushed screens in the wrong order.
+    private enum Section: Hashable { case files, photos }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                NavigationLink(value: Section.files) {
+                    Label("Files", systemImage: "folder")
+                }
+                NavigationLink(value: Section.photos) {
+                    Label("Photos", systemImage: "photo.on.rectangle")
+                }
+            }
+            .navigationTitle("More")
+            .navigationDestination(for: Section.self) { section in
+                switch section {
+                case .files: RootsView()
+                case .photos: PhotosView()
+                }
+            }
+            .itemDestinations()
         }
     }
 }

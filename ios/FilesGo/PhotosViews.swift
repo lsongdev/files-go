@@ -2,10 +2,10 @@ import ImageIO
 import SwiftUI
 import UIKit
 
-/// Photos tab: a square grid, newest first, opening a full-screen viewer. Only
+/// A square grid of photos, newest first, opening a full-screen viewer. Only
 /// the photos root is listed, since any image elsewhere (document scans, album
 /// art) is also identified as a photo.
-struct PhotosTab: View {
+struct PhotosView: View {
     @Environment(\.api) private var api
     @State private var pager = Pager()
     @State private var viewing: FileItem?
@@ -13,33 +13,31 @@ struct PhotosTab: View {
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 2), count: 3)
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: 2) {
-                    ForEach(pager.items) { photo in
-                        Button {
-                            viewing = photo
-                        } label: {
-                            Color.clear
-                                .aspectRatio(1, contentMode: .fit)
-                                .overlay { RemoteImage(url: photo.thumb == true ? api.thumbURL(photo) : nil, releasesOnDisappear: true) }
-                                .clipped()
-                                .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(photo.title)
-                        .task { await pager.loadMore(after: photo) }
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: 2) {
+                ForEach(pager.items) { photo in
+                    Button {
+                        viewing = photo
+                    } label: {
+                        Color.clear
+                            .aspectRatio(1, contentMode: .fit)
+                            .overlay { RemoteImage(url: photo.thumb == true ? api.thumbURL(photo) : nil, releasesOnDisappear: true) }
+                            .clipped()
+                            .contentShape(.rect)
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(photo.title)
+                    .task { await pager.loadMore(after: photo) }
                 }
             }
-            .overlay { PagerStatus(pager: pager) }
-            .navigationTitle("Photos")
-            .loads(pager) { [api] offset, limit in
-                let root = RootStatus.photoRoot(in: try await api.roots())
-                return try await api.library(kind: "photo", root: root?.id, sort: "recent", offset: offset, limit: limit)
-            }
-            .fullScreenCover(item: $viewing) { PhotoViewer(pager: pager, start: $0) }
         }
+        .overlay { PagerStatus(pager: pager) }
+        .navigationTitle("Photos")
+        .loads(pager) { [api] offset, limit in
+            let root = RootStatus.photoRoot(in: try await api.roots())
+            return try await api.library(kind: "photo", root: root?.id, sort: "recent", offset: offset, limit: limit)
+        }
+        .fullScreenCover(item: $viewing) { PhotoViewer(pager: pager, start: $0) }
     }
 }
 
