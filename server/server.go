@@ -72,6 +72,7 @@ func (s *Server) Handler(web http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/events", s.eventStream)
 	mux.HandleFunc("GET /api/activity", s.activity)
 	mux.HandleFunc("GET /api/search", s.search)
+	mux.HandleFunc("GET /api/library", s.library)
 	mux.HandleFunc("GET /api/issues", s.issues)
 	mux.HandleFunc("GET /api/files/{id}", s.file)
 	mux.HandleFunc("GET /api/files/{id}/children", s.children)
@@ -214,6 +215,35 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"items": s.views(files)})
+}
+
+// library lists identified works of one semantic kind (meta.kind).
+func (s *Server) library(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	kind, sort := q.Get("kind"), q.Get("sort")
+	if kind == "" {
+		writeError(w, http.StatusBadRequest, "kind is required")
+		return
+	}
+	if sort != "" && sort != "title" && sort != "recent" {
+		writeError(w, http.StatusBadRequest, "sort must be title or recent")
+		return
+	}
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	files, err := s.store.Library(r.Context(), store.LibraryOptions{Kind: kind, Root: q.Get("root"), Recent: sort == "recent", Offset: max(offset, 0), Limit: limit + 1})
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	more := len(files) > limit
+	if more {
+		files = files[:limit]
+	}
+	writeJSON(w, map[string]any{"items": s.views(files), "more": more})
 }
 
 // issues lists files to review (?type=review) or that failed enrichment.

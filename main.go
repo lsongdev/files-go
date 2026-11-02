@@ -88,7 +88,7 @@ func run() error {
 		library.Folders(),
 		&media.JAV{Client: tpdb, Hint: library.Hint, Store: st, Open: openSource},
 		media.Photo{Open: openSource, FFprobe: cfg.FFprobe},
-		media.Document{Open: openSource, PDFInfo: pdfinfo},
+		media.Document{Open: openSource, PDFInfo: pdfinfo, Hint: library.Hint},
 		media.App{Open: openSource},
 		media.Archive{Open: openSource},
 	)

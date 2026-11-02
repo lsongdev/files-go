@@ -3,9 +3,12 @@ package media
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/lsongdev/files-go/store"
 )
 
 func TestOfficeFileContainerDetection(t *testing.T) {
@@ -150,4 +153,22 @@ func epubFixture(t *testing.T, files map[string]string) *zip.Reader {
 		t.Fatal(err)
 	}
 	return z
+}
+
+func TestPDFIsABookOnlyUnderBooksHint(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "guide.pdf")
+	if err := os.WriteFile(name, []byte("%PDF-1.4"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	open := func(context.Context, store.File) (*os.File, error) { return os.Open(name) }
+	for hint, want := range map[string]string{"books": "book", "": "document", "movies": "document"} {
+		d := Document{Open: open, Hint: func(store.File) (string, string) { return hint, "" }}
+		var m Meta
+		if err := d.Enrich(context.Background(), &store.File{Name: "guide.pdf"}, &m); err != nil {
+			t.Fatal(err)
+		}
+		if m.Kind != want {
+			t.Errorf("hint %q: kind = %q, want %q", hint, m.Kind, want)
+		}
+	}
 }

@@ -94,6 +94,20 @@ func TestAPI(t *testing.T) {
 	if len(list.Items) != 2 || !list.Items[0].Dir || list.Items[1].Name != "readme.txt" {
 		t.Fatalf("children = %+v", list.Items)
 	}
+	if res := get("/api/library"); res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("library without kind = %d", res.StatusCode)
+	}
+	if res := get("/api/library?kind=photo&sort=size"); res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("library with unknown sort = %d", res.StatusCode)
+	}
+	var library struct {
+		Items []View
+		More  bool
+	}
+	decode(get("/api/library?kind=photo&limit=1"), &library)
+	if len(library.Items) != 1 || library.Items[0].Name != "sunset.png" || library.More {
+		t.Fatalf("library = %+v", library)
+	}
 	// Browsing must not reconcile the media filesystem, even if it changes or
 	// disappears. Only an explicit/background scan is allowed to change the index.
 	os.WriteFile(filepath.Join(root, "unscanned.txt"), []byte("new"), 0o644)

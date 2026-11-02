@@ -25,6 +25,8 @@ import (
 type Document struct {
 	Open    Opener
 	PDFInfo string // optional pdfinfo binary; PDFs get no metadata without it
+	// Hint returns the media hint of a file. A PDF is a book only under "books".
+	Hint func(store.File) (hint, base string)
 }
 
 func (Document) Match(f *store.File) bool {
@@ -50,6 +52,11 @@ func (d Document) Enrich(ctx context.Context, f *store.File, m *Meta) error {
 		return mobi(input, m)
 	case "pdf":
 		m.Kind = "document"
+		if d.Hint != nil {
+			if hint, _ := d.Hint(*f); hint == "books" {
+				m.Kind = "book"
+			}
+		}
 		return d.pdf(ctx, input, m)
 	default:
 		m.Kind = "document"

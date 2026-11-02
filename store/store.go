@@ -66,6 +66,7 @@ const triggers = `
 CREATE INDEX IF NOT EXISTS cache_expiry ON cache(at,key);
 CREATE INDEX IF NOT EXISTS files_review ON files(json_extract(meta, '$.review')) WHERE json_extract(meta, '$.review') IS NOT NULL;
 CREATE INDEX IF NOT EXISTS files_error ON files(meta_err) WHERE meta_err IS NOT NULL;
+CREATE INDEX IF NOT EXISTS files_library ON files(json_extract(meta, '$.kind'), COALESCE(NULLIF(title, ''), name) COLLATE NOCASE, id);
 DROP TRIGGER IF EXISTS files_au;
 CREATE TRIGGER files_au AFTER UPDATE OF name, title ON files
 WHEN old.name IS NOT new.name OR old.title IS NOT new.title BEGIN
@@ -262,6 +263,33 @@ func (s *Store) Issues(ctx context.Context, kind string, offset, limit int) ([]F
 func (s *Store) VideosUnder(ctx context.Context, dir File) ([]File, error) {
 	return s.query(ctx, `SELECT `+columns+` FROM files WHERE root=? AND path>? AND path<? AND kind='video'`,
 		dir.Root, dir.Path+"/", dir.Path+"0")
+}
+
+// LibraryOptions selects works of one semantic kind (meta.kind).
+type LibraryOptions struct {
+	Kind   string
+	Root   string
+	Recent bool // newest mtime first instead of by title
+	Offset int
+	Limit  int
+}
+
+// Library lists works of a semantic kind. A file or folder inside a folder of
+// the same kind is part of that work, so only the folder is listed. The order
+// and kind filter follow files_library.
+func (s *Store) Library(ctx context.Context, opts LibraryOptions) ([]File, error) {
+	where, args := `json_extract(f.meta, '$.kind')=?`, []any{opts.Kind}
+	if opts.Root != "" {
+		where, args = where+` AND f.root=?`, append(args, opts.Root)
+	}
+	order := `COALESCE(NULLIF(f.title, ''), f.name) COLLATE NOCASE, f.id`
+	if opts.Recent {
+		order = `f.mtime DESC, f.id DESC`
+	}
+	args = append(args, opts.Kind, opts.Limit, opts.Offset)
+	return s.query(ctx, `SELECT `+columns+` FROM files f WHERE `+where+`
+		AND NOT EXISTS (SELECT 1 FROM files p WHERE p.id=f.parent AND json_extract(p.meta, '$.kind')=?)
+		ORDER BY `+order+` LIMIT ? OFFSET ?`, args...)
 }
 
 func (s *Store) Search(ctx context.Context, opts SearchOptions) ([]File, error) {
