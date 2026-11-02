@@ -140,7 +140,7 @@ roots:
   #   type: books
 
 # These limits are currently fixed in code and have no YAML settings:
-# - Thumbnail generation: 4 jobs overall, with separate limits of 1 image job,
+# - Thumbnail generation: 4 jobs overall, with separate limits of 2 image jobs,
 #   2 video jobs, and 1 PDF job.
 # - Subtitle conversion: 2 jobs.
 # Changing workers does not change these limits.

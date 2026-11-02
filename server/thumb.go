@@ -64,7 +64,7 @@ func NewThumbs(ctx context.Context, cfg *config.Config, st *store.Store, scanner
 		probe = "ffprobe"
 	}
 	return &Thumbs{dir: filepath.Join(cfg.Data, "cache"), ffmpeg: cfg.FFmpeg, ffprobe: probe, pdftoppm: pdftoppm, store: st,
-		scanner: scanner, tmdb: client, slots: make(chan struct{}, 4), lifetime: ctx, imageSlots: make(chan struct{}, 1), videoSlots: make(chan struct{}, 2), pdfSlots: make(chan struct{}, 1)}
+		scanner: scanner, tmdb: client, slots: make(chan struct{}, 4), lifetime: ctx, imageSlots: make(chan struct{}, 2), videoSlots: make(chan struct{}, 2), pdfSlots: make(chan struct{}, 1)}
 }
 
 var goImage = map[string]bool{"jpg": true, "jpeg": true, "png": true, "gif": true, "webp": true, "bmp": true, "tif": true, "tiff": true}
