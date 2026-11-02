@@ -8,9 +8,9 @@ enum APIError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unauthorized: "用户名或密码不正确"
-        case .status(let code, let message): message.isEmpty ? "服务器返回 \(code)" : message
-        case .invalidAddress: "服务器地址无效"
+        case .unauthorized: "Incorrect username or password"
+        case .status(let code, let message): message.isEmpty ? "Server returned status \(code)" : message
+        case .invalidAddress: "Invalid server address"
         }
     }
 }

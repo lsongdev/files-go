@@ -11,7 +11,7 @@ struct ConnectView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("服务器") {
+                Section("Server") {
                     TextField("192.168.8.100:8088", text: $address)
                         .keyboardType(.URL)
                         .textContentType(.URL)
@@ -19,15 +19,15 @@ struct ConnectView: View {
                         .autocorrectionDisabled()
                 }
                 Section {
-                    TextField("用户名", text: $username)
+                    TextField("Username", text: $username)
                         .textContentType(.username)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    SecureField("密码", text: $password).textContentType(.password)
+                    SecureField("Password", text: $password).textContentType(.password)
                 } header: {
-                    Text("账号")
+                    Text("Account")
                 } footer: {
-                    Text("服务器未开启认证时可留空。")
+                    Text("Leave blank if the server does not require authentication.")
                 }
                 if let error {
                     Text(error).foregroundStyle(.red)
@@ -36,13 +36,13 @@ struct ConnectView: View {
                     connect()
                 } label: {
                     HStack {
-                        Text("连接")
+                        Text("Connect")
                         if connecting { Spacer(); ProgressView() }
                     }
                 }
                 .disabled(connecting || address.isEmpty)
             }
-            .navigationTitle("连接服务器")
+            .navigationTitle("Connect to Server")
             .onAppear {
                 address = session.address
                 username = session.username
@@ -71,16 +71,16 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                LabeledContent("服务器", value: session.address)
+                LabeledContent("Server", value: session.address)
                 if !session.username.isEmpty {
-                    LabeledContent("用户名", value: session.username)
+                    LabeledContent("Username", value: session.username)
                 }
-                Button("断开连接", role: .destructive) { session.disconnect() }
+                Button("Disconnect", role: .destructive) { session.disconnect() }
             }
-            .navigationTitle("设置")
+            .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
         }
     }

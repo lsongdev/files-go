@@ -74,16 +74,16 @@ struct PagerStatus: View {
         if pager.items.isEmpty {
             if let error = pager.error {
                 ContentUnavailableView {
-                    Label("加载失败", systemImage: "exclamationmark.triangle")
+                    Label("Unable to Load", systemImage: "exclamationmark.triangle")
                 } description: {
                     Text(error)
                 } actions: {
-                    Button("重试") { Task { await pager.reload() } }
+                    Button("Retry") { Task { await pager.reload() } }
                 }
             } else if !pager.loaded {
                 ProgressView().padding(32)
             } else {
-                ContentUnavailableView("没有内容", systemImage: "tray")
+                ContentUnavailableView("No Content", systemImage: "tray")
             }
         }
     }

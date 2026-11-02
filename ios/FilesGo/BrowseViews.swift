@@ -75,62 +75,99 @@ struct RootsView: View {
     @Environment(\.api) private var api
     @State private var roots: [RootStatus] = []
     @State private var error: String?
+    @State private var loading = true
     @State private var showSettings = false
     @State private var query = ""
     @State private var results: [FileItem] = []
+    @State private var searching = false
+    @State private var searchError: String?
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 if query.isEmpty {
-                    ForEach(roots) { root in
-                        NavigationLink(value: FileItem(root: root)) {
-                            HStack(spacing: 12) {
-                                Image(systemName: "externaldrive").foregroundStyle(.secondary).frame(width: 44)
-                                Text(root.name)
-                                Spacer()
-                                if root.state != "idle" {
-                                    Text(stateLabel(root.state)).font(.caption).foregroundStyle(.secondary)
-                                }
-                                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                    ForEach(Array(roots.enumerated()), id: \.element.id) { index, root in
+                        RootCard(root: root, tint: locationColor(index))
+                    }
+                    if roots.isEmpty {
+                        if loading {
+                            ProgressView().frame(maxWidth: .infinity).padding(40)
+                        } else if let error {
+                            ContentUnavailableView {
+                                Label("Unable to Load", systemImage: "exclamationmark.triangle")
+                            } description: {
+                                Text(error)
+                            } actions: {
+                                Button("Retry") { Task { await loadRoots() } }
+                                    .buttonStyle(.bordered)
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
-                            .contentShape(.rect)
+                        } else {
+                            ContentUnavailableView("No Locations", systemImage: "externaldrive",
+                                description: Text("Folders shared by your server will appear here."))
                         }
-                        .buttonStyle(.plain)
-                        Divider().padding(.leading, 72)
                     }
                 } else {
+                    HStack {
+                        Text("Search results").font(.headline)
+                        Spacer()
+                        if searching { ProgressView() }
+                    }
+                    .padding(.vertical, 4)
                     ForEach(results) { file in
                         FileRow(file: file)
-                        Divider().padding(.leading, 72)
+                            .padding(.vertical, 4)
+                            .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 18))
+                    }
+                    if !searching, results.isEmpty {
+                        if let searchError {
+                            ContentUnavailableView("Unable to Search", systemImage: "exclamationmark.triangle",
+                                description: Text(searchError))
+                        } else {
+                            ContentUnavailableView.search(text: query)
+                        }
                     }
                 }
             }
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
         }
-        .navigationTitle("文件")
-        .searchable(text: $query, prompt: "搜索全部文件")
-        .overlay {
-            if let error, roots.isEmpty, query.isEmpty {
-                ContentUnavailableView("加载失败", systemImage: "exclamationmark.triangle", description: Text(error))
-            }
-        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Files")
+        .searchable(text: $query, prompt: "Search all files")
         .toolbar {
-            Button("设置", systemImage: "gearshape") { showSettings = true }
+            Button("Settings", systemImage: "gearshape") { showSettings = true }
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .task { await loadRoots() }
         .refreshable { await loadRoots() }
         .task(id: query) {
-            guard !query.isEmpty else { results = []; return }
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled, let page = try? await api.search(query), !Task.isCancelled else { return }
-            results = page.items
+            results = []
+            searchError = nil
+            searching = !query.isEmpty
+            guard !query.isEmpty else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(300))
+                let page = try await api.search(query)
+                try Task.checkCancellation()
+                results = page.items
+                searching = false
+            } catch {
+                guard !Task.isCancelled else { return }
+                searchError = error.localizedDescription
+                searching = false
+            }
         }
     }
 
+    private func locationColor(_ index: Int) -> Color {
+        let colors: [Color] = [.blue, .teal, .indigo, .orange, .purple]
+        return colors[index % colors.count]
+    }
+
     private func loadRoots() async {
+        loading = true
+        defer { loading = false }
         do {
             roots = try await api.roots()
             error = nil
@@ -138,15 +175,45 @@ struct RootsView: View {
             self.error = error.localizedDescription
         }
     }
+}
 
-    private func stateLabel(_ state: String) -> String {
-        switch state {
-        case "scanning": "扫描中"
-        case "offline", "mount_changed": "离线"
-        case "error": "错误"
-        default: state
+private struct RootCard: View {
+    let root: RootStatus
+    let tint: Color
+    @ScaledMetric(relativeTo: .title2) private var iconSize = 54
+
+    var body: some View {
+        NavigationLink(value: FileItem(root: root)) {
+            HStack(spacing: 16) {
+                Image(systemName: "externaldrive.fill")
+                    .font(.title2.weight(.medium))
+                    .foregroundStyle(tint)
+                    .frame(width: iconSize, height: iconSize)
+                    .background(tint.gradient.opacity(0.12), in: .rect(cornerRadius: 16))
+                    .accessibilityHidden(true)
+                Text(root.name)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
+            .overlay {
+                RoundedRectangle(cornerRadius: 22)
+                    .strokeBorder(.primary.opacity(0.04), lineWidth: 1)
+            }
+            .contentShape(.rect(cornerRadius: 22))
         }
+        .buttonStyle(.plain)
     }
+
 }
 
 /// The one detail screen, laid out like the web client: artwork behind the
@@ -248,9 +315,9 @@ struct ItemView: View {
     @ViewBuilder
     private var action: some View {
         if let target = playable {
-            ActionButton(title: "播放", systemImage: "play.fill") { playing = target }
+            ActionButton(title: "Play", systemImage: "play.fill") { playing = target }
         } else if !file.dir {
-            ActionButton(title: file.kind == "book" ? "阅读" : "查看", systemImage: file.kind == "book" ? "book.fill" : "eye.fill", busy: opening) { open() }
+            ActionButton(title: file.kind == "book" ? "Read" : "View", systemImage: file.kind == "book" ? "book.fill" : "eye.fill", busy: opening) { open() }
         }
     }
 
