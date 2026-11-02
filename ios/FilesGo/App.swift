@@ -24,6 +24,8 @@ struct MainTabs: View {
             Tab("Files", systemImage: "folder") { NavigationStack { RootsView().itemDestinations() } }
             Tab("Movies", systemImage: "film") { LibraryTab(title: "Movies", kind: "movie") }
             Tab("TV Shows", systemImage: "tv") { LibraryTab(title: "TV Shows", kind: "show") }
+            Tab("Photos", systemImage: "photo.on.rectangle") { PhotosTab() }
+            // iPhone shows at most five tabs, so these two go under More.
             Tab("Music", systemImage: "music.note") { LibraryTab(title: "Music", kind: "album") }
             Tab("Books", systemImage: "book") { LibraryTab(title: "Books", kind: "book") }
         }
