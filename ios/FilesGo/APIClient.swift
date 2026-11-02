@@ -103,6 +103,10 @@ struct APIClient: Sendable {
         url("/api/files/\(file.id)/thumb", ["v": "\(file.version)-\(file.meta?.artworkVersion ?? "")-\(file.meta?.poster ?? "")"])
     }
 
+    func backdropURL(_ file: FileItem) -> URL {
+        url("/api/files/\(file.id)/backdrop", ["v": "\(file.version)-\(file.meta?.artworkVersion ?? "")"])
+    }
+
     func play(_ id: Int64, transcode: Bool) async throws -> URL {
         let playback: Playback = try await get("/api/files/\(id)/play", ["transcode": transcode ? "1" : nil])
         guard let url = URL(string: playback.url, relativeTo: baseURL)?.absoluteURL else { throw APIError.invalidAddress }
