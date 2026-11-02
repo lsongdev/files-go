@@ -21,11 +21,11 @@ struct FilesGoApp: App {
 struct MainTabs: View {
     var body: some View {
         TabView {
-            Tab("文件", systemImage: "folder") { NavigationStack { RootsView().itemDestinations() } }
-            Tab("电影", systemImage: "film") { LibraryTab(title: "电影", kind: "movie") }
-            Tab("电视剧", systemImage: "tv") { LibraryTab(title: "电视剧", kind: "show") }
-            Tab("音乐", systemImage: "music.note") { LibraryTab(title: "音乐", kind: "album") }
-            Tab("图书", systemImage: "book") { LibraryTab(title: "图书", kind: "book") }
+            Tab("Files", systemImage: "folder") { NavigationStack { RootsView().itemDestinations() } }
+            Tab("Movies", systemImage: "film") { LibraryTab(title: "Movies", kind: "movie") }
+            Tab("TV Shows", systemImage: "tv") { LibraryTab(title: "TV Shows", kind: "show") }
+            Tab("Music", systemImage: "music.note") { LibraryTab(title: "Music", kind: "album") }
+            Tab("Books", systemImage: "book") { LibraryTab(title: "Books", kind: "book") }
         }
     }
 }

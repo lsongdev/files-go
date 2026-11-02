@@ -39,7 +39,7 @@ final class PlaybackController {
         await release(api)
         guard observer != nil else { return } // closed while failing
         if transcode {
-            error = item.error?.localizedDescription ?? "无法播放"
+            error = item.error?.localizedDescription ?? "Unable to Play"
         } else {
             await start(file, api: api, transcode: true)
         }
@@ -72,12 +72,12 @@ struct PlayerView: View {
             if let player = controller.player {
                 VideoPlayer(player: player).ignoresSafeArea()
             } else if let error = controller.error {
-                ContentUnavailableView("无法播放", systemImage: "exclamationmark.triangle", description: Text(error))
+                ContentUnavailableView("Unable to Play", systemImage: "exclamationmark.triangle", description: Text(error))
                     .foregroundStyle(.white)
             } else {
                 ProgressView().tint(.white).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            Button("关闭", systemImage: "xmark") { dismiss() }
+            Button("Close", systemImage: "xmark") { dismiss() }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.bordered)
                 .tint(.white)
