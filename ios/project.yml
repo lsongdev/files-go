@@ -1,0 +1,44 @@
+name: FilesGo
+options:
+  bundleIdPrefix: dev.lsong
+  deploymentTarget:
+    iOS: "18.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Set your team here or in Xcode to run on a device.
+    DEVELOPMENT_TEAM: ""
+targets:
+  FilesGo:
+    type: application
+    platform: iOS
+    sources: [FilesGo]
+    settings:
+      base:
+        SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: true
+        INFOPLIST_KEY_CFBundleDisplayName: FilesGo
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: true
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: 连接局域网中的 files-go 服务器
+        INFOPLIST_FILE: FilesGo/Info.plist
+  FilesGoTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [FilesGoTests]
+    dependencies:
+      - target: FilesGo
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+schemes:
+  FilesGo:
+    build:
+      targets:
+        FilesGo: all
+    test:
+      targets: [FilesGoTests]
