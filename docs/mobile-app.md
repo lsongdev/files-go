@@ -1,6 +1,6 @@
 # iOS 客户端设计
 
-> 状态：**设计提案，尚未实现**。2026-11-02。现有索引和增强流程见 [architecture.md](architecture.md)。
+> 状态：**后端已实现（第 3 节），iOS 客户端开发中**。2026-11-02。现有索引和增强流程见 [architecture.md](architecture.md)。
 
 ## 1. 定位
 

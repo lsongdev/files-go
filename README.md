@@ -126,7 +126,8 @@ date, adds director, label and series, and describes works ThePornDB lacks.
 
 `type` is a hint for identification. Under `movies`, videos are identified
 as films and dedicated folders aggregate their common work; under `tv`, the folders directly below are
-shows, `S01` / `Season 1` folders are seasons, and files are episodes.
+shows, `S01` / `Season 1` folders are seasons, and files are episodes; under
+`books`, PDFs are books rather than documents.
 Elsewhere, only release-style names (title, year and a quality tag) are
 looked up, and plain videos stay plain videos.
 
@@ -184,6 +185,7 @@ GET    /api/status                   counts, scan and enrichment progress, runni
 GET    /api/events                   server-sent events: status, changes, activity
 GET    /api/activity                 recent activity (newest first) and status
 GET    /api/search?q=&root=&kind=
+GET    /api/library?kind=&root=&sort=title|recent&offset=&limit=   works by meta.kind
 GET    /api/issues?type=review|error      matches to confirm / failed files
 GET    /api/files/{id}               file with metadata and ancestors
 GET    /api/files/{id}/children?offset=&limit=

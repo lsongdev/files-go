@@ -5,7 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestResultsRejectChangedAndRecreatedFiles(t *testing.T) {
@@ -135,5 +138,90 @@ func TestMatchPrecedenceAndRootRemoval(t *testing.T) {
 	}
 	if got, err := st.Match(ctx, fresh); err != nil || got == nil || *got != *group {
 		t.Fatalf("parent choice not restored: %+v %v", got, err)
+	}
+}
+
+func TestLibraryListsEachWorkOnce(t *testing.T) {
+	ctx := context.Background()
+	st, scanner, root := setup(t)
+	write(t, filepath.Join(root, "Movies", "Arrival.mkv"), "video")
+	write(t, filepath.Join(root, "Movies", "Dune (2021)", "Dune.2021.part2.mkv"), "video")
+	if err := scanner.Scan(ctx, "r", false); err != nil {
+		t.Fatal(err)
+	}
+	save := func(path, kind, title string) {
+		t.Helper()
+		f, err := st.ByPath(ctx, "r", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.SaveResults(ctx, []Result{{ID: f.ID, Revision: f.Revision, Kind: f.Kind, Version: 1, Title: title, Meta: []byte(`{"kind":"` + kind + `"}`)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	save("Movies/Dune (2021)", "movie", "Dune")
+	save("Movies/Dune (2021)/Dune.2021.mkv", "movie", "Dune")
+	save("Movies/Dune (2021)/Dune.2021.part2.mkv", "movie", "Dune")
+	save("Movies/Arrival.mkv", "movie", "") // no title: sorted by name
+	save("Movies", "album", "Zzz")          // a parent of another kind does not hide
+	save("notes.txt", "book", "Notes")
+
+	names := func(opts LibraryOptions) []string {
+		t.Helper()
+		if opts.Limit == 0 {
+			opts.Limit = 10
+		}
+		files, err := st.Library(ctx, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := []string{}
+		for _, f := range files {
+			out = append(out, f.Name)
+		}
+		return out
+	}
+	if got := names(LibraryOptions{Kind: "movie"}); !slices.Equal(got, []string{"Arrival.mkv", "Dune (2021)"}) {
+		t.Fatalf("by title = %v", got)
+	}
+	if got := names(LibraryOptions{Kind: "movie", Limit: 1, Offset: 1}); !slices.Equal(got, []string{"Dune (2021)"}) {
+		t.Fatalf("second page = %v", got)
+	}
+	if got := names(LibraryOptions{Kind: "movie", Root: "other"}); len(got) != 0 {
+		t.Fatalf("other root = %v", got)
+	}
+	if got := names(LibraryOptions{Kind: "show"}); len(got) != 0 {
+		t.Fatalf("no shows = %v", got)
+	}
+	recent := filepath.Join(root, "Movies", "Arrival.mkv")
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(recent, future, future); err != nil {
+		t.Fatal(err)
+	}
+	if err := scanner.Scan(ctx, "r", false); err != nil {
+		t.Fatal(err)
+	}
+	save("Movies/Arrival.mkv", "movie", "")
+	if got := names(LibraryOptions{Kind: "movie", Recent: true}); len(got) != 2 || got[0] != "Arrival.mkv" {
+		t.Fatalf("recent = %v", got)
+	}
+	// The kind filter and default order must come from the index, with no sort.
+	rows, err := st.db.QueryContext(ctx, `EXPLAIN QUERY PLAN SELECT id FROM files f WHERE json_extract(f.meta, '$.kind')='movie'
+		ORDER BY COALESCE(NULLIF(f.title, ''), f.name) COLLATE NOCASE, f.id LIMIT 10`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	plan := ""
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan += detail + "\n"
+	}
+	if !strings.Contains(plan, "files_library") || strings.Contains(plan, "TEMP B-TREE") {
+		t.Fatalf("plan:\n%s", plan)
 	}
 }

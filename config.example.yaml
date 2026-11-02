@@ -94,7 +94,8 @@
 #   type         Optional media identification hint; defaults to empty (identify
 #                from file formats/content). Common values: movies, tv, music,
 #                photos, books, jav. tv enables show-folder identification; jav
-#                selects JAV/ThePornDB identification. Hints do not filter out
+#                selects JAV/ThePornDB identification; books makes PDFs books
+#                instead of documents. Hints do not filter out
 #                other file types. Directories aggregate file metadata without
 #                independent online catalog lookups.
 #   types        Optional map overriding type for root-relative subdirectories.
