@@ -14,7 +14,12 @@ final class ModelTests: XCTestCase {
         """#)
         XCTAssertEqual(movie.title, "沙丘")
         XCTAssertEqual(movie.subtitle, "2021 · 科幻 / 冒险 · ★ 8.0 · 2:35:00")
-        XCTAssertTrue(movie.isPoster)
+        XCTAssertEqual(movie.coverAspect, 2.0 / 3.0)
+        XCTAssertTrue(movie.hasHero)
+        XCTAssertEqual(movie.kindLabel, "电影")
+        XCTAssertEqual(movie.infoRows.first { $0.label == "番号" }?.value, "x")
+        XCTAssertEqual(movie.infoRows.first { $0.label == "类型标签" }?.value, "科幻 / 冒险 / 剧情")
+        XCTAssertNil(movie.infoRows.first { $0.label == "大小" })
 
         let episode = try item(#"{"id":8,"root":"tv","name":"e.mkv","dir":false,"size":1,"version":1,"kind":"video","play":"stream","meta":{"kind":"episode","show":"Foo","season":2,"episode":3}}"#)
         XCTAssertEqual(episode.title, "Foo · S02E03")
@@ -22,6 +27,7 @@ final class ModelTests: XCTestCase {
         let folder = try item(#"{"id":9,"root":"x","name":"Plain","dir":true,"size":12,"version":1}"#)
         XCTAssertEqual(folder.title, "Plain")
         XCTAssertEqual(folder.subtitle, "12 项")
+        XCTAssertFalse(folder.hasHero)
     }
 
     func testServerAddressAcceptsBareHostAndPort() {

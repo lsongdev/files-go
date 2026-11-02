@@ -8,8 +8,8 @@ settings:
     SWIFT_VERSION: "6.0"
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
-    # Set your team here or in Xcode to run on a device.
-    DEVELOPMENT_TEAM: ""
+    DEVELOPMENT_TEAM: 2ZHWSJ25BU
+    CODE_SIGN_STYLE: Automatic
 targets:
   FilesGo:
     type: application

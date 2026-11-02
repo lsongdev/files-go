@@ -9,9 +9,8 @@ xcodegen generate      # FilesGo.xcodeproj is generated from project.yml, not co
 open FilesGo.xcodeproj
 ```
 
-To run on a device, select your team under Signing & Capabilities (or set
-`DEVELOPMENT_TEAM` in `project.yml`). Requires iOS 18, and a server with
-`/api/library` for the media tabs.
+The signing team is `DEVELOPMENT_TEAM` in `project.yml`. Requires iOS 18, and a
+server with `/api/library` for the media tabs.
 
 Unit tests:
 
