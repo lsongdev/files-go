@@ -268,27 +268,35 @@ func (s *Store) VideosUnder(ctx context.Context, dir File) ([]File, error) {
 // LibraryOptions selects works of one semantic kind (meta.kind).
 type LibraryOptions struct {
 	Kind   string
-	Root   string
-	Recent bool // newest mtime first instead of by title
+	Roots  []string // all roots when empty
+	Recent bool     // newest mtime first instead of by title
 	Offset int
 	Limit  int
 }
 
 // Library lists works of a semantic kind. A file or folder inside a folder of
-// the same kind is part of that work, so only the folder is listed. The order
-// and kind filter follow files_library.
+// the same kind is part of that work, so only the folder is listed; likewise a
+// track inside an album, leaving the singles. The order and kind filter follow
+// files_library.
 func (s *Store) Library(ctx context.Context, opts LibraryOptions) ([]File, error) {
 	where, args := `json_extract(f.meta, '$.kind')=?`, []any{opts.Kind}
-	if opts.Root != "" {
-		where, args = where+` AND f.root=?`, append(args, opts.Root)
+	if len(opts.Roots) > 0 {
+		where += ` AND f.root IN (?` + strings.Repeat(`,?`, len(opts.Roots)-1) + `)`
+		for _, root := range opts.Roots {
+			args = append(args, root)
+		}
 	}
 	order := `COALESCE(NULLIF(f.title, ''), f.name) COLLATE NOCASE, f.id`
 	if opts.Recent {
 		order = `f.mtime DESC, f.id DESC`
 	}
-	args = append(args, opts.Kind, opts.Limit, opts.Offset)
+	work := opts.Kind
+	if opts.Kind == "audio" {
+		work = "album"
+	}
+	args = append(args, opts.Kind, work, opts.Limit, opts.Offset)
 	return s.query(ctx, `SELECT `+columns+` FROM files f WHERE `+where+`
-		AND NOT EXISTS (SELECT 1 FROM files p WHERE p.id=f.parent AND json_extract(p.meta, '$.kind')=?)
+		AND NOT EXISTS (SELECT 1 FROM files p WHERE p.id=f.parent AND json_extract(p.meta, '$.kind') IN (?, ?))
 		ORDER BY `+order+` LIMIT ? OFFSET ?`, args...)
 }
 

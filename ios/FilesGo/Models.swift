@@ -114,6 +114,12 @@ struct RootStatus: Decodable, Identifiable, Hashable {
     static func photoRoot(in roots: [RootStatus]) -> RootStatus? {
         roots.first { $0.type == "photos" }
     }
+
+    /// The roots holding music: audio elsewhere (a show's soundtrack, a voice
+    /// memo among documents) is not part of the music library.
+    static func musicRoots(in roots: [RootStatus]) -> [RootStatus] {
+        roots.filter { $0.type == "music" }
+    }
 }
 
 struct Page: Decodable {

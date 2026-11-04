@@ -108,6 +108,11 @@ func TestAPI(t *testing.T) {
 	if len(library.Items) != 1 || library.Items[0].Name != "sunset.png" || library.More {
 		t.Fatalf("library = %+v", library)
 	}
+	library.Items = nil
+	decode(get("/api/library?kind=photo&root=nope&root="), &library)
+	if len(library.Items) != 0 {
+		t.Fatalf("library in another root = %+v", library)
+	}
 	// Browsing must not reconcile the media filesystem, even if it changes or
 	// disappears. Only an explicit/background scan is allowed to change the index.
 	os.WriteFile(filepath.Join(root, "unscanned.txt"), []byte("new"), 0o644)

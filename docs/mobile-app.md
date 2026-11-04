@@ -24,7 +24,8 @@ iOS App 是 `files-go` 的另一个客户端，用来改善手机上的浏览和
 | 文件 | `/api/roots` → `/api/files/{id}/children` | 目录列表 | 进入目录，或打开文件 |
 | 电影 | `/api/library?kind=movie` | 海报网格 | 详情页 |
 | 电视剧 | `/api/library?kind=show` | 海报网格 | 详情页 |
-| 音乐 | `/api/library?kind=album` | 封面网格 | 详情页，点击曲目后按当前列表顺序播放 |
+| 音乐 · Albums | `/api/library?kind=album` | 封面网格 | 详情页，点击曲目播放 |
+| 音乐 · Songs | `/api/library?kind=audio&root=...` | 列表，按标题排序 | 直接播放 |
 | 图书 | `/api/library?kind=book` | 封面网格 | 下载后用系统预览或分享打开 |
 | 照片 | `/api/library?kind=photo&root=...&sort=recent` | 三列方格，按 mtime 倒序 | 全屏查看：左右翻页、缩放、查看信息 |
 
@@ -48,7 +49,7 @@ iOS App 是 `files-go` 的另一个客户端，用来改善手机上的浏览和
 | 参数 | 说明 |
 | --- | --- |
 | `kind` | 必填，`meta.kind` 的值 |
-| `root` | 可选，限定 Root |
+| `root` | 可选，可重复，限定 Root |
 | `sort` | `title`（默认）或 `recent`（文件 mtime 倒序） |
 | `offset`、`limit` | 与 `/children` 相同，默认 200，上限 1000 |
 
@@ -58,12 +59,12 @@ iOS App 是 `files-go` 的另一个客户端，用来改善手机上的浏览和
 SELECT <columns> FROM files f
 WHERE json_extract(f.meta,'$.kind') = :kind
   AND NOT EXISTS (SELECT 1 FROM files p WHERE p.id = f.parent
-                  AND json_extract(p.meta,'$.kind') = :kind)
+                  AND json_extract(p.meta,'$.kind') IN (:kind, :work))
 ORDER BY COALESCE(NULLIF(f.title,''), f.name) COLLATE NOCASE, f.id
 LIMIT :limit OFFSET :offset;
 ```
 
-- **去重**：父目录与当前条目的 `meta.kind` 相同时，隐藏当前条目。所以电影目录里的视频不会重复出现。这一规则依赖目录聚合：目录被标记为 `movie` 时，它的主要视频已确认是同一作品。
+- **去重**：父目录与当前条目的 `meta.kind` 相同时，隐藏当前条目。所以电影目录里的视频不会重复出现。这一规则依赖目录聚合：目录被标记为 `movie` 时，它的主要视频已确认是同一作品。`kind=audio` 时还隐藏父目录为 `album` 的曲目（即上面的 `:work`，其他 kind 时等于 `:kind`），只留下单曲。
 - **排序**：`files.title` 在标题与文件名相同时为空，因此要回退到 `name`。
 
 ### 3.2 索引
@@ -138,6 +139,7 @@ CREATE INDEX IF NOT EXISTS files_library ON files(
 - `fb2`、`djvu`、`cbz`、`cbr` 目前没有 `meta.kind=book`，不进入图书 Tab。
 - 同一作品在不同 Root 各有一份时，显示为多个入口。
 - 照片 Tab 只列第一个 `type: photos` 的 Root（没有时列出全部图片），因为其他目录里的图片也会被标记为 `photo`。该目录下的视频不在此 Tab。缩略图首次生成较慢，之后走缓存。
+- Songs 只列 `type: music` 的 Root（没有时列出全部音频），包括播客等配成 `music` 的目录。标签不一致的目录不会聚合成专辑，其中的曲目算作单曲。
 - 排序使用 SQLite 的 `NOCASE`，中文不按拼音排序。
 
 ## 7. 暂不做

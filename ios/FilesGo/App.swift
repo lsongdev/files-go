@@ -23,7 +23,7 @@ struct MainTabs: View {
         TabView {
             Tab("Movies", systemImage: "film") { LibraryTab(title: "Movies", kind: "movie") }
             Tab("TV Shows", systemImage: "tv") { LibraryTab(title: "TV Shows", kind: "show") }
-            Tab("Music", systemImage: "music.note") { LibraryTab(title: "Music", kind: "album") }
+            Tab("Music", systemImage: "music.note") { MusicTab() }
             Tab("Books", systemImage: "book") { LibraryTab(title: "Books", kind: "book") }
             Tab("More", systemImage: "ellipsis") { MoreTab() }
         }

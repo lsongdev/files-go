@@ -90,8 +90,10 @@ struct APIClient: Sendable {
         try await get("/api/files/\(id)/children", ["offset": String(offset), "limit": String(limit)])
     }
 
-    func library(kind: String, root: String? = nil, sort: String? = nil, offset: Int, limit: Int) async throws -> Page {
-        try await get("/api/library", ["kind": kind, "root": root, "sort": sort, "offset": String(offset), "limit": String(limit)])
+    func library(kind: String, roots: [String] = [], sort: String? = nil, offset: Int, limit: Int) async throws -> Page {
+        var components = URLComponents(url: url("/api/library", ["kind": kind, "sort": sort, "offset": String(offset), "limit": String(limit)]), resolvingAgainstBaseURL: false)!
+        components.queryItems?.append(contentsOf: roots.map { URLQueryItem(name: "root", value: $0) })
+        return try JSONDecoder().decode(Page.self, from: await data(components.url!))
     }
 
     func search(_ query: String) async throws -> Page {

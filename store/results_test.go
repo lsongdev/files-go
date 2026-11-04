@@ -146,6 +146,8 @@ func TestLibraryListsEachWorkOnce(t *testing.T) {
 	st, scanner, root := setup(t)
 	write(t, filepath.Join(root, "Movies", "Arrival.mkv"), "video")
 	write(t, filepath.Join(root, "Movies", "Dune (2021)", "Dune.2021.part2.mkv"), "video")
+	write(t, filepath.Join(root, "Music", "Album", "01.mp3"), "audio")
+	write(t, filepath.Join(root, "Music", "single.mp3"), "audio")
 	if err := scanner.Scan(ctx, "r", false); err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +167,9 @@ func TestLibraryListsEachWorkOnce(t *testing.T) {
 	save("Movies/Arrival.mkv", "movie", "") // no title: sorted by name
 	save("Movies", "album", "Zzz")          // a parent of another kind does not hide
 	save("notes.txt", "book", "Notes")
+	save("Music/Album", "album", "Album")
+	save("Music/Album/01.mp3", "audio", "Track")
+	save("Music/single.mp3", "audio", "Single")
 
 	names := func(opts LibraryOptions) []string {
 		t.Helper()
@@ -187,8 +192,14 @@ func TestLibraryListsEachWorkOnce(t *testing.T) {
 	if got := names(LibraryOptions{Kind: "movie", Limit: 1, Offset: 1}); !slices.Equal(got, []string{"Dune (2021)"}) {
 		t.Fatalf("second page = %v", got)
 	}
-	if got := names(LibraryOptions{Kind: "movie", Root: "other"}); len(got) != 0 {
+	if got := names(LibraryOptions{Kind: "movie", Roots: []string{"other"}}); len(got) != 0 {
 		t.Fatalf("other root = %v", got)
+	}
+	if got := names(LibraryOptions{Kind: "audio"}); !slices.Equal(got, []string{"single.mp3"}) {
+		t.Fatalf("singles = %v", got)
+	}
+	if got := names(LibraryOptions{Kind: "audio", Roots: []string{"other", "r"}}); !slices.Equal(got, []string{"single.mp3"}) {
+		t.Fatalf("several roots = %v", got)
 	}
 	if got := names(LibraryOptions{Kind: "show"}); len(got) != 0 {
 		t.Fatalf("no shows = %v", got)
