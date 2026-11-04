@@ -35,7 +35,7 @@ struct PhotosView: View {
         .navigationTitle("Photos")
         .loads(pager) { [api] offset, limit in
             let root = RootStatus.photoRoot(in: try await api.roots())
-            return try await api.library(kind: "photo", root: root?.id, sort: "recent", offset: offset, limit: limit)
+            return try await api.library(kind: "photo", roots: root.map { [$0.id] } ?? [], sort: "recent", offset: offset, limit: limit)
         }
         .fullScreenCover(item: $viewing) { PhotoViewer(pager: pager, start: $0) }
     }

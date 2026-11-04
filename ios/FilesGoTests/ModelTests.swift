@@ -37,6 +37,10 @@ final class ModelTests: XCTestCase {
         """#.utf8))
         XCTAssertEqual(RootStatus.photoRoot(in: roots)?.id, "pics")
         XCTAssertNil(RootStatus.photoRoot(in: [roots[0]]))
+        let music = try JSONDecoder().decode([RootStatus].self, from: Data(#"""
+        [{"id":"m","name":"Music","type":"music","fileId":1,"state":"idle"},{"id":"tv","name":"TV","type":"tv","fileId":2,"state":"idle"},{"id":"p","name":"Podcasts","type":"music","fileId":3,"state":"idle"}]
+        """#.utf8))
+        XCTAssertEqual(RootStatus.musicRoots(in: music).map(\.id), ["m", "p"])
     }
 
     func testLargePhotosAreDownsampledWithinTheLimit() throws {

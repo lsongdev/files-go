@@ -29,12 +29,13 @@ struct RemoteImage: View {
 
 struct Cover: View {
     let file: FileItem
+    var releasesOnDisappear = false
     @Environment(\.api) private var api
 
     var body: some View {
         Color.clear
             .aspectRatio(file.coverAspect, contentMode: .fit)
-            .overlay { RemoteImage(url: file.thumb == true ? api.thumbURL(file) : nil, icon: icon) }
+            .overlay { RemoteImage(url: file.thumb == true ? api.thumbURL(file) : nil, icon: icon, releasesOnDisappear: releasesOnDisappear) }
             .clipShape(.rect(cornerRadius: 8))
     }
 
@@ -55,21 +56,30 @@ struct FileRow: View {
 
     var body: some View {
         NavigationLink(value: file) {
-            HStack(spacing: 12) {
-                Cover(file: file)
-                    .frame(width: file.coverAspect > 1 ? 72 : 44)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(file.title).lineLimit(2).multilineTextAlignment(.leading)
-                    Text(file.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .contentShape(.rect)
+            FileRowLabel(file: file, accessory: "chevron.right")
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct FileRowLabel: View {
+    let file: FileItem
+    let accessory: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Cover(file: file, releasesOnDisappear: true)
+                .frame(width: file.coverAspect > 1 ? 72 : 44)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(file.title).lineLimit(2).multilineTextAlignment(.leading)
+                Text(file.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: accessory).font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .contentShape(.rect)
     }
 }
 
@@ -399,36 +409,101 @@ private struct ActionButton: View {
 struct LibraryTab: View {
     let title: String
     let kind: String
+
+    var body: some View {
+        NavigationStack {
+            LibraryGrid(kind: kind)
+                .navigationTitle(title)
+                .itemDestinations()
+        }
+    }
+}
+
+private struct LibraryGrid: View {
+    let kind: String
     @Environment(\.api) private var api
     @State private var pager = Pager()
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 105), spacing: 12, alignment: .top)], spacing: 16) {
-                    ForEach(pager.items) { item in
-                        NavigationLink(value: item) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Color.clear
-                                    .aspectRatio(kind == "album" ? 1 : 2.0 / 3.0, contentMode: .fit)
-                                    .overlay { RemoteImage(url: item.thumb == true ? api.thumbURL(item) : nil, icon: "film") }
-                                    .clipShape(.rect(cornerRadius: 8))
-                                Text(item.title).font(.caption).lineLimit(2).foregroundStyle(.primary)
-                                Text(item.subtitle).font(.caption2).lineLimit(1).foregroundStyle(.secondary)
-                            }
+        ScrollView {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 105), spacing: 12, alignment: .top)], spacing: 16) {
+                ForEach(pager.items) { item in
+                    NavigationLink(value: item) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Color.clear
+                                .aspectRatio(kind == "album" ? 1 : 2.0 / 3.0, contentMode: .fit)
+                                .overlay { RemoteImage(url: item.thumb == true ? api.thumbURL(item) : nil, icon: "film") }
+                                .clipShape(.rect(cornerRadius: 8))
+                            Text(item.title).font(.caption).lineLimit(2).foregroundStyle(.primary)
+                            Text(item.subtitle).font(.caption2).lineLimit(1).foregroundStyle(.secondary)
                         }
-                        .buttonStyle(.plain)
-                        .task { await pager.loadMore(after: item) }
                     }
+                    .buttonStyle(.plain)
+                    .task { await pager.loadMore(after: item) }
                 }
-                .padding()
             }
-            .overlay { PagerStatus(pager: pager) }
-            .navigationTitle(title)
+            .padding()
+        }
+        .overlay { PagerStatus(pager: pager) }
+        .loads(pager) { [api, kind] offset, limit in
+            try await api.library(kind: kind, offset: offset, limit: limit)
+        }
+    }
+}
+
+/// Albums and the songs outside any album. Both stay alive underneath the
+/// picker, so switching keeps each one's scroll position.
+struct MusicTab: View {
+    private enum Section: Hashable { case albums, songs }
+    @State private var section = Section.albums
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                LibraryGrid(kind: "album").opacity(section == .albums ? 1 : 0)
+                SongsList().opacity(section == .songs ? 1 : 0)
+            }
+            .navigationTitle("Music")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Picker("Section", selection: $section) {
+                        Text("Albums").tag(Section.albums)
+                        Text("Songs").tag(Section.songs)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
+                }
+            }
             .itemDestinations()
-            .loads(pager) { [api, kind] offset, limit in
-                try await api.library(kind: kind, offset: offset, limit: limit)
+        }
+    }
+}
+
+/// Tapping a song plays it at once, as there is nothing more to see first.
+private struct SongsList: View {
+    @Environment(\.api) private var api
+    @State private var pager = Pager()
+    @State private var playing: FileItem?
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(pager.items) { song in
+                    Button { playing = song } label: {
+                        FileRowLabel(file: song, accessory: "play.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .task { await pager.loadMore(after: song) }
+                    Divider().padding(.leading, 72)
+                }
             }
         }
+        .overlay { PagerStatus(pager: pager) }
+        .loads(pager) { [api] offset, limit in
+            let roots = RootStatus.musicRoots(in: try await api.roots())
+            return try await api.library(kind: "audio", roots: roots.map(\.id), offset: offset, limit: limit)
+        }
+        .fullScreenCover(item: $playing) { PlayerView(file: $0) }
     }
 }

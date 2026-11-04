@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -234,7 +235,8 @@ func (s *Server) library(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	files, err := s.store.Library(r.Context(), store.LibraryOptions{Kind: kind, Root: q.Get("root"), Recent: sort == "recent", Offset: max(offset, 0), Limit: limit + 1})
+	roots := slices.DeleteFunc(q["root"], func(root string) bool { return root == "" })
+	files, err := s.store.Library(r.Context(), store.LibraryOptions{Kind: kind, Roots: roots, Recent: sort == "recent", Offset: max(offset, 0), Limit: limit + 1})
 	if err != nil {
 		s.fail(w, err)
 		return
